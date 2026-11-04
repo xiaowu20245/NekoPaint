@@ -1,0 +1,23 @@
+{
+  "system": {
+    "os": "win32",
+    "ram_total": 16496545792,
+    "ram_free": 2225713152,
+    "comfyui_version": "0.27.0",
+    "python_version": "3.13.11",
+    "pytorch_version": "2.9.1+cu128",
+    "embedded_python": false,
+    "argv": ["main.py", "--listen", "--preview-method", "auto", "--cuda-malloc"]
+  },
+  "devices": [
+    {
+      "name": "NVIDIA GeForce RTX 5060 Laptop GPU",
+      "type": "cuda",
+      "index": 0,
+      "vram_total": 8546484224,
+      "vram_free": 7385120768,
+      "torch_vram_total": 0,
+      "torch_vram_free": 0
+    }
+  ]
+}

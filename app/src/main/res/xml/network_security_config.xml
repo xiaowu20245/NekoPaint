@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      ComfyUI 默认使用 HTTP，且服务器 IP 不固定，因此允许明文流量。
+      仅建议在可信局域网使用；设置页会显示风险提示。
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

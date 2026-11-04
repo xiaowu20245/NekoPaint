@@ -1,0 +1,48 @@
+{
+  "00000000-0000-4000-8000-000000000001": {
+    "prompt": [
+      0,
+      "00000000-0000-4000-8000-000000000001",
+      {
+        "1": {
+          "class_type": "CheckpointLoaderSimple",
+          "inputs": { "ckpt_name": "anything-v5-PrtRE.safetensors" }
+        },
+        "7": {
+          "class_type": "SaveImage",
+          "inputs": { "filename_prefix": "nekopaint_verify", "images": ["6", 0] }
+        }
+      },
+      { "client_id": "00000000-0000-4000-8000-000000000002" },
+      ["7"]
+    ],
+    "outputs": {
+      "7": {
+        "images": [
+          {
+            "filename": "nekopaint_verify_00001_.png",
+            "subfolder": "",
+            "type": "output"
+          }
+        ]
+      }
+    },
+    "meta": {
+      "7": {
+        "node_id": "7",
+        "display_node": "7",
+        "parent_node": null,
+        "real_node_id": "7"
+      }
+    },
+    "status": {
+      "status_str": "success",
+      "completed": true,
+      "messages": [
+        ["execution_start", { "prompt_id": "00000000-0000-4000-8000-000000000001", "timestamp": 1793762353188 }],
+        ["execution_cached", { "nodes": [], "prompt_id": "00000000-0000-4000-8000-000000000001", "timestamp": 1793762353191 }],
+        ["execution_success", { "prompt_id": "00000000-0000-4000-8000-000000000001", "timestamp": 1793762357025 }]
+      ]
+    }
+  }
+}

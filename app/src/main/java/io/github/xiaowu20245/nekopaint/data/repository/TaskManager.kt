@@ -1,0 +1,328 @@
+package io.github.xiaowu20245.nekopaint.data.repository
+
+import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
+import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
+import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
+import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
+import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
+import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
+import io.github.xiaowu20245.nekopaint.core.network.ComfyEvent
+import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+class TaskManager(
+    private val taskStore: TaskStore,
+    private val queueRepository: QueueRepository,
+    private val webSocketManager: ComfyWebSocketManager,
+    private val clientIdStore: ClientIdStore,
+) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val _tasks = MutableStateFlow<List<TaskRecord>>(emptyList())
+    val tasks: StateFlow<List<TaskRecord>> = _tasks.asStateFlow()
+
+    private val _progress = MutableStateFlow<Map<String, TaskProgress>>(emptyMap())
+    val progress: StateFlow<Map<String, TaskProgress>> = _progress.asStateFlow()
+
+    private val _queue = MutableStateFlow<QueueSnapshot?>(null)
+    val queue: StateFlow<QueueSnapshot?> = _queue.asStateFlow()
+
+    private val _history = MutableStateFlow<List<HistoryEntry>>(emptyList())
+    val history: StateFlow<List<HistoryEntry>> = _history.asStateFlow()
+
+    private val _queueRemaining = MutableStateFlow(0)
+    val queueRemaining: StateFlow<Int> = _queueRemaining.asStateFlow()
+
+    private val _localClientId = MutableStateFlow<String?>(null)
+    val localClientId: StateFlow<String?> = _localClientId.asStateFlow()
+
+    private val _queueError = MutableStateFlow<String?>(null)
+    val queueError: StateFlow<String?> = _queueError.asStateFlow()
+
+    private val _historyError = MutableStateFlow<String?>(null)
+    val historyError: StateFlow<String?> = _historyError.asStateFlow()
+
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError: StateFlow<String?> = _actionError.asStateFlow()
+
+    val connection: StateFlow<ComfyConnectionState> = webSocketManager.connection
+
+    private var refreshJob: Job? = null
+
+    init {
+        scope.launch {
+            _localClientId.value = runCatching { clientIdStore.getOrCreate() }.getOrNull()
+        }
+        scope.launch {
+            _tasks.value = runCatching { taskStore.list() }.getOrDefault(emptyList())
+        }
+        scope.launch {
+            webSocketManager.events.collect { event -> handleEvent(event) }
+        }
+        scope.launch {
+            // 重连成功后主动校准一次，避免断线期间的状态丢失。
+            webSocketManager.connection.collect { state ->
+                if (state == ComfyConnectionState.Connected) refresh()
+            }
+        }
+        webSocketManager.start()
+        refresh()
+    }
+
+    fun refresh() {
+        if (refreshJob?.isActive == true) return
+        refreshJob = scope.launch {
+            _refreshing.value = true
+            reloadTasks()
+            queueRepository.queue()
+                .onSuccess { snapshot ->
+                    _queue.value = snapshot
+                    _queueError.value = null
+                    syncTasksWithQueue(snapshot)
+                }
+                .onFailure { throwable ->
+                    // 失败时保留上次队列，界面据此标记为过期。
+                    _queueError.value = throwable.message ?: "无法刷新队列"
+                }
+            queueRepository.history(100)
+                .onSuccess { entries ->
+                    _history.value = entries
+                    _historyError.value = null
+                    syncTasksWithHistory(entries)
+                }
+                .onFailure { throwable ->
+                    _historyError.value = throwable.message ?: "无法刷新历史"
+                }
+            _refreshing.value = false
+        }
+    }
+
+    fun interrupt(promptId: String) {
+        scope.launch {
+            queueRepository.interrupt(promptId)
+                .onFailure { throwable ->
+                    _actionError.value = throwable.message ?: "服务器拒绝了中断请求"
+                }
+            refresh()
+        }
+    }
+
+    fun deletePending(promptId: String) {
+        scope.launch {
+            queueRepository.deletePending(promptId)
+                .onFailure { throwable ->
+                    _actionError.value = throwable.message ?: "服务器拒绝了删除请求"
+                }
+            refresh()
+        }
+    }
+
+    fun clearActionError() {
+        _actionError.value = null
+    }
+
+    private suspend fun reloadTasks() {
+        val stored = runCatching { taskStore.list() }.getOrNull() ?: return
+        _tasks.update { current ->
+            val currentById = current.associateBy { it.promptId }
+            stored.map { record ->
+                val live = currentById[record.promptId]
+                // 内存中的状态可能比磁盘文件更新，取更靠后的状态但保留新提交的任务。
+                if (live != null && statusRank(live.status) >= statusRank(record.status)) live else record
+            }.sortedByDescending { it.submittedAt }
+        }
+    }
+
+    private suspend fun handleEvent(event: ComfyEvent) {
+        when (event) {
+            is ComfyEvent.Status -> _queueRemaining.value = event.queueRemaining
+
+            is ComfyEvent.ExecutionStart -> {
+                updateTask(event.promptId) {
+                    it.copy(
+                        status = "running",
+                        startedAt = it.startedAt ?: System.currentTimeMillis(),
+                    )
+                }
+            }
+
+            is ComfyEvent.Executing -> {
+                // node 为 null 表示执行器正在收尾，保留上一个节点的进度即可。
+                val nodeId = event.nodeId ?: return
+                val label = nodeLabel(event.promptId, nodeId)
+                _progress.update { current ->
+                    val old = current[event.promptId]
+                    current + (
+                        event.promptId to TaskProgress(
+                            promptId = event.promptId,
+                            status = "running",
+                            currentNode = nodeId,
+                            currentNodeLabel = label,
+                            value = old?.value,
+                            max = old?.max,
+                        )
+                        )
+                }
+            }
+
+            is ComfyEvent.Progress -> {
+                val label = nodeLabel(event.promptId, event.nodeId)
+                _progress.update { current ->
+                    current + (
+                        event.promptId to TaskProgress(
+                            promptId = event.promptId,
+                            status = "running",
+                            currentNode = event.nodeId,
+                            currentNodeLabel = label,
+                            value = event.value,
+                            max = event.max,
+                        )
+                        )
+                }
+            }
+
+            is ComfyEvent.ProgressState -> {
+                val running = event.nodes.firstOrNull { it.state == "running" }
+                    ?: event.nodes.lastOrNull()
+                if (running != null) {
+                    val label = nodeLabel(event.promptId, running.nodeId)
+                    _progress.update { current ->
+                        current + (
+                            event.promptId to TaskProgress(
+                                promptId = event.promptId,
+                                status = "running",
+                                currentNode = running.nodeId,
+                                currentNodeLabel = label,
+                                value = running.value,
+                                max = running.max,
+                            )
+                            )
+                    }
+                }
+            }
+
+            is ComfyEvent.Success -> {
+                _progress.update { it - event.promptId }
+                updateTask(event.promptId) {
+                    it.copy(
+                        status = "success",
+                        finishedAt = System.currentTimeMillis(),
+                    )
+                }
+                refresh()
+            }
+
+            is ComfyEvent.Error -> {
+                _progress.update { it - event.promptId }
+                updateTask(event.promptId) {
+                    it.copy(
+                        status = "failed",
+                        finishedAt = System.currentTimeMillis(),
+                        errorMessage = event.message,
+                    )
+                }
+            }
+
+            is ComfyEvent.Interrupted -> {
+                _progress.update { it - event.promptId }
+                updateTask(event.promptId) {
+                    it.copy(
+                        status = "interrupted",
+                        finishedAt = System.currentTimeMillis(),
+                    )
+                }
+            }
+
+            is ComfyEvent.ExecutionCached,
+            is ComfyEvent.Executed,
+            -> Unit
+        }
+    }
+
+    private fun syncTasksWithQueue(snapshot: QueueSnapshot) {
+        val running = snapshot.running.map { it.promptId }.toSet()
+        val pending = snapshot.pending.map { it.promptId }.toSet()
+        _tasks.update { tasks ->
+            tasks.map { task ->
+                when (task.promptId) {
+                    in running -> if (task.status != "running") {
+                        task.copy(status = "running", startedAt = task.startedAt ?: System.currentTimeMillis())
+                    } else {
+                        task
+                    }
+
+                    in pending -> if (task.status == "queued") task else task.copy(status = "queued")
+                    else -> task
+                }
+            }
+        }
+    }
+
+    private fun syncTasksWithHistory(entries: List<HistoryEntry>) {
+        val byId = entries.associateBy { it.promptId }
+        _tasks.update { tasks ->
+            tasks.map { task ->
+                val entry = byId[task.promptId] ?: return@map task
+                val status = when (entry.status) {
+                    "success" -> "success"
+                    "failed" -> "failed"
+                    "interrupted" -> "interrupted"
+                    else -> task.status
+                }
+                if (status == task.status) {
+                    task
+                } else {
+                    task.copy(
+                        status = status,
+                        startedAt = task.startedAt ?: entry.startedAt,
+                        finishedAt = entry.finishedAt ?: entry.timestamp ?: task.finishedAt,
+                        errorMessage = entry.errorMessage ?: task.errorMessage,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun updateTask(promptId: String, transform: (TaskRecord) -> TaskRecord) {
+        var updated: TaskRecord? = null
+        _tasks.update { tasks ->
+            tasks.map { task ->
+                if (task.promptId == promptId) {
+                    transform(task).also { updated = it }
+                } else {
+                    task
+                }
+            }
+        }
+        updated?.let { record ->
+            scope.launch { taskStore.update(record) }
+        }
+    }
+
+    private fun nodeLabel(promptId: String, nodeId: String?): String? {
+        if (nodeId == null) return null
+        val snapshot = _queue.value ?: return null
+        return (snapshot.running + snapshot.pending)
+            .firstOrNull { it.promptId == promptId }
+            ?.nodeTitles
+            ?.get(nodeId)
+    }
+
+    private fun statusRank(status: String): Int = when (status) {
+        "running" -> 1
+        "success", "failed", "interrupted" -> 2
+        else -> 0
+    }
+}

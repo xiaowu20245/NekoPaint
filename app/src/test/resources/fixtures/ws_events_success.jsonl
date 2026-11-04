@@ -1,0 +1,8 @@
+{"type":"status","data":{"status":{"exec_info":{"queue_remaining":0}},"sid":"00000000-0000-4000-8000-000000000002"}}
+{"type":"execution_start","data":{"prompt_id":"00000000-0000-4000-8000-000000000001","timestamp":1793762353188}}
+{"type":"execution_cached","data":{"nodes":[],"prompt_id":"00000000-0000-4000-8000-000000000001","timestamp":1793762353191}}
+{"type":"progress_state","data":{"prompt_id":"00000000-0000-4000-8000-000000000001","nodes":{"5":{"value":0.0,"max":1.0,"state":"running","node_id":"5","prompt_id":"00000000-0000-4000-8000-000000000001","display_node_id":"5","parent_node_id":null,"real_node_id":"5"}}}}
+{"type":"executing","data":{"node":"5","display_node":"5","prompt_id":"00000000-0000-4000-8000-000000000001"}}
+{"type":"progress","data":{"value":1,"max":1,"prompt_id":"00000000-0000-4000-8000-000000000001","node":"5"}}
+{"type":"executed","data":{"node":"7","display_node":"7","output":{"images":[{"filename":"nekopaint_verify_00001_.png","subfolder":"","type":"output"}]},"prompt_id":"00000000-0000-4000-8000-000000000001"}}
+{"type":"execution_success","data":{"prompt_id":"00000000-0000-4000-8000-000000000001","timestamp":1793762357025}}
