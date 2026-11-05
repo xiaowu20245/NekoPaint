@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -148,6 +151,7 @@ fun QueueScreen(
                         item = item,
                         task = state.tasks.firstOrNull { it.promptId == item.promptId },
                         progress = state.progress[item.promptId],
+                        connection = state.connection,
                         isOwn = item.clientId != null && item.clientId == state.localClientId,
                         onInterrupt = { interruptTarget = item },
                     )
@@ -310,9 +314,24 @@ private fun RunningCard(
     item: QueueItem,
     task: TaskRecord?,
     progress: TaskProgress?,
+    connection: ComfyConnectionState,
     isOwn: Boolean,
     onInterrupt: () -> Unit,
 ) {
+    val isLive = connection == ComfyConnectionState.Connected
+    val staleHint = when (connection) {
+        ComfyConnectionState.Connected -> null
+        ComfyConnectionState.Connecting,
+        ComfyConnectionState.Reconnecting,
+        -> stringResource(R.string.queue_progress_reconnecting)
+
+        ComfyConnectionState.Disconnected -> stringResource(R.string.queue_progress_disconnected)
+    }
+    val staleColor = if (connection == ComfyConnectionState.Disconnected) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.tertiary
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -347,6 +366,24 @@ private fun RunningCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (staleHint != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Warning,
+                        contentDescription = null,
+                        tint = staleColor,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = staleHint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = staleColor,
+                    )
+                }
+            }
             val value = progress?.value
             val max = progress?.max
             if (value != null && max != null && max > 0) {
@@ -363,9 +400,10 @@ private fun RunningCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(7.dp)
-                        .clip(RoundedCornerShape(4.dp)),
+                        .clip(RoundedCornerShape(4.dp))
+                        .alpha(if (isLive) 1f else 0.4f),
                 )
-            } else {
+            } else if (isLive) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()

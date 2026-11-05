@@ -62,13 +62,17 @@ class QueueMapperTest {
         val payload = fixture("history_success.json")
         val dto = json.decodeFromString<Map<String, HistoryItemDto>>(payload)
 
-        val entry = QueueMapper.toHistoryEntries(dto).single()
+        val entry = QueueMapper.toHistoryEntries(dto, BASE_URL).single()
 
         assertEquals("00000000-0000-4000-8000-000000000001", entry.promptId)
         assertEquals("success", entry.status)
         assertTrue(entry.completed)
         assertEquals(1, entry.images.size)
         assertEquals("nekopaint_verify_00001_.png", entry.images.first().filename)
+        assertEquals(
+            "http://127.0.0.1:8188/view?filename=nekopaint_verify_00001_.png&subfolder=&type=output",
+            entry.images.first().url,
+        )
         assertEquals(1793762353188L, entry.startedAt)
         assertEquals(1793762357025L, entry.finishedAt)
         assertEquals(1793762357025L, entry.timestamp)
@@ -95,6 +99,7 @@ class QueueMapperTest {
 
         val entry = QueueMapper.toHistoryEntries(
             json.decodeFromString<Map<String, HistoryItemDto>>(payload),
+            BASE_URL,
         ).single()
 
         assertEquals("interrupted", entry.status)
@@ -126,6 +131,7 @@ class QueueMapperTest {
 
         val entry = QueueMapper.toHistoryEntries(
             json.decodeFromString<Map<String, HistoryItemDto>>(payload),
+            BASE_URL,
         ).single()
 
         assertEquals("failed", entry.status)
@@ -147,9 +153,14 @@ class QueueMapperTest {
 
         val entry = QueueMapper.toHistoryEntries(
             json.decodeFromString<Map<String, HistoryItemDto>>(payload),
+            BASE_URL,
         ).single()
 
         assertEquals("unknown", entry.status)
         assertTrue(entry.images.isEmpty())
+    }
+
+    private companion object {
+        const val BASE_URL = "http://127.0.0.1:8188/"
     }
 }

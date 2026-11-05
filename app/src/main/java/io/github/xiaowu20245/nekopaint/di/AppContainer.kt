@@ -7,6 +7,9 @@ import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
+import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
+import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
+import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
@@ -51,9 +54,20 @@ class AppContainer(context: Context) {
         }
         .build()
 
+    // 图片下载单独放宽读取超时，避免 4K 原图在慢速局域网上被 15 秒截断。
+    val imageOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
+        .readTimeout(NetworkConfig.ImageReadTimeoutSeconds, TimeUnit.SECONDS)
+        .build()
+
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)
 
     val serverRepository = ServerRepository(serverConfigStore, comfyApiFactory)
+
+    val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)
+
+    val imageShareManager = ImageShareManager(context.applicationContext, imageOkHttpClient)
+
+    val mediaCacheManager = MediaCacheManager(context.applicationContext, imageShareManager)
 
     val taskStore = TaskStore(context.applicationContext, json)
 

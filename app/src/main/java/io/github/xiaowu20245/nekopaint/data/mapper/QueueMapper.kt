@@ -4,6 +4,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueItem
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
+import io.github.xiaowu20245.nekopaint.core.network.ComfyImageUrlBuilder
 import io.github.xiaowu20245.nekopaint.core.network.HistoryItemDto
 import io.github.xiaowu20245.nekopaint.core.network.QueueDto
 import kotlinx.serialization.json.JsonArray
@@ -32,8 +33,9 @@ object QueueMapper {
 
     fun toHistoryEntries(
         dto: Map<String, HistoryItemDto>,
+        baseUrl: String,
     ): List<HistoryEntry> = dto
-        .mapNotNull { (promptId, item) -> item.toHistoryEntry(promptId) }
+        .mapNotNull { (promptId, item) -> item.toHistoryEntry(promptId, baseUrl) }
         .sortedByDescending { it.timestamp ?: 0L }
 
     private fun JsonArray.toQueueItem(): QueueItem? {
@@ -57,7 +59,10 @@ object QueueMapper {
         )
     }
 
-    private fun HistoryItemDto.toHistoryEntry(promptId: String): HistoryEntry {
+    private fun HistoryItemDto.toHistoryEntry(
+        promptId: String,
+        baseUrl: String,
+    ): HistoryEntry {
         val images = outputs.values.flatMap { output ->
             val imagesArray = (output as? JsonObject)?.get("images") as? JsonArray
                 ?: return@flatMap emptyList()
@@ -65,10 +70,13 @@ object QueueMapper {
                 val image = imageElement as? JsonObject ?: return@mapNotNull null
                 val filename = (image["filename"] as? JsonPrimitive)?.contentOrNull
                     ?: return@mapNotNull null
+                val subfolder = (image["subfolder"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                val type = (image["type"] as? JsonPrimitive)?.contentOrNull ?: "output"
                 HistoryImage(
                     filename = filename,
-                    subfolder = (image["subfolder"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
-                    type = (image["type"] as? JsonPrimitive)?.contentOrNull ?: "output",
+                    subfolder = subfolder,
+                    type = type,
+                    url = ComfyImageUrlBuilder.build(baseUrl, filename, subfolder, type),
                 )
             }
         }

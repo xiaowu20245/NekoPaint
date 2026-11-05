@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 只暴露分享用的临时文件，不暴露相册或应用私有数据。 -->
+    <cache-path
+        name="shared_images"
+        path="share/" />
+</paths>

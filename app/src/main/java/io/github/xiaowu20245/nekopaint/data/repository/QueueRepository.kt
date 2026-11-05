@@ -27,7 +27,8 @@ class QueueRepository(
         runCatching {
             val config = serverConfigStore.config.first() ?: error("未配置服务器")
             QueueMapper.toHistoryEntries(
-                apiFactory.create(config).history(maxItems),
+                dto = apiFactory.create(config).history(maxItems),
+                baseUrl = config.baseUrl,
             )
         }
     }

@@ -56,7 +56,7 @@ flowchart LR
 | HTTP | Retrofit + OkHttp | 建议 | 成熟、资料多；WebSocket 复用 OkHttp |
 | JSON | kotlinx.serialization | 建议 | 与 Kotlin 类型安全结合，容错配置方便 |
 | WebSocket | OkHttp WebSocket | 建议 | 与 HTTP 共用连接池与超时配置 |
-| 图片加载 | Coil 3 | 建议 | Compose 友好，支持磁盘/内存缓存与采样 |
+| 图片加载 | Coil 3 | 已实施（V0.4a） | Compose 友好，支持磁盘/内存缓存与采样；复用 OkHttpClient |
 | 本地配置 | DataStore (Preferences) | 建议 | 轻量键值，适合服务器配置 |
 | 结构化数据 | Room | 建议 | 模板、绑定、任务、历史元数据 |
 | 依赖注入 | 手动 `AppContainer` | 建议 | 初期简单透明；规模变大再评估 Hilt |
@@ -486,15 +486,15 @@ task_output
 ```
 
 - 模板 JSON 存文件（`filesDir/workflows/<id>.json`），数据库存路径与元数据。
-- 图片缓存存 `cacheDir/comfy-images/`，按 URL 哈希命名；保存到相册时走 MediaStore。
+- 图片缓存由 Coil 管理（`cacheDir/image_cache`）；分享临时文件在 `cacheDir/share`；保存到相册时走 MediaStore。
 - 删除模板时同时删除 JSON、绑定、草稿；历史任务保留但标记模板已删除。
 - 使用事务保证“模板 + 绑定”一起成功或失败。
 
 ### 9.3 数据保留
 
 - 历史元数据默认保留最近 200 条，超出按时间清理。
-- 图片缓存默认上限 500 MB，LRU 清理。
-- 提供“清理缓存”，不删除相册图片。
+- 图片磁盘缓存上限 500 MB、内存缓存 25%，由 Coil 管理。
+- 设置页提供缓存统计与“清理缓存”，不删除相册图片。
 
 ---
 
@@ -555,12 +555,23 @@ templateJson (只读)
 
 ---
 
-## 11. 图片处理
+## 11. 图片处理（V0.4 已实施）
 
-- 列表：Coil 请求 `/view` URL，指定尺寸采样；磁盘缓存由 Coil 管理或自定义。
-- 大图：使用 `SubcomposeAsyncImage`/自定义 painter，按屏幕尺寸解码；缩放用 `graphicsLayer`，不重复解码。
-- 保存：下载原始字节 → MediaStore `Pictures/NekoPaint`；文件名含时间与短 prompt_id。
-- 分享：写入 `cacheDir/share/`，通过 `FileProvider` 授权临时 URI。
+- URL：`ComfyImageUrlBuilder` 用 OkHttp `HttpUrl` 构造 `/view?filename=&subfolder=&type=`；中文、空格、`#`、`?` 自动编码，禁止字符串拼接。
+- 列表：历史卡片最多显示 3 张 `AsyncImage` 缩略图，按控件尺寸采样；Coil 负责请求取消与缓存。
+- 详情：2 列图片网格；失败显示错误图标，大图预览内提供“重试”。
+- 大图：全屏 Dialog + `HorizontalPager`；`graphicsLayer` 处理缩放/平移，按屏幕尺寸解码，不重复解码。
+- 手势：双指缩放（1–4 倍）、双击 2.5 倍/还原、放大后单指平移；未放大时单指滑动交给 Pager 翻页。
+- 保存（V0.4b 已实施）：`ImageSaver` 流式下载原始字节 → MediaStore `Pictures/NekoPaint`。
+  - Android 10+：`RELATIVE_PATH` + `IS_PENDING`，无需存储权限。
+  - Android 8/9：`WRITE_EXTERNAL_STORAGE`（`maxSdkVersion=28`），写入公共 Pictures 目录。
+  - 同名文件自动追加 ` (1)`、` (2)`；失败时删除未完成的 MediaStore 记录。
+  - 保存成功 Snackbar 提供“查看”，用系统相册打开 content URI。
+- 分享（V0.4c 已实施）：`ImageShareManager` 写入 `cacheDir/share/`，通过 `FileProvider` 生成 content URI。
+  - `file_paths.xml` 只暴露 `cache/share/`，不暴露相册或私有数据。
+  - `ACTION_SEND` 同时设置 `ClipData` 与 `FLAG_GRANT_READ_URI_PERMISSION`，外层 Chooser 也带授权标志。
+  - 每次分享前清理旧临时文件。
+- 缓存（V0.4c 已实施）：Coil 内存 25%、磁盘 500 MB；`MediaCacheManager` 统计算上分享文件，清理时不触碰相册。
 - 元数据：PNG 的 `prompt`/`workflow` 文本可选读取，仅展示，不执行。
 - 内存：避免在 `LazyColumn` 中持有 Bitmap；使用 Coil 内存缓存并限制比例。
 

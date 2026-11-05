@@ -2,8 +2,8 @@
 
 通过局域网用 Android 手机远程控制 Windows 上的 ComfyUI。
 
-> 当前阶段：**V0.3 任务管理核心完成**。已支持 API 工作流导入、参数编辑与提交、WebSocket 实时进度、队列运行/等待、中断、删除等待任务、历史列表/详情与再次生成。
-> 断网重连已验证；失败事件和 100 条历史滚动仍待补测。
+> 当前阶段：**V0.4 图片管理验收完成**。已支持 API 工作流导入、参数编辑与提交、WebSocket 实时进度、队列/中断、历史与再次生成、缩略图/图片网格/全屏缩放预览、保存到系统相册、系统分享，以及缓存统计/清理。
+> 4K、404、100 条历史、失败任务、离线完成任务、分享、缓存与 Android 8/9 权限均已验证；真实飞行模式断网测试待补。
 > 产品范围与阶段计划见 `PRODUCT.md`、`REQUIREMENTS.md`、`ROADMAP.md`。
 
 ---
@@ -77,7 +77,7 @@ app/src/main/java/io/github/xiaowu20245/nekopaint/
 ├─ core/
 │  ├─ datastore/          # 服务器配置、固定 client_id
 │  ├─ model/              # 领域模型
-│  ├─ network/            # ComfyUI API、DTO、WebSocket、事件解析
+│  ├─ network/            # ComfyUI API、DTO、WebSocket、事件解析、图片 URL
 │  └─ ui/                 # 主题、导航、应用骨架
 ├─ data/
 │  ├─ mapper/             # DTO → 领域模型
@@ -87,7 +87,7 @@ app/src/main/java/io/github/xiaowu20245/nekopaint/
 
 底部导航固定四项：**服务器、工作流、队列、设置**。生成从工作流详情进入，历史从队列页进入；顶部 App Bar 显示当前板块标题。
 
-队列页从 `/queue` 拉取运行中/等待中任务，并通过 WebSocket 显示节点进度；断线时降级为轮询。历史详情支持查看参数快照、错误信息和“再次生成”。
+队列页从 `/queue` 拉取运行中/等待中任务，并通过 WebSocket 显示节点进度；断线时降级为轮询，运行任务卡会提示“连接已断开，正在重连，进度暂不更新”。历史详情支持图片网格、全屏缩放预览、保存到相册、系统分享、参数快照、错误信息和“再次生成”。图片加载使用 Coil 3，并复用应用的 OkHttpClient。保存位置为 `Pictures/NekoPaint`，同名文件会自动加序号；分享通过 FileProvider，仅暴露临时文件。设置页可查看并清理图片/分享缓存，内存缓存 25%、磁盘上限 500 MB。
 
 `workflows/` 用于存放参考工作流 JSON，不参与构建。App 只导入 **API 格式**；UI 格式请先在 ComfyUI 中导出 API。
 

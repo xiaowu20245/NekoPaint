@@ -26,7 +26,8 @@
 本文档基于 2026-11 抓取的 `ComfyUI` master 分支源码（`server.py`、`execution.py`、`protocol.py`）与官方文档整理，
 并在本机 ComfyUI **0.27.0** 上验证了 `/system_stats`、`/queue`、`/history`、`/api/jobs`、`/models`、`/object_info` 等 HTTP 端点。
 V0.3 期间又验证了忙碌队列、`/interrupt`（带 `prompt_id`）、`POST /queue` 删除等待任务、`progress_state` / `execution_interrupted` 事件，以及断线后的 WebSocket 自动重连。
-`/upload`、失败任务的 `execution_error` 完整字段、重连补发事件仍待验证。
+V0.4 验收补充验证了 4K `/view`、404 图片、`/upload/image`、真实 `execution_error` 历史记录和 100 条历史。
+重连补发 `executing` 仍未验证。
 
 ### 0.1 本机环境（2026-11-03）
 
@@ -582,6 +583,9 @@ POST /interrupt
 - 中断任务（V0.3 实测）会出现 `status_str="error"` / `completed=false`，但 `status.messages` 含 `execution_interrupted`。
   App 必须先检查 `execution_interrupted`，再判断失败，否则会把“已中断”误报为“失败”。
 - 失败任务从 `execution_error` 的 `node_id` / `exception_message` 提取失败节点与原因。
+- 真实失败样本（损坏图片触发）：`status_str="error"`、`completed=false`，`execution_error.node_id="1"`，
+  `exception_type="PIL.UnidentifiedImageError"`，`exception_message` 含服务器本地 input 路径。
+  App 历史页显示“失败”、失败节点 1 和原因；不要把完整路径写入日志或提交到仓库。
 
 ### 响应示例
 
@@ -693,6 +697,15 @@ GET /view?filename=nekopaint_verify_00001_.png&subfolder=&type=output
 - `Content-Type: image/png`
 - 图片：PNG，64×64，RGB
 
+### V0.4a 本机验证（2026-11-04）
+
+- 真实历史图片：中文文件名 + `subfolder=Anima` + `type=output` 返回 200（约 1.27 MB）。
+- `type=temp` 的预览图同样返回 200（约 58 KB）。
+- 使用 OkHttp `HttpUrl` 编码后，中文文件名以 UTF-8 百分号形式发送，服务器正确识别。
+- 4K 输出 `nekopaint_4k_test_00001_.png`（3840×2160，583 KB）返回 200；App 网格/预览/缩放无 OOM。
+- 临时把该文件改名为 `.bak` 后，`/view` 返回 404；App 显示失败占位，恢复文件后重试成功。
+- `preview=webp;80` 尚未启用/验证。
+
 ### 请求
 
 ```http
@@ -789,7 +802,11 @@ GET /models
 - 不存在时 404。
 - 只读；下载/删除不在核心 API 中。
 
-### `POST /upload/image` ⚠️
+### `POST /upload/image` ✅（0.27.0 实测）
+
+> 实测：上传 3840×2160 PNG 成功，返回 `{"name":"nekopaint_4k_test.png","subfolder":"","type":"input"}`。
+> 也上传过内容不是图片的 `nekopaint_bad.png`（文本内容），服务器同样接受并保存；随后 `LoadImage` 执行时报 `PIL.UnidentifiedImageError`。
+> 因此上传成功只代表文件已落地，不代表图片可解码。
 
 `multipart/form-data`：
 
@@ -1249,8 +1266,10 @@ App 解析必须同时兼容两套。
 - [x] `GET /queue`：空闲时返回 `{"queue_running":[],"queue_pending":[]}`
 - [x] `GET /queue`：1 个运行 + 1 个等待时抓取，字段符合预期
 - [x] `GET /history?max_items=10`：返回 200，已包含测试任务
+- [x] `GET /history?max_items=100`：100+ 条记录返回正常，App 列表滚动无 OOM
 - [x] `GET /history/{prompt_id}`：记录单条结构
-- [x] `GET /view`：原图返回 200 PNG；`preview=webp;80` 与不存在文件待测
+- [x] `GET /view`：原图返回 200 PNG；4K 图片 200；不存在文件 404
+- [ ] `GET /view`：`preview=webp;80` 待测
 - [x] `POST /interrupt`：带 `prompt_id` 返回 200，任务以 interrupted 收敛
 - [ ] `POST /interrupt`：全局（无 body）与“非当前任务”行为待补测
 - [x] `POST /queue`：删除等待任务成功
@@ -1259,7 +1278,7 @@ App 解析必须同时兼容两套。
 - [ ] `GET /object_info`：全量响应
 - [x] `GET /models`：返回 200，确认目录列表
 - [ ] `GET /models/{folder}`：记录文件列表
-- [ ] `POST /upload/image`：上传一张图，记录响应
+- [x] `POST /upload/image`：4K PNG 上传成功；非图片文件也会被接受，执行时才失败
 - [x] 客户端指定 `prompt_id`：确认响应复用该 ID
 - [x] `GET /api/jobs`：返回 200，确认分页结构（当前已含测试任务）
 - [x] `GET /features`：返回 200，确认 `max_upload_size` 与能力开关
@@ -1269,7 +1288,7 @@ App 解析必须同时兼容两套。
 - [x] 使用与提交一致的 `client_id` 连接，记录首条 `status`
 - [x] 确认 `sid` 回显 `clientId`
 - [x] 记录一次完整成功任务的全部文本事件与顺序
-- [ ] 记录一次失败任务的 `execution_error` 完整字段
+- [ ] 记录一次 WebSocket 实时 `execution_error`（已通过 `/history` 验证失败字段，但该任务不是 App client_id 提交，未捕获实时帧）
 - [x] 记录一次中断的 `execution_interrupted`（App 状态显示“已中断”，历史状态正确）
 - [x] 记录忙碌队列下的 `progress` / `progress_state`（节点名与 value/max 正常）
 - [x] 记录二进制预览帧存在（约 26 KB，内容未解析）

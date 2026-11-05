@@ -20,6 +20,7 @@ data class HistoryImage(
     val filename: String,
     val subfolder: String,
     val type: String,
+    val url: String? = null,
 )
 
 data class HistoryEntry(
