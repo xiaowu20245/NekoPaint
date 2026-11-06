@@ -1,6 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
+import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
@@ -15,14 +16,19 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class TaskManager(
     private val taskStore: TaskStore,
+    private val historyStore: HistoryStore,
     private val queueRepository: QueueRepository,
     private val webSocketManager: ComfyWebSocketManager,
     private val clientIdStore: ClientIdStore,
+    private val serverConfigStore: ServerConfigStore,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,12 +67,34 @@ class TaskManager(
 
     private var refreshJob: Job? = null
 
+    @Volatile
+    private var historyFetched = false
+
     init {
         scope.launch {
             _localClientId.value = runCatching { clientIdStore.getOrCreate() }.getOrNull()
         }
         scope.launch {
-            _tasks.value = runCatching { taskStore.list() }.getOrDefault(emptyList())
+            serverConfigStore.activeServerId
+                .distinctUntilChanged()
+                .collectLatest { serverId ->
+                    refreshJob?.cancel()
+                    _refreshing.value = false
+                    _tasks.value = emptyList()
+                    _history.value = emptyList()
+                    _queue.value = null
+                    _progress.value = emptyMap()
+                    _queueError.value = null
+                    _historyError.value = null
+                    historyFetched = false
+                    if (serverId == null) return@collectLatest
+
+                    _tasks.value = runCatching { taskStore.list(serverId) }
+                        .getOrDefault(emptyList())
+                    _history.value = runCatching { historyStore.load(serverId) }
+                        .getOrDefault(emptyList())
+                    refresh()
+                }
         }
         scope.launch {
             webSocketManager.events.collect { event -> handleEvent(event) }
@@ -78,14 +106,15 @@ class TaskManager(
             }
         }
         webSocketManager.start()
-        refresh()
     }
 
     fun refresh() {
         if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
+            val serverId = serverConfigStore.activeServerId.first()
+                ?: return@launch
             _refreshing.value = true
-            reloadTasks()
+            reloadTasks(serverId)
             queueRepository.queue()
                 .onSuccess { snapshot ->
                     _queue.value = snapshot
@@ -98,9 +127,15 @@ class TaskManager(
                 }
             queueRepository.history(100)
                 .onSuccess { entries ->
+                    val previous = _history.value
+                    historyFetched = true
                     _history.value = entries
                     _historyError.value = null
                     syncTasksWithHistory(entries)
+                    // 只有内容变化时才写盘，避免每 5 秒轮询都重复写。
+                    if (previous != entries) {
+                        historyStore.save(serverId, entries)
+                    }
                 }
                 .onFailure { throwable ->
                     _historyError.value = throwable.message ?: "无法刷新历史"
@@ -133,8 +168,8 @@ class TaskManager(
         _actionError.value = null
     }
 
-    private suspend fun reloadTasks() {
-        val stored = runCatching { taskStore.list() }.getOrNull() ?: return
+    private suspend fun reloadTasks(serverId: String) {
+        val stored = runCatching { taskStore.list(serverId) }.getOrNull() ?: return
         _tasks.update { current ->
             val currentById = current.associateBy { it.promptId }
             stored.map { record ->
@@ -307,7 +342,9 @@ class TaskManager(
             }
         }
         updated?.let { record ->
-            scope.launch { taskStore.update(record) }
+            // 任务记录从创建起就带 serverId；旧数据兜底到默认服务器。
+            val serverId = record.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID }
+            scope.launch { taskStore.update(serverId, record) }
         }
     }
 

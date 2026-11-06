@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class TaskRecord(
     val promptId: String,
+    val serverId: String = "",
     val templateId: String,
     val templateName: String,
     val clientId: String,

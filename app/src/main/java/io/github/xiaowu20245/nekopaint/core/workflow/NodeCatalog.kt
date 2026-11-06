@@ -23,6 +23,9 @@ class NodeCatalog(
 
     fun contains(classType: String): Boolean = classType in nodes
 
+    fun requiredInputNames(classType: String): Set<String> =
+        nodes[classType]?.input?.required?.keys.orEmpty()
+
     fun inputSchema(classType: String, inputName: String): InputSchema? {
         val node = nodes[classType] ?: return null
         val raw = node.input?.required?.get(inputName)
@@ -39,9 +42,15 @@ class NodeCatalog(
         val typeElement = array.getOrNull(0) ?: return InputSchema(ParameterType.UNKNOWN)
         val options = array.getOrNull(1) as? JsonObject
 
-        val optionsList = (typeElement as? JsonArray)
-            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-            .orEmpty()
+        // 普通枚举是 ["a","b"]；0.27 的模型列表是 {"value":["a","b"],"Count":2}。
+        val optionsList = when (typeElement) {
+            is JsonArray -> typeElement.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            is JsonObject -> (typeElement["value"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                .orEmpty()
+
+            else -> emptyList()
+        }
 
         val typeName = (typeElement as? JsonPrimitive)?.contentOrNull
         val type = when {

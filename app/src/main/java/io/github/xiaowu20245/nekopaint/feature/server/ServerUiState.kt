@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.feature.server
 
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 
 data class ServerForm(
     val name: String = ServerConfig.DEFAULT_NAME,
@@ -32,23 +33,47 @@ data class ServerForm(
             port = config.port.toString(),
             scheme = config.scheme,
         )
+
+        fun fromProfile(profile: ServerProfile): ServerForm = fromConfig(profile.toConfig())
     }
+}
+
+data class ServerCardUi(
+    val profile: ServerProfile,
+    val isActive: Boolean,
+    val snapshot: ConnectionSnapshot? = null,
+    val error: ServerError? = null,
+    val isTesting: Boolean = false,
+    val lastUpdatedAt: Long? = null,
+) {
+    val isOnline: Boolean
+        get() = snapshot != null && error == null
+}
+
+enum class ServerFormMode {
+    None,
+    Add,
+    Edit,
 }
 
 data class ServerUiState(
     val isLoading: Boolean = true,
-    val config: ServerConfig? = null,
+    val cards: List<ServerCardUi> = emptyList(),
+    val expandedId: String? = null,
+    val formMode: ServerFormMode = ServerFormMode.None,
+    val editingId: String? = null,
     val form: ServerForm = ServerForm(),
-    val isEditing: Boolean = true,
-    val isTesting: Boolean = false,
-    val isSaving: Boolean = false,
-    val snapshot: ConnectionSnapshot? = null,
-    val error: ServerError? = null,
-    val lastUpdatedAt: Long? = null,
+    val formTesting: Boolean = false,
+    val formSaving: Boolean = false,
+    val formSnapshot: ConnectionSnapshot? = null,
+    val formError: ServerError? = null,
 ) {
-    val isBusy: Boolean
-        get() = isTesting || isSaving
+    val activeCard: ServerCardUi?
+        get() = cards.firstOrNull { it.isActive }
 
-    val isOnline: Boolean
-        get() = snapshot != null && error == null
+    val isFormOpen: Boolean
+        get() = formMode != ServerFormMode.None
+
+    val isFormBusy: Boolean
+        get() = formTesting || formSaving
 }

@@ -230,6 +230,7 @@ fun HistoryDetailScreen(promptId: String) {
 
     val entry = state.entries.firstOrNull { it.promptId == promptId }
     val task = state.tasks.firstOrNull { it.promptId == promptId }
+    val images = entry?.visibleImages(state.showTempPreviews).orEmpty()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (entry == null) {
@@ -270,6 +271,7 @@ fun HistoryDetailScreen(promptId: String) {
             HistoryDetailContent(
                 entry = entry,
                 task = task,
+                images = images,
                 resubmitting = state.resubmitting,
                 savingImageUrl = state.savingImageUrl,
                 sharingImageUrl = state.sharingImageUrl,
@@ -290,7 +292,7 @@ fun HistoryDetailScreen(promptId: String) {
 
     viewerIndex?.let { index ->
         ImagePreviewDialog(
-            images = entry?.images.orEmpty(),
+            images = images,
             initialIndex = index,
             onDismiss = { viewerIndex = null },
         )
@@ -301,6 +303,7 @@ fun HistoryDetailScreen(promptId: String) {
 private fun HistoryDetailContent(
     entry: HistoryEntry,
     task: TaskRecord?,
+    images: List<HistoryImage>,
     resubmitting: Boolean,
     savingImageUrl: String?,
     sharingImageUrl: String?,
@@ -418,14 +421,24 @@ private fun HistoryDetailContent(
                         text = stringResource(R.string.history_detail_outputs),
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    if (entry.images.isEmpty()) {
+                    if (images.size < entry.images.size) {
+                        Text(
+                            text = stringResource(
+                                R.string.history_detail_hidden_temp,
+                                entry.images.size - images.size,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (images.isEmpty()) {
                         Text(
                             text = stringResource(R.string.history_no_images),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
-                        entry.images.chunked(2).forEachIndexed { rowIndex, rowImages ->
+                        images.chunked(2).forEachIndexed { rowIndex, rowImages ->
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {

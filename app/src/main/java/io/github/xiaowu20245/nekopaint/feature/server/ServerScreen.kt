@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.feature.server
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,20 +13,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -36,6 +43,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -54,6 +65,7 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.GpuInfo
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.ServerStats
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -68,200 +80,269 @@ fun ServerScreen() {
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
+    var deleteTarget by remember { mutableStateOf<ServerProfile?>(null) }
 
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (isActive) {
-                viewModel.refreshIfConfigured()
+                viewModel.refreshActive()
                 delay(5_000)
             }
         }
     }
+    LaunchedEffect(state.activeCard?.profile?.id) {
+        state.activeCard?.let { viewModel.refreshCard(it.profile.id) }
+    }
 
-    ServerContent(
-        state = state,
-        onNameChange = viewModel::onNameChange,
-        onHostChange = viewModel::onHostChange,
-        onPortChange = viewModel::onPortChange,
-        onSchemeChange = viewModel::onSchemeChange,
-        onTest = viewModel::testConnection,
-        onSave = viewModel::saveAndConnect,
-        onEdit = viewModel::edit,
-        onCancel = viewModel::cancelEdit,
-        onRefresh = viewModel::refresh,
-    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (state.isLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 16.dp,
+                    bottom = 96.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (state.isFormOpen) {
+                    item {
+                        ServerFormCard(
+                            form = state.form,
+                            isEdit = state.formMode == ServerFormMode.Edit,
+                            isTesting = state.formTesting,
+                            isSaving = state.formSaving,
+                            snapshot = state.formSnapshot,
+                            error = state.formError,
+                            canCancel = state.cards.isNotEmpty(),
+                            onNameChange = viewModel::onNameChange,
+                            onHostChange = viewModel::onHostChange,
+                            onPortChange = viewModel::onPortChange,
+                            onSchemeChange = viewModel::onSchemeChange,
+                            onTest = viewModel::testFormConnection,
+                            onSave = viewModel::saveAndConnect,
+                            onCancel = viewModel::cancelForm,
+                        )
+                    }
+                }
+
+                if (state.cards.isEmpty() && !state.isFormOpen) {
+                    item {
+                        EmptyServers(onAdd = viewModel::startAdd)
+                    }
+                } else {
+                    items(state.cards, key = { it.profile.id }) { card ->
+                        ServerListCard(
+                            card = card,
+                            expanded = state.expandedId == card.profile.id,
+                            onToggle = { viewModel.toggleExpanded(card.profile.id) },
+                            onRefresh = { viewModel.refreshCard(card.profile.id) },
+                            onEdit = { viewModel.startEdit(card.profile) },
+                            onSetActive = { viewModel.setActive(card.profile) },
+                            onDelete = { deleteTarget = card.profile },
+                        )
+                    }
+                }
+
+                if (!state.isFormOpen) {
+                    item { SecurityNotice() }
+                }
+            }
+
+            if (!state.isFormOpen && state.cards.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = viewModel::startAdd,
+                    icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                    text = { Text(stringResource(R.string.server_add)) },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(20.dp),
+                )
+            }
+        }
+    }
+
+    deleteTarget?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text(stringResource(R.string.server_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.server_delete_confirm_message,
+                        profile.name,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.delete(profile)
+                        deleteTarget = null
+                    },
+                ) {
+                    Text(stringResource(R.string.server_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
-private fun ServerContent(
-    state: ServerUiState,
-    onNameChange: (String) -> Unit,
-    onHostChange: (String) -> Unit,
-    onPortChange: (String) -> Unit,
-    onSchemeChange: (String) -> Unit,
-    onTest: () -> Unit,
-    onSave: () -> Unit,
-    onEdit: () -> Unit,
-    onCancel: () -> Unit,
-    onRefresh: () -> Unit,
-) {
-    if (state.isLoading) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    val displayConfig = state.config
-    val address = if (state.isEditing) {
-        state.form.toConfigOrNull()?.baseUrl ?: ""
-    } else {
-        displayConfig?.baseUrl ?: ""
-    }
-    val displayName = if (state.isEditing) {
-        state.form.name.ifBlank { ServerConfig.DEFAULT_NAME }
-    } else {
-        displayConfig?.name ?: ServerConfig.DEFAULT_NAME
-    }
-
-    LazyColumn(
+private fun EmptyServers(onAdd: () -> Unit) {
+    Column(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .fillMaxWidth()
+            .padding(top = 72.dp, bottom = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        if (state.config != null || state.snapshot != null || state.error != null || state.isTesting) {
-            item {
-                ConnectionCard(
-                    state = state,
-                    name = displayName,
-                    address = address,
-                    onEdit = onEdit,
-                    onRefresh = onRefresh,
-                )
-            }
-        }
-
-        if (state.isEditing || state.config == null) {
-            item {
-                ServerFormCard(
-                    state = state,
-                    onNameChange = onNameChange,
-                    onHostChange = onHostChange,
-                    onPortChange = onPortChange,
-                    onSchemeChange = onSchemeChange,
-                    onTest = onTest,
-                    onSave = onSave,
-                    onCancel = onCancel,
-                )
-            }
-        }
-
-        if (state.snapshot != null && !state.isEditing) {
-            item {
-                GpuSection(state.snapshot)
-            }
-            item {
-                SystemSection(state.snapshot.stats)
-            }
-        }
-
-        item {
-            SecurityNotice()
+        Text(
+            text = stringResource(R.string.server_empty_title),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Text(
+            text = stringResource(R.string.server_empty_desc),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(onClick = onAdd) {
+            Icon(Icons.Outlined.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.server_add))
         }
     }
 }
 
 @Composable
-private fun ConnectionCard(
-    state: ServerUiState,
-    name: String,
-    address: String,
-    onEdit: () -> Unit,
+private fun ServerListCard(
+    card: ServerCardUi,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onRefresh: () -> Unit,
+    onEdit: () -> Unit,
+    onSetActive: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Card(
+        onClick = onToggle,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                StatusPill(state)
-                Spacer(Modifier.weight(1f))
-                if (state.isTesting) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = card.profile.name.ifBlank { stringResource(R.string.server_unknown) },
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (card.isActive) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.server_current),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                }
+                Icon(
+                    imageVector = if (expanded) {
+                        Icons.Outlined.KeyboardArrowUp
+                    } else {
+                        Icons.Outlined.KeyboardArrowDown
+                    },
+                    contentDescription = stringResource(
+                        if (expanded) R.string.server_collapse else R.string.server_expand,
+                    ),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = card.profile.toConfig().baseUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (card.isTesting) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
                     )
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(6.dp))
                 }
-                IconButton(
-                    onClick = onRefresh,
-                    enabled = state.config != null && !state.isBusy,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Refresh,
-                        contentDescription = stringResource(R.string.server_refresh),
-                    )
-                }
-                if (state.config != null) {
-                    IconButton(onClick = onEdit) {
-                        Icon(
-                            imageVector = Icons.Outlined.Edit,
-                            contentDescription = stringResource(R.string.server_edit),
-                        )
-                    }
-                }
+                CardStatus(card)
             }
 
-            Text(
-                text = name.ifBlank { stringResource(R.string.server_unknown) },
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                text = address,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (expanded) {
+                CardActions(
+                    isActive = card.isActive,
+                    isTesting = card.isTesting,
+                    onRefresh = onRefresh,
+                    onEdit = onEdit,
+                    onSetActive = onSetActive,
+                    onDelete = onDelete,
+                )
 
-            val snapshot = state.snapshot
-            if (snapshot != null) {
-                Text(
-                    text = snapshot.stats.comfyUiVersion?.let {
-                        stringResource(R.string.server_version, it)
-                    } ?: stringResource(R.string.server_unknown),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = stringResource(R.string.server_latency, snapshot.latencyMs) +
-                        " · " + stringResource(
-                        R.string.server_last_updated,
-                        formatTime(snapshot.checkedAt),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            state.error?.let { error ->
-                Text(
-                    text = stringResource(error.messageRes),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                if (snapshot != null) {
+                card.snapshot?.let { snapshot ->
                     Text(
-                        text = stringResource(R.string.server_last_data),
+                        text = snapshot.stats.comfyUiVersion?.let {
+                            stringResource(R.string.server_version, it)
+                        } ?: stringResource(R.string.server_unknown),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = stringResource(R.string.server_latency, snapshot.latencyMs) +
+                            " · " + stringResource(
+                            R.string.server_last_updated,
+                            formatTime(snapshot.checkedAt),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                card.error?.let { error ->
+                    Text(
+                        text = stringResource(error.messageRes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    if (card.snapshot != null) {
+                        Text(
+                            text = stringResource(R.string.server_last_data),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                card.snapshot?.let { snapshot ->
+                    GpuSection(snapshot)
+                    SystemSection(snapshot.stats)
                 }
             }
         }
@@ -269,23 +350,62 @@ private fun ConnectionCard(
 }
 
 @Composable
-private fun StatusPill(state: ServerUiState) {
+private fun CardActions(
+    isActive: Boolean,
+    isTesting: Boolean,
+    onRefresh: () -> Unit,
+    onEdit: () -> Unit,
+    onSetActive: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (!isActive) {
+            TextButton(onClick = onSetActive, enabled = !isTesting) {
+                Text(stringResource(R.string.server_set_current))
+            }
+        }
+        TextButton(onClick = onRefresh, enabled = !isTesting) {
+            Text(stringResource(R.string.server_refresh))
+        }
+        TextButton(onClick = onEdit, enabled = !isTesting) {
+            Text(stringResource(R.string.server_edit))
+        }
+        TextButton(onClick = onDelete, enabled = !isTesting) {
+            Text(
+                text = stringResource(R.string.server_delete),
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CardStatus(card: ServerCardUi) {
     val (label, color, icon) = when {
-        state.isTesting -> Triple(
+        card.isTesting -> Triple(
             stringResource(R.string.server_checking),
             MaterialTheme.colorScheme.tertiary,
             Icons.Outlined.Refresh,
         )
 
-        state.isOnline -> Triple(
+        card.isOnline -> Triple(
             stringResource(R.string.server_online),
             MaterialTheme.colorScheme.primary,
             Icons.Outlined.CheckCircle,
         )
 
-        else -> Triple(
+        card.error != null -> Triple(
             stringResource(R.string.server_offline),
             MaterialTheme.colorScheme.error,
+            Icons.Outlined.Warning,
+        )
+
+        else -> Triple(
+            stringResource(R.string.server_not_checked),
+            MaterialTheme.colorScheme.onSurfaceVariant,
             Icons.Outlined.Warning,
         )
     }
@@ -295,26 +415,29 @@ private fun StatusPill(state: ServerUiState) {
         contentColor = color,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(14.dp),
             )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-            )
+            Text(text = label, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
 
 @Composable
 private fun ServerFormCard(
-    state: ServerUiState,
+    form: ServerForm,
+    isEdit: Boolean,
+    isTesting: Boolean,
+    isSaving: Boolean,
+    snapshot: ConnectionSnapshot?,
+    error: ServerError?,
+    canCancel: Boolean,
     onNameChange: (String) -> Unit,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
@@ -323,7 +446,7 @@ private fun ServerFormCard(
     onSave: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val form = state.form
+    val busy = isTesting || isSaving
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -331,11 +454,7 @@ private fun ServerFormCard(
         ) {
             Text(
                 text = stringResource(
-                    if (state.config == null) {
-                        R.string.server_setup_title
-                    } else {
-                        R.string.server_edit_title
-                    },
+                    if (isEdit) R.string.server_edit_title else R.string.server_setup_title,
                 ),
                 style = MaterialTheme.typography.titleLarge,
             )
@@ -351,7 +470,7 @@ private fun ServerFormCard(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.server_name)) },
                 singleLine = true,
-                enabled = !state.isBusy,
+                enabled = !busy,
             )
             OutlinedTextField(
                 value = form.host,
@@ -364,7 +483,7 @@ private fun ServerFormCard(
                 supportingText = form.hostError?.let { error ->
                     { Text(stringResource(error.messageRes)) }
                 },
-                enabled = !state.isBusy,
+                enabled = !busy,
             )
             OutlinedTextField(
                 value = form.port,
@@ -377,7 +496,7 @@ private fun ServerFormCard(
                     { Text(stringResource(error.messageRes)) }
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                enabled = !state.isBusy,
+                enabled = !busy,
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -390,24 +509,39 @@ private fun ServerFormCard(
                         selected = form.scheme == "http",
                         onClick = { onSchemeChange("http") },
                         label = { Text(stringResource(R.string.server_http)) },
-                        enabled = !state.isBusy,
+                        enabled = !busy,
                     )
                     FilterChip(
                         selected = form.scheme == "https",
                         onClick = { onSchemeChange("https") },
                         label = { Text(stringResource(R.string.server_https)) },
-                        enabled = !state.isBusy,
+                        enabled = !busy,
                     )
                 }
+            }
+
+            snapshot?.let {
+                Text(
+                    text = stringResource(R.string.server_version, it.stats.comfyUiVersion ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            error?.let {
+                Text(
+                    text = stringResource(it.messageRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onTest,
-                    enabled = !state.isBusy,
+                    enabled = !busy,
                     modifier = Modifier.weight(1f),
                 ) {
-                    if (state.isTesting) {
+                    if (isTesting) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
@@ -418,10 +552,10 @@ private fun ServerFormCard(
                 }
                 Button(
                     onClick = onSave,
-                    enabled = !state.isBusy,
+                    enabled = !busy,
                     modifier = Modifier.weight(1f),
                 ) {
-                    if (state.isSaving) {
+                    if (isSaving) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
@@ -432,11 +566,8 @@ private fun ServerFormCard(
                 }
             }
 
-            if (state.config != null) {
-                TextButton(
-                    onClick = onCancel,
-                    enabled = !state.isBusy,
-                ) {
+            if (canCancel) {
+                TextButton(onClick = onCancel, enabled = !busy) {
                     Text(stringResource(R.string.server_cancel))
                 }
             }
@@ -452,13 +583,10 @@ private fun GpuSection(snapshot: ConnectionSnapshot) {
             style = MaterialTheme.typography.titleMedium,
         )
         if (snapshot.stats.devices.isEmpty()) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.server_no_gpu),
-                    modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                text = stringResource(R.string.server_no_gpu),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         } else {
             snapshot.stats.devices.forEach { gpu ->
                 GpuCard(gpu)

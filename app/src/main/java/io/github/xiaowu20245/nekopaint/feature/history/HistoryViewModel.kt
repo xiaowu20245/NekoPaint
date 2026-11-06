@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
@@ -51,6 +52,7 @@ data class HistoryUiState(
     val saveNotice: SaveNotice? = null,
     val sharingImageUrl: String? = null,
     val shareNotice: ShareNotice? = null,
+    val showTempPreviews: Boolean = false,
 )
 
 class HistoryViewModel(
@@ -58,6 +60,7 @@ class HistoryViewModel(
     private val workflowRepository: WorkflowRepository,
     private val imageSaver: ImageSaver,
     private val imageShareManager: ImageShareManager,
+    private val settingsStore: SettingsStore,
 ) : ViewModel() {
 
     private val base = combine(
@@ -85,7 +88,8 @@ class HistoryViewModel(
         taskManager.historyError,
         taskManager.refreshing,
         operationState,
-    ) { state, error, refreshing, operation ->
+        settingsStore.showTempPreviews,
+    ) { state, error, refreshing, operation, showTempPreviews ->
         state.copy(
             error = error,
             refreshing = refreshing,
@@ -95,6 +99,7 @@ class HistoryViewModel(
             saveNotice = operation.save.notice,
             sharingImageUrl = operation.share.sharingUrl,
             shareNotice = operation.share.notice,
+            showTempPreviews = showTempPreviews,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -178,6 +183,12 @@ class HistoryViewModel(
         shareState.value = shareState.value.copy(notice = null)
     }
 
+    fun setShowTempPreviews(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setShowTempPreviews(value)
+        }
+    }
+
     private data class ResubmitState(
         val submitting: Boolean = false,
         val notice: HistoryNotice? = null,
@@ -207,6 +218,7 @@ class HistoryViewModel(
                     workflowRepository = container.workflowRepository,
                     imageSaver = container.imageSaver,
                     imageShareManager = container.imageShareManager,
+                    settingsStore = container.settingsStore,
                 )
             }
         }

@@ -10,6 +10,9 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
+import io.github.xiaowu20245.nekopaint.core.workflow.ModelInputResolver
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
+import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
@@ -59,6 +62,7 @@ data class WorkflowDetailUiState(
 class WorkflowDetailViewModel(
     private val templateId: String,
     private val repository: WorkflowRepository,
+    private val modelsRepository: ModelsRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowDetailUiState())
@@ -85,6 +89,69 @@ class WorkflowDetailViewModel(
                     errorRes = if (template == null) R.string.workflow_error_generic else null,
                 )
             }
+            template?.let { loadModelOptions(it) }
+            template?.takeIf {
+                it.compatibility == null ||
+                    !it.catalogChecked ||
+                    it.compatibility.analyzerVersion != WorkflowCompatibilityAnalyzer.CURRENT_VERSION
+            }?.let { refreshCompatibility(it) }
+        }
+    }
+
+    private fun refreshCompatibility(template: WorkflowTemplate) {
+        viewModelScope.launch {
+            val analyzed = repository.analyzeCompatibility(template) ?: return@launch
+            _uiState.update { state ->
+                val current = state.template ?: return@update state
+                if (current.id != analyzed.id) return@update state
+                state.copy(
+                    template = current.copy(
+                        missingNodeTypes = analyzed.missingNodeTypes,
+                        catalogChecked = analyzed.catalogChecked,
+                        compatibility = analyzed.compatibility,
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * 增量补全模型下拉选项。
+     *
+     * 导入时如果服务器离线，object_info 里的模型列表可能为空；
+     * 这里在打开模板时用 `/models/{folder}` 再补一次，不改变参数值。
+     */
+    private fun loadModelOptions(template: WorkflowTemplate) {
+        val folderByCandidate = template.candidates.mapNotNull { candidate ->
+            ModelInputResolver.folderFor(candidate.classType, candidate.inputName)
+                ?.let { candidate.id to it }
+        }.toMap()
+        if (folderByCandidate.isEmpty()) return
+
+        viewModelScope.launch {
+            modelsRepository.load(folderByCandidate.values.toSet())
+                .onSuccess { catalog ->
+                    _uiState.update { state ->
+                        val current = state.template ?: return@update state
+                        val updated = current.copy(
+                            candidates = current.candidates.map { candidate ->
+                                val folder = folderByCandidate[candidate.id]
+                                    ?: return@map candidate
+                                val remote = catalog[folder].orEmpty()
+                                if (remote.isEmpty()) return@map candidate
+                                val options = (
+                                    listOf(candidate.value).filter { it.isNotBlank() } +
+                                        remote +
+                                        candidate.constraints.options
+                                    ).distinct()
+                                candidate.copy(
+                                    constraints = candidate.constraints.copy(options = options),
+                                )
+                            },
+                        )
+                        state.copy(template = updated)
+                    }
+                }
         }
     }
 
@@ -360,6 +427,7 @@ class WorkflowDetailViewModel(
                 WorkflowDetailViewModel(
                     templateId = templateId,
                     repository = container.workflowRepository,
+                    modelsRepository = container.modelsRepository,
                 )
             }
         }

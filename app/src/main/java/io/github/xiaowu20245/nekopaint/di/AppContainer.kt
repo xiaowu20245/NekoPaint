@@ -4,12 +4,16 @@ import android.content.Context
 import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
+import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
+import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
+import io.github.xiaowu20245.nekopaint.data.repository.ModelCatalogStore
+import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
@@ -27,15 +31,16 @@ import java.util.concurrent.TimeUnit
  */
 class AppContainer(context: Context) {
 
-    val serverConfigStore = ServerConfigStore(context.applicationContext)
-    val clientIdStore = ClientIdStore(context.applicationContext)
-
     val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
         explicitNulls = false
         encodeDefaults = true
     }
+
+    val serverConfigStore = ServerConfigStore(context.applicationContext, json)
+    val clientIdStore = ClientIdStore(context.applicationContext)
+    val settingsStore = SettingsStore(context.applicationContext)
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(NetworkConfig.ConnectTimeoutSeconds, TimeUnit.SECONDS)
@@ -70,6 +75,13 @@ class AppContainer(context: Context) {
     val mediaCacheManager = MediaCacheManager(context.applicationContext, imageShareManager)
 
     val taskStore = TaskStore(context.applicationContext, json)
+    val historyStore = HistoryStore(context.applicationContext, json)
+    val modelCatalogStore = ModelCatalogStore(context.applicationContext, json)
+    val modelsRepository = ModelsRepository(
+        apiFactory = comfyApiFactory,
+        serverConfigStore = serverConfigStore,
+        store = modelCatalogStore,
+    )
 
     val webSocketManager = ComfyWebSocketManager(
         client = okHttpClient,
@@ -82,9 +94,11 @@ class AppContainer(context: Context) {
 
     val taskManager = TaskManager(
         taskStore = taskStore,
+        historyStore = historyStore,
         queueRepository = queueRepository,
         webSocketManager = webSocketManager,
         clientIdStore = clientIdStore,
+        serverConfigStore = serverConfigStore,
     )
 
     val workflowRepository = WorkflowRepository(

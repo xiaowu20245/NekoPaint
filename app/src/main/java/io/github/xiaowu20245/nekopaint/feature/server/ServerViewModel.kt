@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.data.repository.InvalidComfyResponseException
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerializationException
@@ -20,6 +22,7 @@ import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.util.UUID
 
 class ServerViewModel(
     private val repository: ServerRepository,
@@ -30,27 +33,129 @@ class ServerViewModel(
 
     init {
         viewModelScope.launch {
-            runCatching { repository.loadConfig() }
-                .onSuccess { config ->
-                    if (config == null) {
-                        _uiState.update { it.copy(isLoading = false) }
-                    } else {
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false,
-                                config = config,
-                                form = ServerForm.fromConfig(config),
-                                isEditing = false,
-                            )
-                        }
-                        check(config)
+            combine(repository.servers, repository.activeServerId) { servers, activeId ->
+                servers to activeId
+            }.collect { (servers, activeId) ->
+                _uiState.update { state ->
+                    val existing = state.cards.associateBy { it.profile.id }
+                    val cards = servers.map { profile ->
+                        existing[profile.id]?.copy(
+                            profile = profile,
+                            isActive = profile.id == activeId,
+                        ) ?: ServerCardUi(
+                            profile = profile,
+                            isActive = profile.id == activeId,
+                        )
+                    }
+                    state.copy(
+                        isLoading = false,
+                        cards = cards,
+                        expandedId = state.expandedId
+                            ?.takeIf { id -> cards.any { it.profile.id == id } },
+                    )
+                }
+            }
+        }
+    }
+
+    fun refreshActive() {
+        val card = _uiState.value.activeCard ?: return
+        if (!card.isTesting) refreshCard(card.profile.id)
+    }
+
+    fun refreshCard(id: String) {
+        val card = _uiState.value.cards.firstOrNull { it.profile.id == id } ?: return
+        if (card.isTesting) return
+        _uiState.update { state ->
+            state.copy(
+                cards = state.cards.map {
+                    if (it.profile.id == id) it.copy(isTesting = true, error = null) else it
+                },
+            )
+        }
+        viewModelScope.launch {
+            repository.check(card.profile.toConfig())
+                .onSuccess { snapshot ->
+                    _uiState.update { state ->
+                        state.copy(
+                            cards = state.cards.map {
+                                if (it.profile.id == id) {
+                                    it.copy(
+                                        isTesting = false,
+                                        snapshot = snapshot,
+                                        error = null,
+                                        lastUpdatedAt = snapshot.checkedAt,
+                                    )
+                                } else {
+                                    it
+                                }
+                            },
+                        )
                     }
                 }
-                .onFailure {
-                    _uiState.update {
-                        it.copy(isLoading = false, error = ServerError.Unknown)
+                .onFailure { throwable ->
+                    _uiState.update { state ->
+                        state.copy(
+                            cards = state.cards.map {
+                                if (it.profile.id == id) {
+                                    it.copy(isTesting = false, error = throwable.toServerError())
+                                } else {
+                                    it
+                                }
+                            },
+                        )
                     }
                 }
+        }
+    }
+
+    fun toggleExpanded(id: String) {
+        val card = _uiState.value.cards.firstOrNull { it.profile.id == id } ?: return
+        val willExpand = _uiState.value.expandedId != id
+        _uiState.update { it.copy(expandedId = if (willExpand) id else null) }
+        if (willExpand && !card.isTesting) {
+            refreshCard(id)
+        }
+    }
+
+    fun startAdd() {
+        _uiState.update {
+            it.copy(
+                formMode = ServerFormMode.Add,
+                editingId = null,
+                form = ServerForm(),
+                formTesting = false,
+                formSaving = false,
+                formSnapshot = null,
+                formError = null,
+            )
+        }
+    }
+
+    fun startEdit(profile: ServerProfile) {
+        _uiState.update {
+            it.copy(
+                formMode = ServerFormMode.Edit,
+                editingId = profile.id,
+                form = ServerForm.fromProfile(profile),
+                formTesting = false,
+                formSaving = false,
+                formSnapshot = null,
+                formError = null,
+            )
+        }
+    }
+
+    fun cancelForm() {
+        _uiState.update {
+            it.copy(
+                formMode = ServerFormMode.None,
+                editingId = null,
+                formTesting = false,
+                formSaving = false,
+                formSnapshot = null,
+                formError = null,
+            )
         }
     }
 
@@ -68,96 +173,76 @@ class ServerViewModel(
         it.copy(scheme = if (value == "https") "https" else "http")
     }
 
-    fun edit() {
-        val config = _uiState.value.config ?: return
-        _uiState.update {
-            it.copy(
-                form = ServerForm.fromConfig(config),
-                isEditing = true,
-                error = null,
-            )
-        }
-    }
-
-    fun cancelEdit() {
-        val config = _uiState.value.config
-        _uiState.update {
-            if (config == null) {
-                it.copy(isEditing = true, error = null)
-            } else {
-                it.copy(
-                    form = ServerForm.fromConfig(config),
-                    isEditing = false,
-                    error = null,
-                )
-            }
-        }
-    }
-
-    fun testConnection() {
+    fun testFormConnection() {
         val config = validateForm() ?: return
-        check(config)
-    }
-
-    fun saveAndConnect() {
-        val config = validateForm() ?: return
+        if (_uiState.value.formTesting) return
+        _uiState.update { it.copy(formTesting = true, formError = null, formSnapshot = null) }
         viewModelScope.launch {
-            _uiState.update { it.copy(isSaving = true, error = null) }
-            val saved = runCatching { repository.saveConfig(config) }
-            if (saved.isFailure) {
-                _uiState.update {
-                    it.copy(isSaving = false, error = ServerError.Unknown)
-                }
-                return@launch
-            }
-            _uiState.update {
-                it.copy(
-                    isSaving = false,
-                    config = config,
-                    form = ServerForm.fromConfig(config),
-                    isEditing = false,
-                    error = null,
-                )
-            }
-            check(config)
-        }
-    }
-
-    fun refresh() {
-        val config = _uiState.value.config ?: return
-        check(config)
-    }
-
-    fun refreshIfConfigured() {
-        val state = _uiState.value
-        val config = state.config ?: return
-        if (!state.isEditing && !state.isBusy) {
-            check(config)
-        }
-    }
-
-    private fun check(config: ServerConfig) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isTesting = true, error = null) }
             repository.check(config)
                 .onSuccess { snapshot ->
                     _uiState.update {
-                        it.copy(
-                            isTesting = false,
-                            snapshot = snapshot,
-                            error = null,
-                            lastUpdatedAt = snapshot.checkedAt,
-                        )
+                        it.copy(formTesting = false, formSnapshot = snapshot, formError = null)
                     }
                 }
                 .onFailure { throwable ->
                     _uiState.update {
                         it.copy(
-                            isTesting = false,
-                            error = throwable.toServerError(),
+                            formTesting = false,
+                            formSnapshot = null,
+                            formError = throwable.toServerError(),
                         )
                     }
                 }
+        }
+    }
+
+    fun saveAndConnect() {
+        val config = validateForm() ?: return
+        if (_uiState.value.formSaving) return
+        val state = _uiState.value
+        val editingId = state.editingId
+        val profile = ServerProfile.fromConfig(
+            config = config,
+            id = editingId ?: UUID.randomUUID().toString(),
+        )
+        val activate = editingId == null || state.activeCard?.profile?.id == profile.id
+        viewModelScope.launch {
+            _uiState.update { it.copy(formSaving = true, formError = null) }
+            runCatching {
+                repository.saveServer(profile, activate = activate)
+            }.onSuccess {
+                _uiState.update {
+                    it.copy(
+                        formSaving = false,
+                        formMode = ServerFormMode.None,
+                        editingId = null,
+                        formSnapshot = null,
+                        formError = null,
+                        expandedId = profile.id,
+                    )
+                }
+                refreshCard(profile.id)
+            }.onFailure {
+                _uiState.update {
+                    it.copy(formSaving = false, formError = ServerError.Unknown)
+                }
+            }
+        }
+    }
+
+    fun setActive(profile: ServerProfile) {
+        viewModelScope.launch {
+            repository.setActive(profile.id)
+            refreshCard(profile.id)
+        }
+    }
+
+    fun delete(profile: ServerProfile) {
+        viewModelScope.launch {
+            repository.deleteServer(profile.id)
+            _uiState.update {
+                if (it.expandedId == profile.id) it.copy(expandedId = null) else it
+            }
         }
     }
 
@@ -184,7 +269,7 @@ class ServerViewModel(
         _uiState.update {
             it.copy(
                 form = form.copy(hostError = hostError, portError = portError),
-                error = null,
+                formError = null,
             )
         }
 
@@ -201,7 +286,9 @@ class ServerViewModel(
     }
 
     private fun updateForm(transform: (ServerForm) -> ServerForm) {
-        _uiState.update { it.copy(form = transform(it.form), error = null) }
+        _uiState.update {
+            it.copy(form = transform(it.form), formError = null, formSnapshot = null)
+        }
     }
 
     private fun Throwable.toServerError(): ServerError = when (this) {

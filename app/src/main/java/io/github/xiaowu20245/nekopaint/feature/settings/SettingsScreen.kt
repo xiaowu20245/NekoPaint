@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -91,6 +92,40 @@ fun SettingsScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_display_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_show_temp_title),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_show_temp_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = state.showTempPreviews,
+                                onCheckedChange = viewModel::setShowTempPreviews,
+                            )
+                        }
+                    }
+                }
             }
 
             item {

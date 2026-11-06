@@ -327,12 +327,15 @@ interface ComfyApi {
     suspend fun objectInfo(): Map<String, NodeInfoDto>
 
     @GET("models")
-    suspend fun modelFolders(): List<String>
+    suspend fun modelFolders(): JsonElement
 
     @GET("models/{folder}")
-    suspend fun models(@Path("folder") folder: String): List<String>
+    suspend fun models(@Path("folder") folder: String): JsonElement
 }
 ```
+
+模型列表在不同版本可能是裸数组或 `{value:[...],Count:n}`，因此保留 `JsonElement`，由 `ModelListParser` 统一解析。
+`ModelsRepository` 按加载器映射目录（checkpoints/loras/vae/diffusion_models...），缓存到 `filesDir/models/catalog.json`，失败时用缓存或保持文本输入。
 
 约定：
 
@@ -434,7 +437,8 @@ sealed interface ServerEvent {
 
 保存轻量配置：
 
-- 当前服务器 ID。
+- 服务器列表 JSON（`servers_json`）与当前服务器 ID（`active_server_id`）。
+- 旧单服务器字段保留用于一次性迁移。
 - 主题模式、动态取色开关。
 - 是否已看过安全提示/引导。
 - 缓存上限。
@@ -444,15 +448,18 @@ sealed interface ServerEvent {
 模板 JSON 与参数绑定暂存文件系统：
 
 ```text
-filesDir/workflows/<templateId>/api.json      # 原始 API JSON，只读
-filesDir/workflows/<templateId>/profile.json  # 名称、哈希、候选参数、选中状态
-filesDir/tasks/<promptId>.json                # 提交后的任务记录（含参数快照与状态）
+filesDir/workflows/<templateId>/api.json      # 原始 API JSON，只读（全局共享）
+filesDir/workflows/<templateId>/profile.json  # 名称、哈希、候选参数、选中状态（全局共享）
+filesDir/servers/<serverId>/tasks/<promptId>.json    # 任务记录
+filesDir/servers/<serverId>/history/history.json     # 历史元数据缓存
+filesDir/servers/<serverId>/models/catalog.json      # 模型目录缓存
 ```
 
 选中的参数就是简单模式显示的字段；高级模式读取同一份 `profile.json` 的全部候选。
 任务记录在状态变化时由 `TaskManager` 更新，应用重启后重新读取。
 固定 `client_id` 保存在独立 DataStore（`client_identity`），不写入模板文件。
-Room 仍未引入；历史列表直接来自 `/history`，本地任务记录用文件存储。V0.4 评估缓存与分页时再决定是否迁移。
+历史元数据由 `HistoryStore` 按服务器缓存：启动先展示缓存，`/history` 成功返回后覆盖并写盘；失败时保留缓存并标记过期。
+Room 仍未引入；历史列表优先使用服务器数据，本地文件和 Coil 图片缓存用于重启/短时离线查看。切换服务器时 `TaskManager` 清空内存队列/进度并按新 `serverId` 重新加载缓存。
 
 ### 9.3 Room 表（后续）
 
@@ -508,6 +515,12 @@ task_output
    - API 格式：所有 value 是对象且含 `class_type`。
    - UI 格式：含 `nodes` 数组与 `links` 数组。
 4. API 格式写入文件并生成模板记录；UI 格式拒绝并给出导出指引。
+5. 运行只读兼容性分析（`WorkflowCompatibilityAnalyzer`）：
+   - 识别文生图/图生图/蒙版重绘/自动部位重绘
+   - 找出已连接的外部图片槽和蒙版槽
+   - 检查必需输入、孤立 LoadImage、UI 占位值、缺失节点类型
+   - 报告保存到模板 `compatibility`；旧模板首次打开时补分析
+6. App 不插入、删除、重接或替换节点；只填写已有输入和顶层请求字段。
 
 ### 10.2 绑定模型
 

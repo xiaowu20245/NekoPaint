@@ -5,11 +5,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -19,10 +21,12 @@ data class SettingsUiState(
     val clearing: Boolean = false,
     val cacheCleared: Boolean = false,
     val error: String? = null,
+    val showTempPreviews: Boolean = false,
 )
 
 class SettingsViewModel(
     private val cacheManager: MediaCacheManager,
+    private val settingsStore: SettingsStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -30,6 +34,17 @@ class SettingsViewModel(
 
     init {
         refreshCacheSize()
+        viewModelScope.launch {
+            settingsStore.showTempPreviews.collect { showTempPreviews ->
+                _uiState.update { it.copy(showTempPreviews = showTempPreviews) }
+            }
+        }
+    }
+
+    fun setShowTempPreviews(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setShowTempPreviews(value)
+        }
     }
 
     fun refreshCacheSize() {
@@ -78,7 +93,12 @@ class SettingsViewModel(
 
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { SettingsViewModel(container.mediaCacheManager) }
+            initializer {
+                SettingsViewModel(
+                    cacheManager = container.mediaCacheManager,
+                    settingsStore = container.settingsStore,
+                )
+            }
         }
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
+import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import kotlinx.coroutines.delay
@@ -85,6 +87,8 @@ fun HistoryScreen(
                 connection = state.connection,
                 error = state.error,
                 refreshing = state.refreshing,
+                showTempPreviews = state.showTempPreviews,
+                onToggleTempPreviews = viewModel::setShowTempPreviews,
                 onRefresh = viewModel::refresh,
             )
         }
@@ -98,6 +102,7 @@ fun HistoryScreen(
                 HistoryCard(
                     entry = entry,
                     task = state.tasks.firstOrNull { it.promptId == entry.promptId },
+                    showTempPreviews = state.showTempPreviews,
                     onClick = { onOpenDetail(entry.promptId) },
                 )
             }
@@ -110,6 +115,8 @@ private fun HistoryHeader(
     connection: ComfyConnectionState,
     error: String?,
     refreshing: Boolean,
+    showTempPreviews: Boolean,
+    onToggleTempPreviews: (Boolean) -> Unit,
     onRefresh: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -144,6 +151,23 @@ private fun HistoryHeader(
             Text(
                 text = stringResource(R.string.history_description),
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !showTempPreviews,
+                    onClick = { onToggleTempPreviews(false) },
+                    label = { Text(stringResource(R.string.history_filter_output)) },
+                )
+                FilterChip(
+                    selected = showTempPreviews,
+                    onClick = { onToggleTempPreviews(true) },
+                    label = { Text(stringResource(R.string.history_filter_all)) },
+                )
+            }
+            Text(
+                text = stringResource(R.string.history_filter_hint),
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             error?.let { message ->
@@ -205,8 +229,10 @@ private fun EmptyHistory(loading: Boolean) {
 private fun HistoryCard(
     entry: HistoryEntry,
     task: TaskRecord?,
+    showTempPreviews: Boolean,
     onClick: () -> Unit,
 ) {
+    val images = entry.visibleImages(showTempPreviews)
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -245,9 +271,9 @@ private fun HistoryCard(
                     )
                 }
             }
-            if (entry.images.isNotEmpty()) {
+            if (images.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    entry.images.take(3).forEach { image ->
+                    images.take(3).forEach { image ->
                         AsyncImage(
                             model = image.url,
                             contentDescription = stringResource(
@@ -266,10 +292,10 @@ private fun HistoryCard(
                 }
             }
             Text(
-                text = if (entry.images.isEmpty()) {
+                text = if (images.isEmpty()) {
                     stringResource(R.string.history_no_images)
                 } else {
-                    stringResource(R.string.history_images, entry.images.size)
+                    stringResource(R.string.history_images, images.size)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -325,6 +351,9 @@ fun durationText(start: Long?, end: Long?): String? {
         else -> stringResource(R.string.history_duration_seconds, seconds)
     }
 }
+
+fun HistoryEntry.visibleImages(showTempPreviews: Boolean): List<HistoryImage> =
+    if (showTempPreviews) images else images.filter { it.type == "output" }
 
 fun formatTime(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestamp))

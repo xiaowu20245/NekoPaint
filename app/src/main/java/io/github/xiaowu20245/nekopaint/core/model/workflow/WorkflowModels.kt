@@ -68,6 +68,51 @@ data class ParameterCandidate(
     val classType: String = "",
 )
 
+enum class WorkflowMode {
+    TEXT_TO_IMAGE,
+    IMAGE_TO_IMAGE,
+    MASK_INPAINT,
+    AUTO_DETAIL,
+    UNKNOWN,
+}
+
+enum class WorkflowSlotKind {
+    IMAGE,
+    MASK,
+}
+
+enum class WorkflowIssueSeverity {
+    INFO,
+    WARNING,
+    ERROR,
+}
+
+@Serializable
+data class WorkflowInputSlot(
+    val nodeId: String,
+    val inputName: String,
+    val title: String,
+    val kind: WorkflowSlotKind,
+    val currentValue: String = "",
+)
+
+@Serializable
+data class WorkflowIssue(
+    val severity: WorkflowIssueSeverity,
+    val nodeId: String? = null,
+    val message: String,
+)
+
+@Serializable
+data class WorkflowCompatibility(
+    val mode: WorkflowMode = WorkflowMode.UNKNOWN,
+    val imageSlots: List<WorkflowInputSlot> = emptyList(),
+    val maskSlots: List<WorkflowInputSlot> = emptyList(),
+    val issues: List<WorkflowIssue> = emptyList(),
+    val catalogChecked: Boolean = false,
+    val analyzerVersion: Int = 0,
+)
+
 @Serializable
 data class WorkflowTemplate(
     val id: String,
@@ -81,6 +126,7 @@ data class WorkflowTemplate(
     val missingNodeTypes: List<String> = emptyList(),
     val catalogChecked: Boolean = false,
     val candidates: List<ParameterCandidate> = emptyList(),
+    val compatibility: WorkflowCompatibility? = null,
 ) {
     val selectedCandidates: List<ParameterCandidate>
         get() = candidates.filter { it.selected && !it.readOnly }

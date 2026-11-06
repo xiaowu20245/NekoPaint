@@ -788,7 +788,7 @@ GET /view?filename=ComfyUI_00012_.png&subfolder=&type=output
 
 轻量，可替代 `/queue` 做剩余数展示。
 
-### `GET /models` ✅ / `GET /models/{folder}` ⚠️ ❓
+### `GET /models` ✅ / `GET /models/{folder}` ✅（0.27.0 实测）
 
 ```http
 GET /models
@@ -796,11 +796,16 @@ GET /models
 ```
 
 本机 0.27.0 实测 `/models` 返回 200，目录包含 `checkpoints`、`loras`、`vae`、`controlnet`、`upscale_models` 等 55+ 项。
-`/models/{folder}` 尚未实测。
+
+`/models/{folder}` 实测：
+- `vae` / `loras` 等可能直接返回**裸字符串数组**；
+- 也可能返回 `{"value":[...],"Count":n}`；
+- App 已用 `ModelListParser` 同时兼容两种格式。
 
 - 目录类型由 `folder_paths` 决定，不同安装不同。
 - 不存在时 404。
 - 只读；下载/删除不在核心 API 中。
+- 模型输入在 `/object_info` 中可能是普通枚举数组或 `{value:[...],Count:n}`，两者都要兼容。
 
 ### `POST /upload/image` ✅（0.27.0 实测）
 
@@ -1277,7 +1282,7 @@ App 解析必须同时兼容两套。
 - [x] `GET /object_info/KSampler`：返回 200，确认 seed/steps/cfg 等字段
 - [ ] `GET /object_info`：全量响应
 - [x] `GET /models`：返回 200，确认目录列表
-- [ ] `GET /models/{folder}`：记录文件列表
+- [x] `GET /models/{folder}`：checkpoints/loras/vae 返回 200；裸数组与 `{value,Count}` 两种格式已兼容
 - [x] `POST /upload/image`：4K PNG 上传成功；非图片文件也会被接受，执行时才失败
 - [x] 客户端指定 `prompt_id`：确认响应复用该 ID
 - [x] `GET /api/jobs`：返回 200，确认分页结构（当前已含测试任务）

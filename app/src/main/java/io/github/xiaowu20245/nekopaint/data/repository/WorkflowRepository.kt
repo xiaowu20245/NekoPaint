@@ -13,6 +13,7 @@ import io.github.xiaowu20245.nekopaint.core.network.PromptErrorResponseDto
 import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
@@ -111,6 +112,11 @@ class WorkflowRepository(
                 is WorkflowParseResult.Success -> {
                     val catalog = loadCatalog()
                     val detection = ParameterDetector.detect(parsed.graph, catalog)
+                    val compatibility = WorkflowCompatibilityAnalyzer.analyze(
+                        graph = parsed.graph,
+                        catalog = catalog,
+                        missingNodeTypes = detection.missingNodeTypes,
+                    )
                     val template = WorkflowTemplate(
                         id = UUID.randomUUID().toString(),
                         name = (displayName ?: "workflow.json").toTemplateName(),
@@ -123,6 +129,7 @@ class WorkflowRepository(
                         missingNodeTypes = detection.missingNodeTypes,
                         catalogChecked = detection.catalogChecked,
                         candidates = detection.candidates,
+                        compatibility = compatibility,
                     )
                     saveTemplate(template, raw)
                     WorkflowImportResult.Success(template)
@@ -132,6 +139,30 @@ class WorkflowRepository(
             WorkflowImportResult.Error(throwable.message ?: "导入失败")
         }
     }
+
+    /**
+     * 对旧模板或未连接服务器时导入的模板补做兼容性分析。
+     */
+    suspend fun analyzeCompatibility(template: WorkflowTemplate): WorkflowTemplate? =
+        withContext(Dispatchers.IO) {
+            val raw = readApiJson(template.id) ?: return@withContext null
+            val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
+                ?: return@withContext null
+            val catalog = loadCatalog()
+            val detection = ParameterDetector.detect(parsed.graph, catalog)
+            val compatibility = WorkflowCompatibilityAnalyzer.analyze(
+                graph = parsed.graph,
+                catalog = catalog,
+                missingNodeTypes = detection.missingNodeTypes,
+            )
+            // 不在这里回写整个模板，避免覆盖用户刚修改的参数值；
+            // 新导入的模板已在 import() 时保存兼容性。
+            template.copy(
+                missingNodeTypes = detection.missingNodeTypes,
+                catalogChecked = detection.catalogChecked,
+                compatibility = compatibility,
+            )
+        }
 
     suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
         submitSelected(template, template.selectedCandidates)
@@ -164,6 +195,8 @@ class WorkflowRepository(
     ): WorkflowSubmitResult = withContext(Dispatchers.IO) {
         val config = runCatching { serverConfigStore.config.first() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.NoServer
+        val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+            ?: return@withContext WorkflowSubmitResult.Error("找不到当前服务器配置")
         val raw = readApiJson(template.id)
             ?: return@withContext WorkflowSubmitResult.Error("找不到工作流 JSON")
 
@@ -237,8 +270,10 @@ class WorkflowRepository(
 
         runCatching {
             taskStore.save(
-                io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord(
+                serverId = serverId,
+                record = io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord(
                     promptId = promptId,
+                    serverId = serverId,
                     templateId = template.id,
                     templateName = template.name,
                     clientId = clientId,

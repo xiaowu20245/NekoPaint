@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.core.model.workflow
 
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
 data class QueueItem(
@@ -16,6 +17,7 @@ data class QueueSnapshot(
     val updatedAt: Long,
 )
 
+@Serializable
 data class HistoryImage(
     val filename: String,
     val subfolder: String,
@@ -23,6 +25,7 @@ data class HistoryImage(
     val url: String? = null,
 )
 
+@Serializable
 data class HistoryEntry(
     val promptId: String,
     val status: String,

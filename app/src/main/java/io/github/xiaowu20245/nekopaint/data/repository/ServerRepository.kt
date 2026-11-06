@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.data.repository
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.data.mapper.toDomain
 import kotlinx.coroutines.Dispatchers
@@ -17,10 +18,26 @@ class ServerRepository(
     private val apiFactory: ComfyApiFactory,
 ) {
 
+    val servers = store.servers
+    val activeServerId = store.activeServerId
+    val activeServer = store.activeServer
+
     suspend fun loadConfig(): ServerConfig? = store.config.first()
 
     suspend fun saveConfig(config: ServerConfig) {
         store.save(config)
+    }
+
+    suspend fun saveServer(profile: ServerProfile, activate: Boolean = false) {
+        store.saveServer(profile, activate)
+    }
+
+    suspend fun deleteServer(id: String) {
+        store.deleteServer(id)
+    }
+
+    suspend fun setActive(id: String) {
+        store.setActive(id)
     }
 
     suspend fun check(config: ServerConfig): Result<ConnectionSnapshot> = withContext(Dispatchers.IO) {

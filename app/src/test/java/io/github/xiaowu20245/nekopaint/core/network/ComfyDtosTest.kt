@@ -51,4 +51,5 @@ class ComfyDtosTest {
 
         assertEquals(0, stats.devices.size)
     }
+
 }

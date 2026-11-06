@@ -20,6 +20,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,6 +68,9 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.DetectionConfidence
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCompatibility
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowIssueSeverity
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarAction
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
@@ -238,6 +242,24 @@ private fun WorkflowPage(
     onSubmit: () -> Unit,
     onClearSubmitError: () -> Unit,
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+    var groupFilter by remember { mutableStateOf<ParameterGroup?>(null) }
+    val filteredCandidates = if (advanced) {
+        visibleCandidates.filter { candidate ->
+            val matchesGroup = groupFilter == null || candidate.group == groupFilter
+            val query = searchQuery.trim()
+            val matchesQuery = query.isEmpty() ||
+                candidate.label.contains(query, ignoreCase = true) ||
+                candidate.nodeId.contains(query, ignoreCase = true) ||
+                candidate.classType.contains(query, ignoreCase = true) ||
+                candidate.inputName.contains(query, ignoreCase = true) ||
+                candidate.value.contains(query, ignoreCase = true)
+            matchesGroup && matchesQuery
+        }
+    } else {
+        visibleCandidates
+    }
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -246,6 +268,10 @@ private fun WorkflowPage(
     ) {
         item {
             SummaryCard(template)
+        }
+
+        item {
+            CompatibilityCard(template.compatibility)
         }
 
         item {
@@ -317,6 +343,43 @@ private fun WorkflowPage(
             }
         }
 
+        if (advanced) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.workflow_search_hint)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Search,
+                                contentDescription = null,
+                            )
+                        },
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        FilterChip(
+                            selected = groupFilter == null,
+                            onClick = { groupFilter = null },
+                            label = { Text(stringResource(R.string.workflow_filter_all)) },
+                        )
+                        ParameterGroup.entries.forEach { group ->
+                            FilterChip(
+                                selected = groupFilter == group,
+                                onClick = { groupFilter = group },
+                                label = { Text(groupLabel(group)) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         submitError?.let { error ->
             item {
                 SubmitErrorCard(
@@ -326,12 +389,16 @@ private fun WorkflowPage(
             }
         }
 
-        if (visibleCandidates.isEmpty()) {
+        if (filteredCandidates.isEmpty()) {
             item {
                 Text(
                     text = stringResource(
                         if (advanced) {
-                            R.string.workflow_no_candidates
+                            if (visibleCandidates.isEmpty()) {
+                                R.string.workflow_no_candidates
+                            } else {
+                                R.string.workflow_filter_no_match
+                            }
                         } else {
                             R.string.workflow_no_selected
                         },
@@ -343,7 +410,7 @@ private fun WorkflowPage(
         }
 
         var lastGroup: ParameterGroup? = null
-        visibleCandidates.forEach { candidate ->
+        filteredCandidates.forEach { candidate ->
             if (candidate.group != lastGroup) {
                 item(key = "group-${candidate.group}") {
                     Text(
@@ -500,6 +567,134 @@ private fun SummaryCard(template: WorkflowTemplate) {
                 Text(
                     text = stringResource(R.string.workflow_catalog_not_checked),
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompatibilityCard(compatibility: WorkflowCompatibility?) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.workflow_compatibility_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (compatibility == null) {
+                Text(
+                    text = stringResource(R.string.workflow_compat_legacy),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                return@Column
+            }
+
+            val modeRes = when (compatibility.mode) {
+                WorkflowMode.TEXT_TO_IMAGE -> R.string.workflow_mode_text_to_image
+                WorkflowMode.IMAGE_TO_IMAGE -> R.string.workflow_mode_image_to_image
+                WorkflowMode.MASK_INPAINT -> R.string.workflow_mode_mask_inpaint
+                WorkflowMode.AUTO_DETAIL -> R.string.workflow_mode_auto_detail
+                WorkflowMode.UNKNOWN -> R.string.workflow_mode_unknown
+            }
+            Text(
+                text = stringResource(modeRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            if (compatibility.imageSlots.isEmpty() && compatibility.maskSlots.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.workflow_no_external_image),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                if (compatibility.imageSlots.isNotEmpty()) {
+                    Text(
+                        text = stringResource(
+                            R.string.workflow_external_image_slots,
+                            compatibility.imageSlots.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    compatibility.imageSlots.take(2).forEach { slot ->
+                        Text(
+                            text = stringResource(
+                                R.string.workflow_slot_summary,
+                                slot.nodeId,
+                                slot.title,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (compatibility.maskSlots.isNotEmpty()) {
+                    Text(
+                        text = stringResource(
+                            R.string.workflow_external_mask_slots,
+                            compatibility.maskSlots.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    compatibility.maskSlots.take(2).forEach { slot ->
+                        Text(
+                            text = stringResource(
+                                R.string.workflow_slot_summary,
+                                slot.nodeId,
+                                slot.title,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            if (compatibility.issues.isNotEmpty()) {
+                val errors = compatibility.issues.count {
+                    it.severity == WorkflowIssueSeverity.ERROR
+                }
+                Text(
+                    text = stringResource(R.string.workflow_compat_issues, compatibility.issues.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (errors > 0) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.tertiary
+                    },
+                )
+                compatibility.issues.take(5).forEach { issue ->
+                    Text(
+                        text = "• ${issue.message}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when (issue.severity) {
+                            WorkflowIssueSeverity.ERROR -> MaterialTheme.colorScheme.error
+                            WorkflowIssueSeverity.WARNING -> MaterialTheme.colorScheme.tertiary
+                            WorkflowIssueSeverity.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                if (compatibility.issues.size > 5) {
+                    Text(
+                        text = stringResource(
+                            R.string.workflow_compat_more_issues,
+                            compatibility.issues.size - 5,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (!compatibility.catalogChecked) {
+                Text(
+                    text = stringResource(R.string.workflow_compat_not_checked),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
