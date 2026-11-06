@@ -1,14 +1,17 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
+import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
+import io.github.xiaowu20245.nekopaint.core.network.ContentUriRequestBody
 import io.github.xiaowu20245.nekopaint.core.network.PromptErrorResponseDto
 import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
@@ -22,6 +25,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -95,6 +101,76 @@ class WorkflowRepository(
         val file = File(File(rootDir, id), "api.json")
         if (file.exists()) file.readText() else null
     }
+
+    /**
+     * 上传图片到 ComfyUI 的 input 目录，返回可直接写入 LoadImage.image 的引用。
+     *
+     * 使用时间戳前缀避免同名覆盖；上传成功只代表文件已落地，
+     * 图片能否解码仍由 ComfyUI 执行阶段决定。
+     */
+    suspend fun uploadImage(uri: Uri): Result<UploadedImageRef> = withContext(Dispatchers.IO) {
+        val (displayName, size) = queryFileMeta(uri)
+        if (size != null && size > MAX_UPLOAD_BYTES) {
+            return@withContext Result.failure(
+                IllegalStateException("图片超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB"),
+            )
+        }
+        val resolver = appContext.contentResolver
+        val mediaType = resolver.getType(uri)?.toMediaTypeOrNull()
+        val part = MultipartBody.Part.createFormData(
+            "image",
+            buildUploadName(displayName),
+            ContentUriRequestBody(resolver, uri, mediaType, size),
+        )
+        uploadPart(part)
+    }
+
+    /**
+     * 把画布导出的蒙版 PNG 上传到服务器，供 LoadImageMask.image 使用。
+     */
+    suspend fun uploadMask(bitmap: Bitmap): Result<UploadedImageRef> = withContext(Dispatchers.IO) {
+        val bytes = ByteArrayOutputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            output.toByteArray()
+        }
+        if (bytes.size > MAX_UPLOAD_BYTES) {
+            return@withContext Result.failure(
+                IllegalStateException("蒙版超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB"),
+            )
+        }
+        val part = MultipartBody.Part.createFormData(
+            "image",
+            buildUploadName("mask.png"),
+            bytes.toRequestBody("image/png".toMediaTypeOrNull()),
+        )
+        uploadPart(part)
+    }
+
+    private suspend fun uploadPart(part: MultipartBody.Part): Result<UploadedImageRef> {
+        val config = runCatching { serverConfigStore.config.first() }.getOrNull()
+            ?: return Result.failure(IllegalStateException("请先配置服务器"))
+        return runCatching {
+            val response = apiFactory.create(config).uploadImage(
+                image = part,
+                type = "input".toRequestBody(TEXT_PLAIN),
+                overwrite = "false".toRequestBody(TEXT_PLAIN),
+            )
+            if (response.name.isBlank()) {
+                error("服务器没有返回文件名")
+            }
+            UploadedImageRef(
+                reference = if (response.subfolder.isBlank()) {
+                    response.name
+                } else {
+                    "${response.subfolder}/${response.name}"
+                },
+                fileName = response.name,
+            )
+        }
+    }
+
+    private fun buildUploadName(displayName: String?): String =
+        buildUploadFileName(displayName)
 
     suspend fun import(uri: Uri): WorkflowImportResult = withContext(Dispatchers.IO) {
         try {
@@ -373,5 +449,35 @@ class WorkflowRepository(
 
     private companion object {
         const val MAX_FILE_BYTES = 10 * 1024 * 1024
+        const val MAX_UPLOAD_BYTES = 50L * 1024 * 1024
+        val TEXT_PLAIN = "text/plain".toMediaTypeOrNull()
     }
+}
+
+/**
+ * 生成不会覆盖服务器已有文件的名称，同时保留扩展名便于 ComfyUI 识别。
+ */
+internal fun buildUploadFileName(
+    displayName: String?,
+    timestamp: Long = System.currentTimeMillis(),
+): String {
+    val raw = displayName.orEmpty()
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+    if (raw.isBlank()) {
+        return "nekopaint_${timestamp}_image.png"
+    }
+    val sanitized = raw
+        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        .ifBlank { "image.png" }
+    val extension = sanitized
+        .substringAfterLast('.', "")
+        .takeIf { it.isNotBlank() && it.length <= 8 }
+        ?.let { ".$it" }
+        .orEmpty()
+    val base = sanitized
+        .removeSuffix(extension)
+        .take(48)
+        .ifBlank { "image" }
+    return "nekopaint_${timestamp}_$base$extension"
 }

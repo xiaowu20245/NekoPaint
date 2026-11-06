@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.workflow
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -97,6 +99,17 @@ fun WorkflowDetailScreen(
     val savedMessage = stringResource(R.string.workflow_saved)
     val errorMessage = state.errorRes?.let { stringResource(it) }
     val submitLabel = stringResource(R.string.workflow_submit)
+    var pendingImageCandidateId by remember { mutableStateOf<String?>(null) }
+    var maskEditorCandidateId by remember { mutableStateOf<String?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        val candidateId = pendingImageCandidateId
+        pendingImageCandidateId = null
+        if (uri != null && candidateId != null) {
+            viewModel.uploadImage(candidateId, uri)
+        }
+    }
     val isScrolled by remember {
         derivedStateOf {
             val listState = if (pagerState.currentPage == 1) {
@@ -138,6 +151,28 @@ fun WorkflowDetailScreen(
     LaunchedEffect(errorMessage) {
         if (errorMessage != null) {
             snackbarHostState.showSnackbar(errorMessage)
+        }
+    }
+
+    val uploadedImageMessage = state.uploadedImageName?.let { fileName ->
+        stringResource(R.string.workflow_image_uploaded, fileName)
+    }
+    val imageUploadErrorMessage = state.imageUploadError?.let { message ->
+        stringResource(R.string.workflow_image_upload_failed, message)
+    }
+    LaunchedEffect(uploadedImageMessage) {
+        if (uploadedImageMessage != null) {
+            if (maskEditorCandidateId != null) {
+                maskEditorCandidateId = null
+            }
+            snackbarHostState.showSnackbar(uploadedImageMessage)
+            viewModel.clearImageUploadNotice()
+        }
+    }
+    LaunchedEffect(imageUploadErrorMessage) {
+        if (imageUploadErrorMessage != null) {
+            snackbarHostState.showSnackbar(imageUploadErrorMessage)
+            viewModel.clearImageUploadNotice()
         }
     }
 
@@ -197,6 +232,12 @@ fun WorkflowDetailScreen(
                         onFinishEditing = viewModel::finishEditing,
                         onToggleCandidate = viewModel::toggleCandidate,
                         onValueChange = viewModel::onValueChange,
+                        uploadingCandidateId = state.uploadingCandidateId,
+                        onPickImage = { candidateId ->
+                            pendingImageCandidateId = candidateId
+                            imagePicker.launch("image/*")
+                        },
+                        onDrawMask = { candidateId -> maskEditorCandidateId = candidateId },
                         onSave = viewModel::save,
                         onSubmit = viewModel::submit,
                         onClearSubmitError = viewModel::clearSubmitError,
@@ -219,6 +260,21 @@ fun WorkflowDetailScreen(
             onDismiss = viewModel::clearSubmission,
         )
     }
+
+    maskEditorCandidateId?.let { candidateId ->
+        MaskEditorDialog(
+            images = state.maskSourceImages,
+            uploading = state.uploadingCandidateId == candidateId,
+            uploadError = state.imageUploadError,
+            onDismiss = {
+                maskEditorCandidateId = null
+                viewModel.clearImageUploadNotice()
+            },
+            onUpload = { bitmap ->
+                viewModel.uploadMask(candidateId, bitmap)
+            },
+        )
+    }
 }
 
 @Composable
@@ -238,6 +294,9 @@ private fun WorkflowPage(
     onFinishEditing: () -> Unit,
     onToggleCandidate: (String) -> Unit,
     onValueChange: (String, String) -> Unit,
+    uploadingCandidateId: String?,
+    onPickImage: (String) -> Unit,
+    onDrawMask: (String) -> Unit,
     onSave: () -> Unit,
     onSubmit: () -> Unit,
     onClearSubmitError: () -> Unit,
@@ -259,6 +318,11 @@ private fun WorkflowPage(
     } else {
         visibleCandidates
     }
+    val maskNodeIds = template.compatibility
+        ?.maskSlots
+        ?.map { it.nodeId }
+        ?.toSet()
+        .orEmpty()
 
     LazyColumn(
         state = listState,
@@ -429,6 +493,11 @@ private fun WorkflowPage(
                     showCheckbox = advanced || editing,
                     onToggle = { onToggleCandidate(candidate.id) },
                     onValueChange = { onValueChange(candidate.id, it) },
+                    uploading = uploadingCandidateId == candidate.id,
+                    onPickImage = { onPickImage(candidate.id) },
+                    isMaskSlot = candidate.nodeId in maskNodeIds ||
+                        candidate.classType == "LoadImageMask",
+                    onDrawMask = { onDrawMask(candidate.id) },
                 )
             }
         }
@@ -724,6 +793,10 @@ private fun CandidateRow(
     showCheckbox: Boolean,
     onToggle: () -> Unit,
     onValueChange: (String) -> Unit,
+    uploading: Boolean,
+    onPickImage: () -> Unit,
+    isMaskSlot: Boolean,
+    onDrawMask: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -789,6 +862,10 @@ private fun CandidateRow(
                         candidate = candidate,
                         error = error,
                         onValueChange = onValueChange,
+                        uploading = uploading,
+                        onPickImage = onPickImage,
+                        isMaskSlot = isMaskSlot,
+                        onDrawMask = onDrawMask,
                     )
                 }
             }
@@ -801,6 +878,10 @@ private fun ParameterField(
     candidate: ParameterCandidate,
     error: FieldError?,
     onValueChange: (String) -> Unit,
+    uploading: Boolean,
+    onPickImage: () -> Unit,
+    isMaskSlot: Boolean,
+    onDrawMask: () -> Unit,
 ) {
     val errorText = fieldErrorText(error)
     when (candidate.type) {
@@ -894,9 +975,62 @@ private fun ParameterField(
             }
         }
 
+        ParameterType.IMAGE -> {
+            val isMask = candidate.classType == "LoadImageMask"
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = candidate.value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    isError = errorText != null,
+                    supportingText = errorText?.let { { Text(it) } },
+                )
+                Text(
+                    text = stringResource(
+                        if (isMask) {
+                            R.string.workflow_mask_hint
+                        } else {
+                            R.string.workflow_image_hint
+                        },
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = onPickImage,
+                    enabled = !uploading,
+                ) {
+                    if (uploading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    Text(
+                        stringResource(
+                            when {
+                                uploading -> R.string.workflow_image_uploading
+                                isMask -> R.string.workflow_mask_pick
+                                else -> R.string.workflow_image_pick
+                            },
+                        ),
+                    )
+                }
+                if (isMaskSlot) {
+                    OutlinedButton(
+                        onClick = onDrawMask,
+                        enabled = !uploading,
+                    ) {
+                        Text(stringResource(R.string.workflow_mask_draw))
+                    }
+                }
+            }
+        }
+
         ParameterType.MULTILINE_TEXT,
         ParameterType.TEXT,
-        ParameterType.IMAGE,
         ParameterType.UNKNOWN,
         -> OutlinedTextField(
             value = candidate.value,

@@ -417,6 +417,10 @@ object ParameterDetector {
             KnownInput("输入图片", ParameterType.IMAGE, ParameterGroup.IMAGE)
         } else null
 
+        "LoadImageMask" -> if (inputName == "image") {
+            KnownInput("输入蒙版", ParameterType.IMAGE, ParameterGroup.IMAGE)
+        } else null
+
         "SaveImage" -> if (inputName == "filename_prefix") {
             KnownInput(
                 "输出前缀",

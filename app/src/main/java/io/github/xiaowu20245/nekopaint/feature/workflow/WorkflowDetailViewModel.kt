@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.workflow
 
+import android.graphics.Bitmap
+import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -7,19 +9,23 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
+import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.ModelInputResolver
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
+import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -47,6 +53,10 @@ data class WorkflowDetailUiState(
     val fieldErrors: Map<String, FieldError> = emptyMap(),
     val submitError: SubmitErrorUi? = null,
     val submission: WorkflowSubmitResult.Success? = null,
+    val uploadingCandidateId: String? = null,
+    val uploadedImageName: String? = null,
+    val imageUploadError: String? = null,
+    val maskSourceImages: List<HistoryImage> = emptyList(),
     @param:StringRes val errorRes: Int? = null,
 ) {
     val visibleCandidates: List<ParameterCandidate>
@@ -63,6 +73,7 @@ class WorkflowDetailViewModel(
     private val templateId: String,
     private val repository: WorkflowRepository,
     private val modelsRepository: ModelsRepository,
+    private val taskManager: TaskManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowDetailUiState())
@@ -96,6 +107,15 @@ class WorkflowDetailViewModel(
                     it.compatibility.analyzerVersion != WorkflowCompatibilityAnalyzer.CURRENT_VERSION
             }?.let { refreshCompatibility(it) }
         }
+        viewModelScope.launch {
+            taskManager.history.collect { entries ->
+                val images = entries
+                    .flatMap { entry -> entry.images.filter { it.type == "output" } }
+                    .take(60)
+                _uiState.update { it.copy(maskSourceImages = images) }
+            }
+        }
+        taskManager.refresh()
     }
 
     private fun refreshCompatibility(template: WorkflowTemplate) {
@@ -235,6 +255,76 @@ class WorkflowDetailViewModel(
                 submission = null,
                 submitError = null,
             )
+        }
+    }
+
+    /**
+     * 选图后上传到服务器，并直接把返回的文件名写入对应参数。
+     *
+     * 上传和参数编辑共用同一个 dirty/save 流程：离开前保存或提交即可持久化。
+     */
+    fun uploadImage(candidateId: String, uri: Uri) {
+        uploadToCandidate(candidateId) { repository.uploadImage(uri) }
+    }
+
+    /**
+     * 上传画布导出的蒙版，并写回当前蒙版槽。
+     */
+    fun uploadMask(candidateId: String, bitmap: Bitmap) {
+        uploadToCandidate(candidateId) { repository.uploadMask(bitmap) }
+    }
+
+    private fun uploadToCandidate(
+        candidateId: String,
+        upload: suspend () -> Result<UploadedImageRef>,
+    ) {
+        if (_uiState.value.uploadingCandidateId != null) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    uploadingCandidateId = candidateId,
+                    uploadedImageName = null,
+                    imageUploadError = null,
+                )
+            }
+            upload()
+                .onSuccess { uploaded ->
+                    _uiState.update { state ->
+                        val template = state.template ?: return@update state
+                        state.copy(
+                            template = template.copy(
+                                candidates = template.candidates.map { candidate ->
+                                    if (candidate.id == candidateId) {
+                                        candidate.copy(value = uploaded.reference)
+                                    } else {
+                                        candidate
+                                    }
+                                },
+                            ),
+                            uploadingCandidateId = null,
+                            uploadedImageName = uploaded.fileName,
+                            dirty = true,
+                            saved = false,
+                            fieldErrors = state.fieldErrors - candidateId,
+                            submission = null,
+                            submitError = null,
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            uploadingCandidateId = null,
+                            imageUploadError = throwable.message ?: "上传失败",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun clearImageUploadNotice() {
+        _uiState.update {
+            it.copy(uploadedImageName = null, imageUploadError = null)
         }
     }
 
@@ -428,6 +518,7 @@ class WorkflowDetailViewModel(
                     templateId = templateId,
                     repository = container.workflowRepository,
                     modelsRepository = container.modelsRepository,
+                    taskManager = container.taskManager,
                 )
             }
         }

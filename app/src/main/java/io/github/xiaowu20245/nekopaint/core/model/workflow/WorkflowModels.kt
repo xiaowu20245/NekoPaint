@@ -154,3 +154,8 @@ data class WorkflowDetection(
     val missingNodeTypes: List<String>,
     val catalogChecked: Boolean,
 )
+
+data class UploadedImageRef(
+    val reference: String,
+    val fileName: String,
+)

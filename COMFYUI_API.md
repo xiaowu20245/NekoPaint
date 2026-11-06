@@ -153,7 +153,7 @@ http://10.0.2.2:8188
 | POST | `/prompt` | 提交生成任务 | 核心 | ✅ 200 | V0.2 |
 | POST | `/interrupt` | 中断当前任务 | 核心 | ✅ 200（带 prompt_id） | V0.3 |
 | GET | `/view` | 获取图片 | 核心 | ✅ 200（PNG） | V0.4 |
-| POST | `/upload/image` | 上传输入图片 | 核心 | ⚠️ 未测 | V0.5 |
+| POST | `/upload/image` | 上传输入图片 | 核心 | ✅ 已测（含 App 实测） | V0.5 |
 | POST | `/upload/mask` | 上传蒙版 | 核心 | ⚠️ 未测 | V0.5 |
 | GET | `/object_info` | 所有节点定义 | 核心 | ⚠️ 未测（单节点已测） | V0.2（可选） |
 | GET | `/object_info/{class}` | 单节点定义 | 核心 | ✅ 200 | 可选 |
@@ -830,6 +830,14 @@ GET /models
 
 使用时把 `name` 写入 `LoadImage.image`。
 
+App 实现（V0.5d）：
+
+- 通过 SAF/系统图片选择器取图，`ContentUriRequestBody` 直接流式上传，不把大图整张读进内存。
+- 限制 50 MB；文件名使用 `nekopaint_<时间戳>_<原文件名>`，避免覆盖服务器已有输入图。
+- 返回的 `name`（有 `subfolder` 时拼成 `subfolder/name`）写回 `LoadImage.image` 或 `LoadImageMask.image`。
+- 2026-11-06 实测：128×128 图片经 App 上传后提交 `LoadImage → SaveImage` 成功，输出 128×128；`LoadImageMask(channel=red) → MaskToImage → SaveImage` 也成功输出 128×128 白色蒙版。
+- 蒙版画布（V0.5d）：在历史图片上画笔/橡皮/撤销/清空，按原图比例导出黑底白图 PNG（最长边 4096），再走同一 `/upload/image`；1000×1000 实测导出的蒙版线条位置与画布一致，提交后输出 1000×1000 黑白蒙版。
+
 ### `POST /upload/mask` ⚠️
 
 与 `/upload/image` 类似，额外：
@@ -838,6 +846,8 @@ GET /models
 - 服务器会把蒙版 alpha 合成到原图并保存。
 
 App 局部重绘可优先使用 `LoadImage` + 独立蒙版文件；是否需要 `/upload/mask` 取决于所选 inpaint 工作流。
+
+当前 App（V0.5d）统一用 `/upload/image` 上传蒙版文件，并写入 `LoadImageMask.image`；`/upload/mask` 仍未验证，暂不调用。
 
 ### `POST /free` ❓
 
