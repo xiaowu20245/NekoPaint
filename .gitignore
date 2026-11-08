@@ -12,3 +12,6 @@
 *.jks
 *.keystore
 keystore.properties
+
+# 本地第三方工作流模板，不随仓库分发
+/workflows/
