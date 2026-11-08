@@ -4,6 +4,7 @@ import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
+import io.github.xiaowu20245.nekopaint.core.network.HistoryOperationDto
 import io.github.xiaowu20245.nekopaint.core.network.InterruptRequestDto
 import io.github.xiaowu20245.nekopaint.core.network.QueueOperationDto
 import io.github.xiaowu20245.nekopaint.data.mapper.QueueMapper
@@ -48,6 +49,29 @@ class QueueRepository(
             val config = serverConfigStore.config.first() ?: error("未配置服务器")
             val response = apiFactory.create(config).updateQueue(
                 QueueOperationDto(delete = listOf(promptId)),
+            )
+            if (!response.isSuccessful) error("HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun deleteHistory(promptId: String): Result<Unit> =
+        deleteHistory(listOf(promptId))
+
+    suspend fun deleteHistory(promptIds: List<String>): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val config = serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(config).updateHistory(
+                HistoryOperationDto(delete = promptIds),
+            )
+            if (!response.isSuccessful) error("HTTP ${response.code()}")
+        }
+    }
+
+    suspend fun clearHistory(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val config = serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(config).updateHistory(
+                HistoryOperationDto(clear = true),
             )
             if (!response.isSuccessful) error("HTTP ${response.code()}")
         }

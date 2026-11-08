@@ -8,6 +8,7 @@ data class ServerStats(
     val ramTotal: Long?,
     val ramFree: Long?,
     val devices: List<GpuInfo>,
+    val argv: List<String> = emptyList(),
 )
 
 data class GpuInfo(
@@ -26,4 +27,6 @@ data class ConnectionSnapshot(
     val stats: ServerStats,
     val latencyMs: Long,
     val checkedAt: Long,
+    val runningCount: Int = 0,
+    val pendingCount: Int = 0,
 )

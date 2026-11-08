@@ -16,6 +16,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.ModelCatalogStore
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
+import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
@@ -67,6 +68,7 @@ class AppContainer(context: Context) {
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)
 
     val serverRepository = ServerRepository(serverConfigStore, comfyApiFactory)
+    val serverAvatarStore = ServerAvatarStore(context.applicationContext)
 
     val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)
 

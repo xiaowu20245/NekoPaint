@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-2">
+  <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 max-w-2xl mx-auto">
+    <!-- Top Switcher -->
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2 border-b border-[var(--border)]">
+      <span class="text-sm font-semibold text-[var(--foreground)]">添加/编辑弹窗 & 图标裁剪弹窗 · 设计预览</span>
+      <div class="flex gap-1 bg-[var(--background)] p-1 rounded-lg border border-[var(--border)]">
+        <button id="tab-ok" onclick="switchTab('ok')" class="px-2.5 py-1 rounded-md text-xs font-medium bg-[#4F63AC] text-white transition">
+          弹窗：测试成功态
+        </button>
+        <button id="tab-err" onclick="switchTab('err')" class="px-2.5 py-1 rounded-md text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+          弹窗：测试失败态
+        </button>
+        <button id="tab-crop" onclick="switchTab('crop')" class="px-2.5 py-1 rounded-md text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+          弹窗：图标缩放裁剪
+        </button>
+      </div>
+    </div>
+
+    <!-- DIALOG 1: ADD/EDIT SERVER (SUCCESS / ERROR) -->
+    <div id="panel-form" class="bg-[#FAF8FF] text-[#1A1B21] rounded-2xl p-4 border border-[#C6C5D0] max-w-md mx-auto space-y-3">
+      <!-- Dialog Title + Avatar Picker Row -->
+      <div class="flex items-center justify-between">
+        <span id="dialog-title" class="text-lg font-semibold text-[#1E2028]">添加服务器</span>
+        <span class="text-xs text-[#686B78]">弹窗式表单</span>
+      </div>
+
+      <!-- Avatar Row inside Dialog -->
+      <div class="flex items-center gap-3 p-2.5 rounded-xl bg-[#EEEDF4]">
+        <div class="w-12 h-12 rounded-xl bg-[#DEE4FA] flex items-center justify-center shrink-0">
+          <svg class="w-6 h-6 text-[#4F63AC]" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="6" rx="1.5"/>
+            <rect x="3" y="14" width="18" height="6" rx="1.5"/>
+            <circle cx="7" cy="7" r="1" fill="currentColor"/>
+            <circle cx="7" cy="17" r="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="text-xs font-medium text-[#1E2028]">服务器图标</div>
+          <div class="text-xs text-[#686B78]">支持相册选图并拖动缩放裁剪</div>
+        </div>
+        <button onclick="switchTab('crop')" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#DAE1FF] text-[#283868]">
+          选择并裁剪
+        </button>
+      </div>
+
+      <!-- Compact Form Fields -->
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        <div class="col-span-3">
+          <label class="text-[#686B78] block mb-1">名称</label>
+          <div class="px-3 py-2 rounded-lg border border-[#C6C5D0] bg-white text-[#1E2028]">ComfyUI 主力机</div>
+        </div>
+        <div class="col-span-2">
+          <label class="text-[#686B78] block mb-1">主机 / IP 地址</label>
+          <div class="mono px-3 py-2 rounded-lg border border-[#C6C5D0] bg-white text-[#1E2028]">192.168.1.23</div>
+        </div>
+        <div class="col-span-1">
+          <label class="text-[#686B78] block mb-1">端口</label>
+          <div class="mono px-3 py-2 rounded-lg border border-[#C6C5D0] bg-white text-[#1E2028]">8188</div>
+        </div>
+      </div>
+
+      <!-- Protocol Chips -->
+      <div class="flex items-center justify-between text-xs">
+        <span class="text-[#686B78]">传输协议</span>
+        <div class="flex gap-1.5">
+          <span class="px-3 py-1 rounded-lg bg-[#DAE1FF] text-[#283868] font-medium">HTTP</span>
+          <span class="px-3 py-1 rounded-lg border border-[#C6C5D0] text-[#5A5D68]">HTTPS</span>
+        </div>
+      </div>
+
+      <!-- Connection Test Result Banner (SUCCESS) -->
+      <div id="banner-ok" class="rounded-xl p-2.5 bg-[#D2F6DF] text-[#0D4A29] flex items-start gap-2 text-xs">
+        <svg class="w-4 h-4 shrink-0 mt-0.5 text-[#1B7F4B]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        <div class="flex-1">
+          <div class="font-medium">连接测试成功 · 延迟 18 ms</div>
+          <div class="mono text-[#0D4A29]/80 mt-0.5">ComfyUI 0.27.0 · RTX 5060</div>
+        </div>
+      </div>
+
+      <!-- Connection Test Result Banner (ERROR) -->
+      <div id="banner-err" class="rounded-xl p-2.5 bg-[#FFDAD6] text-[#410002] flex items-start gap-2 text-xs hidden">
+        <svg class="w-4 h-4 shrink-0 mt-0.5 text-[#BA1A1A]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+        <div class="flex-1">
+          <div class="font-medium">连接测试失败 · 响应超时</div>
+          <div class="text-[#410002]/85 mt-0.5">无法连接到服务器，请检查 IP、端口、防火墙与 --listen 参数。</div>
+        </div>
+      </div>
+
+      <!-- Dialog Action Buttons -->
+      <div class="flex items-center justify-between pt-2 border-t border-[#C6C5D0]/50 text-xs font-medium">
+        <button class="px-3 py-1.5 rounded-lg text-[#5A5D68]">取消</button>
+        <div class="flex items-center gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-[#4F63AC] text-[#4F63AC]">测试连接</button>
+          <button class="px-3.5 py-1.5 rounded-lg bg-[#4F63AC] text-white">保存并连接</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIALOG 2: AVATAR CROP & ZOOM -->
+    <div id="panel-crop" class="bg-[#FAF8FF] text-[#1A1B21] rounded-2xl p-4 border border-[#C6C5D0] max-w-md mx-auto space-y-3 hidden">
+      <div class="flex items-center justify-between">
+        <span class="text-lg font-semibold text-[#1E2028]">裁剪服务器图标</span>
+        <span class="text-xs text-[#686B78]">单指拖动位置 · 双指/滑块缩放</span>
+      </div>
+
+      <!-- Interactive Crop Viewport -->
+      <div class="relative w-full h-52 bg-[#121318] rounded-xl overflow-hidden flex items-center justify-center select-none">
+        <!-- Simulated draggable/zoomable image -->
+        <div id="crop-img" class="w-44 h-44 rounded-full bg-gradient-to-tr from-[#4F63AC] via-[#7B8CE0] to-[#DAE1FF] flex items-center justify-center transition-transform duration-75">
+          <span class="text-white text-xs font-medium">示例图片内容（可拖动/缩放）</span>
+        </div>
+        <!-- Dark overlay with 1:1 rounded-square cutout -->
+        <div class="absolute inset-0 pointer-events-none flex items-center justify-center">
+          <div class="w-36 h-36 rounded-2xl border-2 border-white shadow-[0_0_0_999px_rgba(0,0,0,0.55)]"></div>
+        </div>
+      </div>
+
+      <!-- Zoom Slider + Reset -->
+      <div class="flex items-center gap-3 text-xs">
+        <span class="text-[#686B78] shrink-0">缩放</span>
+        <input id="zoom-slider" type="range" min="100" max="250" value="120" oninput="updateZoom(this.value)" class="flex-1 accent-[#4F63AC]" />
+        <span id="zoom-label" class="mono text-[#5A5D68] w-10 text-right">1.2x</span>
+        <button onclick="resetCrop()" class="px-2 py-1 rounded text-[#4F63AC] font-medium">重置</button>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#C6C5D0]/50 text-xs font-medium">
+        <button onclick="switchTab('ok')" class="px-3 py-1.5 rounded-lg text-[#5A5D68]">取消</button>
+        <button onclick="switchTab('ok')" class="px-3.5 py-1.5 rounded-lg bg-[#4F63AC] text-white">完成裁剪</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchTab(tab) {
+      const form = document.getElementById('panel-form');
+      const crop = document.getElementById('panel-crop');
+      const ok = document.getElementById('banner-ok');
+      const err = document.getElementById('banner-err');
+      const tOk = document.getElementById('tab-ok');
+      const tErr = document.getElementById('tab-err');
+      const tCrop = document.getElementById('tab-crop');
+      const activeCls = 'px-2.5 py-1 rounded-md text-xs font-medium bg-[#4F63AC] text-white transition';
+      const idleCls = 'px-2.5 py-1 rounded-md text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition';
+
+      tOk.className = tab === 'ok' ? activeCls : idleCls;
+      tErr.className = tab === 'err' ? activeCls : idleCls;
+      tCrop.className = tab === 'crop' ? activeCls : idleCls;
+
+      if (tab === 'crop') {
+        form.classList.add('hidden');
+        crop.classList.remove('hidden');
+      } else {
+        crop.classList.add('hidden');
+        form.classList.remove('hidden');
+        if (tab === 'ok') {
+          ok.classList.remove('hidden');
+          err.classList.add('hidden');
+        } else {
+          ok.classList.add('hidden');
+          err.classList.remove('hidden');
+        }
+      }
+    }
+    function updateZoom(val) {
+      const scale = (val / 100).toFixed(1);
+      document.getElementById('zoom-label').innerText = scale + 'x';
+      document.getElementById('crop-img').style.transform = `scale(${val / 100})`;
+    }
+    function resetCrop() {
+      document.getElementById('zoom-slider').value = 100;
+      updateZoom(100);
+    }
+  </script>
+</body>
+</html>

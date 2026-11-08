@@ -9,6 +9,7 @@ data class ServerForm(
     val host: String = "",
     val port: String = ServerConfig.DEFAULT_PORT.toString(),
     val scheme: String = "http",
+    val avatarUri: String? = null,
     val hostError: ServerError? = null,
     val portError: ServerError? = null,
 ) {
@@ -23,6 +24,7 @@ data class ServerForm(
             scheme = scheme,
             host = trimmedHost,
             port = parsedPort,
+            avatarUri = avatarUri,
         )
     }
 
@@ -32,6 +34,7 @@ data class ServerForm(
             host = config.host,
             port = config.port.toString(),
             scheme = config.scheme,
+            avatarUri = config.avatarUri,
         )
 
         fun fromProfile(profile: ServerProfile): ServerForm = fromConfig(profile.toConfig())
@@ -62,6 +65,7 @@ data class ServerUiState(
     val expandedId: String? = null,
     val formMode: ServerFormMode = ServerFormMode.None,
     val editingId: String? = null,
+    val formTargetId: String? = null,
     val form: ServerForm = ServerForm(),
     val formTesting: Boolean = false,
     val formSaving: Boolean = false,

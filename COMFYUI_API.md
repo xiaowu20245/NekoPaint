@@ -149,7 +149,7 @@ http://10.0.2.2:8188
 | POST | `/queue` | 清空/删除等待任务 | 核心 | ✅ 删除已测 / 清空未测 | V0.3 |
 | GET | `/history` | 历史（可限制条数） | 核心 | ✅ 200（含记录） | V0.3 |
 | GET | `/history/{prompt_id}` | 单条历史 | 核心 | ✅ 200 | V0.3 |
-| POST | `/history` | 清空/删除历史 | 核心 | ⚠️ 未测 | V0.4（可选） |
+| POST | `/history` | 清空/删除历史 | 核心 | ⚠️ 删除已测，清空未测 | V0.4（可选） |
 | POST | `/prompt` | 提交生成任务 | 核心 | ✅ 200 | V0.2 |
 | POST | `/interrupt` | 中断当前任务 | 核心 | ✅ 200（带 prompt_id） | V0.3 |
 | GET | `/view` | 获取图片 | 核心 | ✅ 200（PNG） | V0.4 |
@@ -683,6 +683,12 @@ V0.3 建议：先请求 `/history?max_items=50`，失败则请求 `/history` 并
 
 影响所有客户端，必须二次确认。
 
+App 验证（2026-11-08）：
+
+- `{"delete": ["adfe55f5-..."]}` 返回 200，服务器历史从 6 条变为 5 条，App 详情页删除后自动返回列表。
+- `{"clear": true}` 入口和二次确认框已完成，但为避免清空本机真实历史，尚未实际提交。
+- `GET /history?max_items=3&offset=0` 与 `offset=2` 返回不同记录，确认 `offset` 可用；当前 App 用 `max_items + 1` 判断是否还有更多，再按 100/150/200 递增加载。
+
 ---
 
 ## 8. `GET /view` ✅
@@ -837,6 +843,7 @@ App 实现（V0.5d）：
 - 返回的 `name`（有 `subfolder` 时拼成 `subfolder/name`）写回 `LoadImage.image` 或 `LoadImageMask.image`。
 - 2026-11-06 实测：128×128 图片经 App 上传后提交 `LoadImage → SaveImage` 成功，输出 128×128；`LoadImageMask(channel=red) → MaskToImage → SaveImage` 也成功输出 128×128 白色蒙版。
 - 蒙版画布（V0.5d）：在历史图片上画笔/橡皮/撤销/清空，按原图比例导出黑底白图 PNG（最长边 4096），再走同一 `/upload/image`；1000×1000 实测导出的蒙版线条位置与画布一致，提交后输出 1000×1000 黑白蒙版。
+- 真实 inpaint 验收（2026-11-08）：`LoadImage + LoadImageMask → VAEEncodeForInpaint → KSampler → VAEDecode → SaveImage`，SDXL checkpoint，1000×1000；Prompt `cdb159c3` 成功。蒙版内平均色差 174.9、蒙版外 5.7，确认只重绘蒙版区域。
 
 ### `POST /upload/mask` ⚠️
 

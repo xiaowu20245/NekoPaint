@@ -92,6 +92,45 @@ class WorkflowRepository(
         writeProfile(dir, template)
     }
 
+    suspend fun renameTemplate(id: String, newName: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            val trimmed = newName.trim()
+            if (trimmed.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("名称不能为空"))
+            }
+            runCatching {
+                val dir = File(rootDir, id)
+                val template = readProfile(dir) ?: error("找不到工作流模板")
+                writeProfile(dir, template.copy(name = trimmed))
+            }
+        }
+
+    /**
+     * 复制模板目录和参数配置，生成新的模板 ID。
+     *
+     * 复制名称自动追加“副本”，重名时继续加序号，避免列表出现两个同名模板。
+     */
+    suspend fun copyTemplate(id: String): Result<WorkflowTemplate> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val sourceDir = File(rootDir, id)
+                val source = readProfile(sourceDir) ?: error("找不到工作流模板")
+                val raw = readApiJson(id) ?: error("找不到工作流 JSON")
+                val existingNames = listTemplates().map { it.name }.toSet()
+                val copyName = buildCopyName(source.name, existingNames)
+                val copied = source.copy(
+                    id = UUID.randomUUID().toString(),
+                    name = copyName,
+                    importedAt = System.currentTimeMillis(),
+                )
+                saveTemplate(copied, raw)
+                copied
+            }
+        }
+
+    private fun buildCopyName(baseName: String, existingNames: Set<String>): String =
+        buildCopyTemplateName(baseName, existingNames)
+
     suspend fun deleteTemplate(id: String) = withContext(Dispatchers.IO) {
         File(rootDir, id).deleteRecursively()
         Unit
@@ -480,4 +519,17 @@ internal fun buildUploadFileName(
         .take(48)
         .ifBlank { "image" }
     return "nekopaint_${timestamp}_$base$extension"
+}
+
+internal fun buildCopyTemplateName(
+    baseName: String,
+    existingNames: Set<String>,
+): String {
+    var candidate = "$baseName 副本"
+    var index = 2
+    while (candidate in existingNames) {
+        candidate = "$baseName 副本 $index"
+        index++
+    }
+    return candidate
 }

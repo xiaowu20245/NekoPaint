@@ -11,6 +11,7 @@ data class ServerProfile(
     val host: String,
     val port: Int = ServerConfig.DEFAULT_PORT,
     val createdAt: Long = System.currentTimeMillis(),
+    val avatarUri: String? = null,
 ) {
 
     fun toConfig(): ServerConfig = ServerConfig(
@@ -18,6 +19,7 @@ data class ServerProfile(
         scheme = scheme,
         host = host,
         port = port,
+        avatarUri = avatarUri,
     )
 
     companion object {
@@ -30,6 +32,7 @@ data class ServerProfile(
             scheme = config.scheme,
             host = config.host,
             port = config.port,
+            avatarUri = config.avatarUri,
         )
     }
 }

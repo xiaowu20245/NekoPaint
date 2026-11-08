@@ -12,5 +12,6 @@ enum class ServerError(@param:StringRes val messageRes: Int) {
     Http(R.string.error_http),
     InvalidResponse(R.string.error_invalid_response),
     Parse(R.string.error_parse),
+    AvatarFailed(R.string.server_avatar_failed),
     Unknown(R.string.error_unknown),
 }

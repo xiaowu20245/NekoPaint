@@ -99,6 +99,7 @@ fun NekoPaintNavHost(
         ) { entry ->
             HistoryDetailScreen(
                 promptId = entry.arguments?.getString("promptId").orEmpty(),
+                onBack = { navController.popBackStack() },
             )
         }
         composable(NekoPaintDestination.Settings.route) { SettingsScreen() }

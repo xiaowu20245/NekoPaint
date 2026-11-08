@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.workflow
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +24,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Warning
@@ -58,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -99,6 +104,7 @@ fun WorkflowDetailScreen(
     val savedMessage = stringResource(R.string.workflow_saved)
     val errorMessage = state.errorRes?.let { stringResource(it) }
     val submitLabel = stringResource(R.string.workflow_submit)
+    val rawJsonCopiedMessage = stringResource(R.string.workflow_raw_json_copied)
     var pendingImageCandidateId by remember { mutableStateOf<String?>(null) }
     var maskEditorCandidateId by remember { mutableStateOf<String?>(null) }
     val imagePicker = rememberLauncherForActivityResult(
@@ -238,6 +244,7 @@ fun WorkflowDetailScreen(
                             imagePicker.launch("image/*")
                         },
                         onDrawMask = { candidateId -> maskEditorCandidateId = candidateId },
+                        onShowRawJson = viewModel::showRawJson,
                         onSave = viewModel::save,
                         onSubmit = viewModel::submit,
                         onClearSubmitError = viewModel::clearSubmitError,
@@ -275,6 +282,20 @@ fun WorkflowDetailScreen(
             },
         )
     }
+
+    if (state.rawJsonVisible) {
+        RawJsonDialog(
+            json = state.rawJson,
+            onDismiss = viewModel::dismissRawJson,
+            onCopy = { text ->
+                context.getSystemService(ClipboardManager::class.java)
+                    ?.setPrimaryClip(ClipData.newPlainText("workflow", text))
+                scope.launch {
+                    snackbarHostState.showSnackbar(rawJsonCopiedMessage)
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -297,6 +318,7 @@ private fun WorkflowPage(
     uploadingCandidateId: String?,
     onPickImage: (String) -> Unit,
     onDrawMask: (String) -> Unit,
+    onShowRawJson: () -> Unit,
     onSave: () -> Unit,
     onSubmit: () -> Unit,
     onClearSubmitError: () -> Unit,
@@ -331,7 +353,7 @@ private fun WorkflowPage(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
-            SummaryCard(template)
+            SummaryCard(template, onShowRawJson)
         }
 
         item {
@@ -578,8 +600,49 @@ private fun SubmissionDialog(
 }
 
 @Composable
-private fun SummaryCard(template: WorkflowTemplate) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun RawJsonDialog(
+    json: String?,
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.workflow_raw_json_title)) },
+        text = {
+            if (json == null) {
+                Text(stringResource(R.string.workflow_raw_json_missing))
+            } else {
+                Text(
+                    text = json,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { json?.let(onCopy) },
+                enabled = json != null,
+            ) {
+                Text(stringResource(R.string.workflow_raw_json_copy))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.workflow_close))
+            }
+        },
+    )
+}
+
+@Composable
+private fun SummaryCard(
+    template: WorkflowTemplate,
+    onShowRawJson: () -> Unit,
+) {    Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -638,6 +701,9 @@ private fun SummaryCard(template: WorkflowTemplate) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            TextButton(onClick = onShowRawJson) {
+                Text(stringResource(R.string.workflow_raw_json))
             }
         }
     }

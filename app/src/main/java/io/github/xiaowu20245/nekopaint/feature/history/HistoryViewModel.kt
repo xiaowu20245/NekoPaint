@@ -40,6 +40,12 @@ sealed interface ShareNotice {
     data class Failure(val message: String) : ShareNotice
 }
 
+sealed interface HistoryEditNotice {
+    data object Deleted : HistoryEditNotice
+    data object Cleared : HistoryEditNotice
+    data class Error(val message: String) : HistoryEditNotice
+}
+
 data class HistoryUiState(
     val entries: List<HistoryEntry> = emptyList(),
     val tasks: List<TaskRecord> = emptyList(),
@@ -53,6 +59,11 @@ data class HistoryUiState(
     val sharingImageUrl: String? = null,
     val shareNotice: ShareNotice? = null,
     val showTempPreviews: Boolean = false,
+    val hasMoreHistory: Boolean = false,
+    val loadingMoreHistory: Boolean = false,
+    val deletingPromptIds: Set<String> = emptySet(),
+    val clearingHistory: Boolean = false,
+    val editNotice: HistoryEditNotice? = null,
 )
 
 class HistoryViewModel(
@@ -83,16 +94,32 @@ class HistoryViewModel(
         OperationState(resubmit = resubmit, save = save, share = share)
     }
 
-    val uiState: StateFlow<HistoryUiState> = combine(
-        base,
+    private val runtimeState = combine(
         taskManager.historyError,
         taskManager.refreshing,
-        operationState,
-        settingsStore.showTempPreviews,
-    ) { state, error, refreshing, operation, showTempPreviews ->
-        state.copy(
+        taskManager.hasMoreHistory,
+        taskManager.loadingMoreHistory,
+    ) { error, refreshing, hasMore, loadingMore ->
+        RuntimeState(
             error = error,
             refreshing = refreshing,
+            hasMore = hasMore,
+            loadingMore = loadingMore,
+        )
+    }
+
+    private val editState = MutableStateFlow(EditState())
+
+    val uiState: StateFlow<HistoryUiState> = combine(
+        base,
+        runtimeState,
+        operationState,
+        editState,
+        settingsStore.showTempPreviews,
+    ) { state, runtime, operation, edit, showTempPreviews ->
+        state.copy(
+            error = runtime.error,
+            refreshing = runtime.refreshing,
             resubmitting = operation.resubmit.submitting,
             notice = operation.resubmit.notice,
             savingImageUrl = operation.save.savingUrl,
@@ -100,6 +127,11 @@ class HistoryViewModel(
             sharingImageUrl = operation.share.sharingUrl,
             shareNotice = operation.share.notice,
             showTempPreviews = showTempPreviews,
+            hasMoreHistory = runtime.hasMore,
+            loadingMoreHistory = runtime.loadingMore,
+            deletingPromptIds = edit.deletingPromptIds,
+            clearingHistory = edit.clearing,
+            editNotice = edit.notice,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -189,6 +221,52 @@ class HistoryViewModel(
         }
     }
 
+    fun loadMoreHistory() {
+        taskManager.loadMoreHistory()
+    }
+
+    fun deleteHistory(promptId: String) {
+        deleteHistory(setOf(promptId))
+    }
+
+    fun deleteHistory(promptIds: Set<String>) {
+        if (promptIds.isEmpty() || editState.value.deletingPromptIds.isNotEmpty()) return
+        editState.value = editState.value.copy(deletingPromptIds = promptIds)
+        viewModelScope.launch {
+            val result = taskManager.deleteHistory(promptIds)
+            editState.value = editState.value.copy(
+                deletingPromptIds = emptySet(),
+                notice = result.fold(
+                    onSuccess = { HistoryEditNotice.Deleted },
+                    onFailure = {
+                        HistoryEditNotice.Error(it.message ?: "删除历史失败")
+                    },
+                ),
+            )
+        }
+    }
+
+    fun clearHistory() {
+        if (editState.value.clearing) return
+        editState.value = editState.value.copy(clearing = true)
+        viewModelScope.launch {
+            val result = taskManager.clearHistory()
+            editState.value = editState.value.copy(
+                clearing = false,
+                notice = result.fold(
+                    onSuccess = { HistoryEditNotice.Cleared },
+                    onFailure = {
+                        HistoryEditNotice.Error(it.message ?: "清空历史失败")
+                    },
+                ),
+            )
+        }
+    }
+
+    fun consumeEditNotice() {
+        editState.value = editState.value.copy(notice = null)
+    }
+
     private data class ResubmitState(
         val submitting: Boolean = false,
         val notice: HistoryNotice? = null,
@@ -208,6 +286,19 @@ class HistoryViewModel(
         val resubmit: ResubmitState,
         val save: SaveState,
         val share: ShareState,
+    )
+
+    private data class RuntimeState(
+        val error: String? = null,
+        val refreshing: Boolean = false,
+        val hasMore: Boolean = false,
+        val loadingMore: Boolean = false,
+    )
+
+    private data class EditState(
+        val deletingPromptIds: Set<String> = emptySet(),
+        val clearing: Boolean = false,
+        val notice: HistoryEditNotice? = null,
     )
 
     companion object {

@@ -11,6 +11,7 @@ data class ServerConfig(
     val scheme: String = "http",
     val host: String,
     val port: Int = DEFAULT_PORT,
+    val avatarUri: String? = null,
 ) {
 
     val baseUrl: String

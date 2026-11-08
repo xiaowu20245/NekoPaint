@@ -43,15 +43,19 @@ class ServerRepository(
     suspend fun check(config: ServerConfig): Result<ConnectionSnapshot> = withContext(Dispatchers.IO) {
         val startedAt = System.nanoTime()
         runCatching {
-            val stats = apiFactory.create(config).systemStats()
+            val api = apiFactory.create(config)
+            val stats = api.systemStats()
             if (stats.system == null && stats.devices.isEmpty()) {
                 throw InvalidComfyResponseException()
             }
+            val queue = runCatching { api.queue() }.getOrNull()
             val latencyMs = (System.nanoTime() - startedAt) / 1_000_000
             ConnectionSnapshot(
                 stats = stats.toDomain(),
                 latencyMs = latencyMs,
                 checkedAt = System.currentTimeMillis(),
+                runningCount = queue?.running?.size ?: 0,
+                pendingCount = queue?.pending?.size ?: 0,
             )
         }
     }

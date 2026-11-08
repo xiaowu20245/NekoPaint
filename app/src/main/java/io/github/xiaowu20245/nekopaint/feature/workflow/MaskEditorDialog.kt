@@ -47,6 +47,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +78,7 @@ import androidx.core.graphics.createBitmap
 import coil3.compose.AsyncImage
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import kotlinx.coroutines.delay
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -101,17 +104,26 @@ fun MaskEditorDialog(
     var selectedImage by remember { mutableStateOf<HistoryImage?>(null) }
     var imageSize by remember { mutableStateOf<IntSize?>(null) }
     var imageLoadFailed by remember { mutableStateOf(false) }
+    var loadTimedOut by remember { mutableStateOf(false) }
+    var loadAttempt by remember { mutableIntStateOf(0) }
     var brushSize by remember { mutableStateOf(28f) }
     var eraser by remember { mutableStateOf(false) }
     var currentStroke by remember { mutableStateOf<MaskStroke?>(null) }
     val strokes = remember { mutableStateListOf<MaskStroke>() }
     val candidates = remember(images) { images.filter { !it.url.isNullOrBlank() } }
 
-    LaunchedEffect(selectedImage?.url) {
+    LaunchedEffect(selectedImage?.url, loadAttempt) {
         imageSize = null
         imageLoadFailed = false
+        loadTimedOut = false
         currentStroke = null
         strokes.clear()
+        if (selectedImage != null) {
+            delay(20_000)
+            if (imageSize == null) {
+                loadTimedOut = true
+            }
+        }
     }
 
     Dialog(
@@ -162,6 +174,13 @@ fun MaskEditorDialog(
                         eraser = eraser,
                         imageSize = imageSize,
                         imageLoadFailed = imageLoadFailed,
+                        loadTimedOut = loadTimedOut,
+                        loadAttempt = loadAttempt,
+                        onRetry = {
+                            imageLoadFailed = false
+                            loadTimedOut = false
+                            loadAttempt += 1
+                        },
                         onImageSize = { imageSize = it },
                         onImageFailed = { imageLoadFailed = true },
                         onStrokeChange = { currentStroke = it },
@@ -262,6 +281,9 @@ private fun MaskCanvas(
     eraser: Boolean,
     imageSize: IntSize?,
     imageLoadFailed: Boolean,
+    loadTimedOut: Boolean,
+    loadAttempt: Int,
+    onRetry: () -> Unit,
     onImageSize: (IntSize) -> Unit,
     onImageFailed: () -> Unit,
     onStrokeChange: (MaskStroke?) -> Unit,
@@ -309,20 +331,26 @@ private fun MaskCanvas(
                 .align(Alignment.Center)
                 .size(displayWidthDp, displayHeightDp),
         ) {
-            AsyncImage(
-                model = image.url,
-                contentDescription = image.filename,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize(),
-                onSuccess = { success ->
-                    val size = IntSize(
-                        success.result.image.width,
-                        success.result.image.height,
-                    )
-                    if (size != imageSize) onImageSize(size)
-                },
-                onError = { onImageFailed() },
-            )
+            key(loadAttempt) {
+                AsyncImage(
+                    model = image.url,
+                    contentDescription = image.filename,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                    onSuccess = { success ->
+                        val size = IntSize(
+                            success.result.image.width,
+                            success.result.image.height,
+                        )
+                        if (size.width > 0 && size.height > 0) {
+                            if (size != imageSize) onImageSize(size)
+                        } else {
+                            onImageFailed()
+                        }
+                    },
+                    onError = { onImageFailed() },
+                )
+            }
 
             if (source != null) {
                 Canvas(
@@ -378,16 +406,36 @@ private fun MaskCanvas(
 
             if (source == null) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.55f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (imageLoadFailed) {
-                        Text(
-                            text = stringResource(R.string.mask_editor_image_failed),
-                            color = Color.White,
-                        )
-                    } else {
-                        CircularProgressIndicator()
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (imageLoadFailed || loadTimedOut) {
+                            Text(
+                                text = stringResource(
+                                    if (loadTimedOut) {
+                                        R.string.mask_editor_load_timeout
+                                    } else {
+                                        R.string.mask_editor_image_failed
+                                    },
+                                ),
+                                color = Color.White,
+                            )
+                            Button(onClick = onRetry) {
+                                Text(stringResource(R.string.mask_editor_retry))
+                            }
+                        } else {
+                            CircularProgressIndicator()
+                            Text(
+                                text = stringResource(R.string.mask_editor_loading_image),
+                                color = Color.White,
+                            )
+                        }
                     }
                 }
             }

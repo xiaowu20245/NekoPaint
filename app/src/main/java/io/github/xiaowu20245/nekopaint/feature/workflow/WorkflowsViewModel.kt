@@ -22,10 +22,18 @@ data class WorkflowsUiState(
     val loading: Boolean = true,
     val templates: List<WorkflowTemplate> = emptyList(),
     val importing: Boolean = false,
+    val busyTemplateId: String? = null,
+    val actionNotice: WorkflowActionNotice? = null,
     @param:StringRes val errorRes: Int? = null,
     val errorDetail: String? = null,
     val importedTemplateId: String? = null,
 )
+
+sealed interface WorkflowActionNotice {
+    data class Renamed(val name: String) : WorkflowActionNotice
+    data class Copied(val name: String) : WorkflowActionNotice
+    data object Deleted : WorkflowActionNotice
+}
 
 class WorkflowsViewModel(
     private val repository: WorkflowRepository,
@@ -79,6 +87,113 @@ class WorkflowsViewModel(
                 }
             }
         }
+    }
+
+    fun renameTemplate(id: String, name: String) {
+        if (_uiState.value.busyTemplateId != null) return
+        if (name.isBlank()) {
+            _uiState.update { it.copy(errorRes = R.string.workflow_name_required) }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    busyTemplateId = id,
+                    errorRes = null,
+                    errorDetail = null,
+                )
+            }
+            repository.renameTemplate(id, name)
+                .onSuccess {
+                    refreshTemplates()
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            actionNotice = WorkflowActionNotice.Renamed(name.trim()),
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            errorDetail = throwable.message ?: "重命名失败",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun copyTemplate(id: String) {
+        if (_uiState.value.busyTemplateId != null) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    busyTemplateId = id,
+                    errorRes = null,
+                    errorDetail = null,
+                )
+            }
+            repository.copyTemplate(id)
+                .onSuccess { copied ->
+                    refreshTemplates()
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            actionNotice = WorkflowActionNotice.Copied(copied.name),
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            errorDetail = throwable.message ?: "复制失败",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun deleteTemplate(id: String) {
+        if (_uiState.value.busyTemplateId != null) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    busyTemplateId = id,
+                    errorRes = null,
+                    errorDetail = null,
+                )
+            }
+            runCatching { repository.deleteTemplate(id) }
+                .onSuccess {
+                    refreshTemplates()
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            actionNotice = WorkflowActionNotice.Deleted,
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            busyTemplateId = null,
+                            errorDetail = throwable.message ?: "删除失败",
+                        )
+                    }
+                }
+        }
+    }
+
+    private suspend fun refreshTemplates() {
+        val templates = runCatching { repository.listTemplates() }
+            .getOrDefault(_uiState.value.templates)
+        _uiState.update { it.copy(templates = templates) }
+    }
+
+    fun consumeActionNotice() {
+        _uiState.update { it.copy(actionNotice = null) }
     }
 
     fun consumeImportedTemplate() {

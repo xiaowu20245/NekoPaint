@@ -37,6 +37,9 @@ interface ComfyApi {
     @GET("history")
     suspend fun history(@Query("max_items") maxItems: Int? = null): Map<String, HistoryItemDto>
 
+    @POST("history")
+    suspend fun updateHistory(@Body body: HistoryOperationDto): Response<Unit>
+
     @POST("interrupt")
     suspend fun interrupt(@Body body: InterruptRequestDto): Response<Unit>
 

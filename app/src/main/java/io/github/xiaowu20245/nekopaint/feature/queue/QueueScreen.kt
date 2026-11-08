@@ -506,7 +506,7 @@ private fun ConfirmDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(android.R.string.cancel))
+                Text(stringResource(R.string.action_cancel))
             }
         },
     )

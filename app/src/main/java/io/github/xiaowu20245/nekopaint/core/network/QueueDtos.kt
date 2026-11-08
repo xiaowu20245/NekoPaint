@@ -37,3 +37,9 @@ data class QueueOperationDto(
     val clear: Boolean? = null,
     val delete: List<String>? = null,
 )
+
+@Serializable
+data class HistoryOperationDto(
+    val clear: Boolean? = null,
+    val delete: List<String>? = null,
+)

@@ -57,6 +57,12 @@ class TaskManager(
     private val _historyError = MutableStateFlow<String?>(null)
     val historyError: StateFlow<String?> = _historyError.asStateFlow()
 
+    private val _hasMoreHistory = MutableStateFlow(false)
+    val hasMoreHistory: StateFlow<Boolean> = _hasMoreHistory.asStateFlow()
+
+    private val _loadingMoreHistory = MutableStateFlow(false)
+    val loadingMoreHistory: StateFlow<Boolean> = _loadingMoreHistory.asStateFlow()
+
     private val _refreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
 
@@ -69,6 +75,8 @@ class TaskManager(
 
     @Volatile
     private var historyFetched = false
+
+    private var historyLimit = HISTORY_PAGE_SIZE
 
     init {
         scope.launch {
@@ -86,6 +94,9 @@ class TaskManager(
                     _progress.value = emptyMap()
                     _queueError.value = null
                     _historyError.value = null
+                    _hasMoreHistory.value = false
+                    _loadingMoreHistory.value = false
+                    historyLimit = HISTORY_PAGE_SIZE
                     historyFetched = false
                     if (serverId == null) return@collectLatest
 
@@ -125,11 +136,14 @@ class TaskManager(
                     // 失败时保留上次队列，界面据此标记为过期。
                     _queueError.value = throwable.message ?: "无法刷新队列"
                 }
-            queueRepository.history(100)
-                .onSuccess { entries ->
+            queueRepository.history(historyLimit + 1)
+                .onSuccess { fetched ->
+                    val hasMore = fetched.size > historyLimit
+                    val entries = if (hasMore) fetched.take(historyLimit) else fetched
                     val previous = _history.value
                     historyFetched = true
                     _history.value = entries
+                    _hasMoreHistory.value = hasMore
                     _historyError.value = null
                     syncTasksWithHistory(entries)
                     // 只有内容变化时才写盘，避免每 5 秒轮询都重复写。
@@ -166,6 +180,69 @@ class TaskManager(
 
     fun clearActionError() {
         _actionError.value = null
+    }
+
+    fun loadMoreHistory() {
+        if (_loadingMoreHistory.value) return
+        scope.launch {
+            _loadingMoreHistory.value = true
+            val serverId = serverConfigStore.activeServerId.first()
+            if (serverId == null) {
+                _loadingMoreHistory.value = false
+                return@launch
+            }
+            val newLimit = historyLimit + HISTORY_PAGE_STEP
+            queueRepository.history(newLimit + 1)
+                .onSuccess { fetched ->
+                    val hasMore = fetched.size > newLimit
+                    val entries = if (hasMore) fetched.take(newLimit) else fetched
+                    historyLimit = newLimit
+                    _history.value = entries
+                    _hasMoreHistory.value = hasMore
+                    _historyError.value = null
+                    syncTasksWithHistory(entries)
+                    historyStore.save(serverId, entries)
+                }
+                .onFailure { throwable ->
+                    _historyError.value = throwable.message ?: "无法加载更多历史"
+                }
+            _loadingMoreHistory.value = false
+        }
+    }
+
+    suspend fun deleteHistory(promptIds: Collection<String>): Result<Unit> {
+        if (promptIds.isEmpty()) return Result.success(Unit)
+        val result = queueRepository.deleteHistory(promptIds.toList())
+        result.onSuccess {
+            val serverId = serverConfigStore.activeServerId.first()
+            _history.update { entries ->
+                entries.filterNot { it.promptId in promptIds }
+            }
+            _historyError.value = null
+            if (serverId != null) {
+                historyStore.save(serverId, _history.value)
+            }
+        }.onFailure { throwable ->
+            _historyError.value = throwable.message ?: "删除历史失败"
+        }
+        return result
+    }
+
+    suspend fun clearHistory(): Result<Unit> {
+        val result = queueRepository.clearHistory()
+        result.onSuccess {
+            val serverId = serverConfigStore.activeServerId.first()
+            _history.value = emptyList()
+            _hasMoreHistory.value = false
+            historyLimit = HISTORY_PAGE_SIZE
+            _historyError.value = null
+            if (serverId != null) {
+                historyStore.save(serverId, emptyList())
+            }
+        }.onFailure { throwable ->
+            _historyError.value = throwable.message ?: "清空历史失败"
+        }
+        return result
     }
 
     private suspend fun reloadTasks(serverId: String) {
@@ -361,5 +438,10 @@ class TaskManager(
         "running" -> 1
         "success", "failed", "interrupted" -> 2
         else -> 0
+    }
+
+    private companion object {
+        const val HISTORY_PAGE_SIZE = 100
+        const val HISTORY_PAGE_STEP = 50
     }
 }

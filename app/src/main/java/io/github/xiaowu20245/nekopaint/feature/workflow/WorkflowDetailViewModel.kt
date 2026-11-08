@@ -57,6 +57,8 @@ data class WorkflowDetailUiState(
     val uploadedImageName: String? = null,
     val imageUploadError: String? = null,
     val maskSourceImages: List<HistoryImage> = emptyList(),
+    val rawJsonVisible: Boolean = false,
+    val rawJson: String? = null,
     @param:StringRes val errorRes: Int? = null,
 ) {
     val visibleCandidates: List<ParameterCandidate>
@@ -326,6 +328,17 @@ class WorkflowDetailViewModel(
         _uiState.update {
             it.copy(uploadedImageName = null, imageUploadError = null)
         }
+    }
+
+    fun showRawJson() {
+        viewModelScope.launch {
+            val raw = runCatching { repository.readApiJson(templateId) }.getOrNull()
+            _uiState.update { it.copy(rawJsonVisible = true, rawJson = raw) }
+        }
+    }
+
+    fun dismissRawJson() {
+        _uiState.update { it.copy(rawJsonVisible = false) }
     }
 
     fun save() {

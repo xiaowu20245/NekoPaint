@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,10 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -68,7 +71,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
-fun HistoryDetailScreen(promptId: String) {
+fun HistoryDetailScreen(
+    promptId: String,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val app = context.applicationContext as NekoPaintApplication
     val viewModel: HistoryViewModel = viewModel(
@@ -80,6 +86,7 @@ fun HistoryDetailScreen(promptId: String) {
     val scope = rememberCoroutineScope()
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
     var pendingSaveImage by remember { mutableStateOf<HistoryImage?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     val permissionDeniedMessage = stringResource(R.string.image_save_permission_denied)
     val openSettingsLabel = stringResource(R.string.image_save_open_settings)
 
@@ -228,6 +235,25 @@ fun HistoryDetailScreen(promptId: String) {
         }
     }
 
+    val editErrorMessage = (state.editNotice as? HistoryEditNotice.Error)?.let { notice ->
+        stringResource(R.string.history_edit_failed, notice.message)
+    }
+    LaunchedEffect(state.editNotice) {
+        when (val notice = state.editNotice) {
+            HistoryEditNotice.Deleted -> {
+                viewModel.consumeEditNotice()
+                onBack()
+            }
+
+            is HistoryEditNotice.Error -> {
+                snackbarHostState.showSnackbar(editErrorMessage.orEmpty())
+                viewModel.consumeEditNotice()
+            }
+
+            HistoryEditNotice.Cleared, null -> Unit
+        }
+    }
+
     val entry = state.entries.firstOrNull { it.promptId == promptId }
     val task = state.tasks.firstOrNull { it.promptId == promptId }
     val images = entry?.visibleImages(state.showTempPreviews).orEmpty()
@@ -273,9 +299,11 @@ fun HistoryDetailScreen(promptId: String) {
                 task = task,
                 images = images,
                 resubmitting = state.resubmitting,
+                deleting = promptId in state.deletingPromptIds,
                 savingImageUrl = state.savingImageUrl,
                 sharingImageUrl = state.sharingImageUrl,
                 onResubmit = { task?.let(viewModel::resubmit) },
+                onDelete = { showDeleteConfirm = true },
                 onOpenImage = { viewerIndex = it },
                 onSaveImage = requestSaveImage,
                 onShareImage = viewModel::shareImage,
@@ -297,6 +325,29 @@ fun HistoryDetailScreen(promptId: String) {
             onDismiss = { viewerIndex = null },
         )
     }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.history_delete_title)) },
+            text = { Text(stringResource(R.string.history_delete_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        viewModel.deleteHistory(promptId)
+                    },
+                ) {
+                    Text(stringResource(R.string.history_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -305,9 +356,11 @@ private fun HistoryDetailContent(
     task: TaskRecord?,
     images: List<HistoryImage>,
     resubmitting: Boolean,
+    deleting: Boolean,
     savingImageUrl: String?,
     sharingImageUrl: String?,
     onResubmit: () -> Unit,
+    onDelete: () -> Unit,
     onOpenImage: (Int) -> Unit,
     onSaveImage: (HistoryImage) -> Unit,
     onShareImage: (HistoryImage) -> Unit,
@@ -375,6 +428,19 @@ private fun HistoryDetailContent(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    OutlinedButton(
+                        onClick = onDelete,
+                        enabled = !deleting,
+                    ) {
+                        if (deleting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                        }
+                        Text(stringResource(R.string.history_delete))
                     }
                 }
             }

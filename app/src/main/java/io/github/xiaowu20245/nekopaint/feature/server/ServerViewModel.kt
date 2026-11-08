@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.server
 
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -8,6 +9,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.data.repository.InvalidComfyResponseException
+import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +28,7 @@ import java.util.UUID
 
 class ServerViewModel(
     private val repository: ServerRepository,
+    private val avatarStore: ServerAvatarStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ServerUiState())
@@ -123,6 +126,7 @@ class ServerViewModel(
             it.copy(
                 formMode = ServerFormMode.Add,
                 editingId = null,
+                formTargetId = UUID.randomUUID().toString(),
                 form = ServerForm(),
                 formTesting = false,
                 formSaving = false,
@@ -137,6 +141,7 @@ class ServerViewModel(
             it.copy(
                 formMode = ServerFormMode.Edit,
                 editingId = profile.id,
+                formTargetId = profile.id,
                 form = ServerForm.fromProfile(profile),
                 formTesting = false,
                 formSaving = false,
@@ -147,10 +152,16 @@ class ServerViewModel(
     }
 
     fun cancelForm() {
+        if (_uiState.value.formSaving) return
+        val targetId = _uiState.value.formTargetId
+        if (targetId != null) {
+            viewModelScope.launch { avatarStore.deleteDraft(targetId) }
+        }
         _uiState.update {
             it.copy(
                 formMode = ServerFormMode.None,
                 editingId = null,
+                formTargetId = null,
                 formTesting = false,
                 formSaving = false,
                 formSnapshot = null,
@@ -171,6 +182,47 @@ class ServerViewModel(
 
     fun onSchemeChange(value: String) = updateForm {
         it.copy(scheme = if (value == "https") "https" else "http")
+    }
+
+    fun setFormAvatar(bitmap: Bitmap) {
+        val targetId = _uiState.value.formTargetId ?: return
+        viewModelScope.launch {
+            avatarStore.saveDraft(targetId, bitmap)
+                .onSuccess { path ->
+                    updateForm { it.copy(avatarUri = path) }
+                }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(formError = ServerError.AvatarFailed)
+                    }
+                }
+        }
+    }
+
+    fun clearFormAvatar() {
+        val state = _uiState.value
+        val shouldDeleteDraft = avatarStore.isDraft(state.form.avatarUri)
+        val targetId = state.formTargetId
+        updateForm { it.copy(avatarUri = null) }
+        if (shouldDeleteDraft && targetId != null) {
+            viewModelScope.launch { avatarStore.deleteDraft(targetId) }
+        }
+    }
+
+    fun setAvatar(serverId: String, bitmap: Bitmap) {
+        val profile = _uiState.value.cards
+            .firstOrNull { it.profile.id == serverId }
+            ?.profile
+            ?: return
+        viewModelScope.launch {
+            avatarStore.saveBitmap(serverId, bitmap)
+                .onSuccess { path ->
+                    repository.saveServer(
+                        profile = profile.copy(avatarUri = path),
+                        activate = false,
+                    )
+                }
+        }
     }
 
     fun testFormConnection() {
@@ -201,21 +253,44 @@ class ServerViewModel(
         if (_uiState.value.formSaving) return
         val state = _uiState.value
         val editingId = state.editingId
-        val profile = ServerProfile.fromConfig(
+        val baseProfile = ServerProfile.fromConfig(
             config = config,
-            id = editingId ?: UUID.randomUUID().toString(),
+            id = editingId ?: state.formTargetId ?: UUID.randomUUID().toString(),
         )
-        val activate = editingId == null || state.activeCard?.profile?.id == profile.id
+        val originalAvatar = state.cards
+            .firstOrNull { it.profile.id == baseProfile.id }
+            ?.profile
+            ?.avatarUri
+        val formTargetId = state.formTargetId
+        val activate = editingId == null || state.activeCard?.profile?.id == baseProfile.id
+        _uiState.update { it.copy(formSaving = true, formError = null) }
         viewModelScope.launch {
-            _uiState.update { it.copy(formSaving = true, formError = null) }
             runCatching {
+                val formAvatar = config.avatarUri
+                val resolvedAvatar = when {
+                    formAvatar == null -> null
+                    avatarStore.isDraft(formAvatar) -> {
+                        avatarStore.commitDraft(baseProfile.id, formAvatar).getOrElse {
+                            avatarStore.deleteDraft(formTargetId ?: baseProfile.id)
+                            originalAvatar
+                        }
+                    }
+
+                    else -> formAvatar
+                }
+                val profile = baseProfile.copy(avatarUri = resolvedAvatar)
                 repository.saveServer(profile, activate = activate)
-            }.onSuccess {
+                if (resolvedAvatar == null) {
+                    avatarStore.delete(baseProfile.id)
+                }
+                profile
+            }.onSuccess { profile ->
                 _uiState.update {
                     it.copy(
                         formSaving = false,
                         formMode = ServerFormMode.None,
                         editingId = null,
+                        formTargetId = null,
                         formSnapshot = null,
                         formError = null,
                         expandedId = profile.id,
@@ -240,6 +315,7 @@ class ServerViewModel(
     fun delete(profile: ServerProfile) {
         viewModelScope.launch {
             repository.deleteServer(profile.id)
+            avatarStore.delete(profile.id)
             _uiState.update {
                 if (it.expandedId == profile.id) it.copy(expandedId = null) else it
             }
@@ -282,6 +358,7 @@ class ServerViewModel(
             scheme = form.scheme,
             host = host,
             port = port,
+            avatarUri = form.avatarUri,
         )
     }
 
@@ -306,7 +383,12 @@ class ServerViewModel(
 
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ServerViewModel(container.serverRepository) }
+            initializer {
+                ServerViewModel(
+                    repository = container.serverRepository,
+                    avatarStore = container.serverAvatarStore,
+                )
+            }
         }
     }
 }

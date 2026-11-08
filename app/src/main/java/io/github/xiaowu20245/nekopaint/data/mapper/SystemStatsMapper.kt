@@ -18,4 +18,5 @@ fun SystemStatsDto.toDomain(): ServerStats = ServerStats(
             vramFree = device.vramFree,
         )
     },
+    argv = system?.argv.orEmpty(),
 )
