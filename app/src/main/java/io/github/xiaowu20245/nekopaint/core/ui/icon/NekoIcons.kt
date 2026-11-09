@@ -167,6 +167,151 @@ object NekoIcons {
         moveTo(14f, 5f)
         lineTo(10f, 19f)
     }
+
+    val Sparkles: ImageVector = strokeIcon("Sparkles") {
+        moveTo(12f, 3f)
+        lineTo(14.1f, 8.9f)
+        lineTo(20f, 11f)
+        lineTo(14.1f, 13.1f)
+        lineTo(12f, 19f)
+        lineTo(9.9f, 13.1f)
+        lineTo(4f, 11f)
+        lineTo(9.9f, 8.9f)
+        close()
+        moveTo(19f, 17f)
+        lineTo(19f, 21f)
+        moveTo(17f, 19f)
+        lineTo(21f, 19f)
+    }
+
+    val ImageFrame: ImageVector = strokeIcon("ImageFrame") {
+        moveTo(4f, 4f)
+        lineTo(20f, 4f)
+        lineTo(20f, 20f)
+        lineTo(4f, 20f)
+        close()
+        moveTo(8f, 9f)
+        lineTo(9.5f, 9f)
+        lineTo(9.5f, 10.5f)
+        lineTo(8f, 10.5f)
+        close()
+        moveTo(20f, 15f)
+        lineTo(15f, 11f)
+        lineTo(6f, 20f)
+    }
+
+    val BrushMask: ImageVector = strokeIcon("BrushMask") {
+        moveTo(14f, 4f)
+        lineTo(20f, 10f)
+        lineTo(10f, 20f)
+        lineTo(4f, 20f)
+        lineTo(4f, 14f)
+        close()
+        moveTo(11f, 7f)
+        lineTo(17f, 13f)
+    }
+
+    val TargetCrosshair: ImageVector = strokeIcon("TargetCrosshair") {
+        moveTo(12f, 5f)
+        curveTo(15.87f, 5f, 19f, 8.13f, 19f, 12f)
+        curveTo(19f, 15.87f, 15.87f, 19f, 12f, 19f)
+        curveTo(8.13f, 19f, 5f, 15.87f, 5f, 12f)
+        curveTo(5f, 8.13f, 8.13f, 5f, 12f, 5f)
+        close()
+        moveTo(12f, 9.5f)
+        curveTo(13.38f, 9.5f, 14.5f, 10.62f, 14.5f, 12f)
+        curveTo(14.5f, 13.38f, 13.38f, 14.5f, 12f, 14.5f)
+        curveTo(10.62f, 14.5f, 9.5f, 13.38f, 9.5f, 12f)
+        curveTo(9.5f, 10.62f, 10.62f, 9.5f, 12f, 9.5f)
+        close()
+        moveTo(12f, 2f)
+        lineTo(12f, 5f)
+        moveTo(12f, 19f)
+        lineTo(12f, 22f)
+        moveTo(2f, 12f)
+        lineTo(5f, 12f)
+        moveTo(19f, 12f)
+        lineTo(22f, 12f)
+    }
+
+    val WorkflowNodes: ImageVector = strokeIcon("WorkflowNodes") {
+        moveTo(4f, 4f)
+        lineTo(9f, 4f)
+        lineTo(9f, 9f)
+        lineTo(4f, 9f)
+        close()
+        moveTo(15f, 4f)
+        lineTo(20f, 4f)
+        lineTo(20f, 9f)
+        lineTo(15f, 9f)
+        close()
+        moveTo(9.5f, 15f)
+        lineTo(14.5f, 15f)
+        lineTo(14.5f, 20f)
+        lineTo(9.5f, 20f)
+        close()
+        moveTo(7.5f, 9f)
+        lineTo(11f, 15f)
+        moveTo(16.5f, 9f)
+        lineTo(13f, 15f)
+    }
+
+    val Sliders: ImageVector = strokeIcon("Sliders") {
+        moveTo(4f, 6f)
+        lineTo(20f, 6f)
+        moveTo(4f, 12f)
+        lineTo(20f, 12f)
+        moveTo(4f, 18f)
+        lineTo(20f, 18f)
+        moveTo(9f, 4f)
+        lineTo(9f, 8f)
+        moveTo(15f, 10f)
+        lineTo(15f, 14f)
+        moveTo(11f, 16f)
+        lineTo(11f, 20f)
+    }
+
+    val PlayFilled: ImageVector = ImageVector.Builder(
+        name = "PlayFilled",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(7.5f, 5f)
+            lineTo(18.5f, 12f)
+            lineTo(7.5f, 19f)
+            close()
+        }
+    }.build()
+
+    val Dice: ImageVector = strokeIcon("Dice") {
+        moveTo(4f, 4f)
+        lineTo(20f, 4f)
+        lineTo(20f, 20f)
+        lineTo(4f, 20f)
+        close()
+        moveTo(8.5f, 8.5f)
+        lineTo(8.55f, 8.5f)
+        moveTo(15.5f, 8.5f)
+        lineTo(15.55f, 8.5f)
+        moveTo(12f, 12f)
+        lineTo(12.05f, 12f)
+        moveTo(8.5f, 15.5f)
+        lineTo(8.55f, 15.5f)
+        moveTo(15.5f, 15.5f)
+        lineTo(15.55f, 15.5f)
+    }
+
+    val Bookmark: ImageVector = strokeIcon("Bookmark") {
+        moveTo(6f, 4f)
+        lineTo(18f, 4f)
+        lineTo(18f, 20f)
+        lineTo(12f, 16f)
+        lineTo(6f, 20f)
+        close()
+    }
 }
 
 private fun strokeIcon(

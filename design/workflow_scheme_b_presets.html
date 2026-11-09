@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 B + 参数预设系统设计预览</title>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "MiSans", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: transparent;
+    color: #1A1B21;
+    margin: 0;
+    padding: 6px;
+  }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .card-base {
+    background: #EEEDF4;
+    border-radius: 18px;
+    border: 1px solid rgba(118, 118, 128, 0.14);
+  }
+  .group-card {
+    background: #EEEDF4;
+    border-radius: 16px;
+    border: 1px solid rgba(118, 118, 128, 0.14);
+  }
+  .inner-cell {
+    background: #F7F6FC;
+    border-radius: 12px;
+    border: 1px solid rgba(118, 118, 128, 0.12);
+  }
+  .tab-on {
+    background: #4F63AC;
+    color: #FFFFFF;
+  }
+  .tab-off {
+    background: #E3E2EC;
+    color: #45464F;
+  }
+  .preset-active {
+    background: #DAE1FF;
+    color: #23336E;
+    border: 1px solid rgba(79, 99, 172, 0.45);
+    font-weight: 500;
+  }
+  .preset-idle {
+    background: #E8E7EF;
+    color: #45464F;
+    border: 1px solid transparent;
+  }
+</style>
+</head>
+<body>
+
+<div class="max-w-md mx-auto">
+  <!-- 顶部视图切换 -->
+  <div class="flex items-center justify-between gap-2 mb-2 bg-[#E3E2EC] p-1 rounded-xl">
+    <button id="btn-detail" onclick="switchView('detail')" class="flex-1 text-xs py-1.5 px-2.5 rounded-lg font-medium tab-on transition">
+      1. 详情页 (含预设切换 & 另存预设)
+    </button>
+    <button id="btn-list" onclick="switchView('list')" class="flex-1 text-xs py-1.5 px-2.5 rounded-lg font-medium tab-off transition">
+      2. 列表页 (抽屉内秒切预设跑图)
+    </button>
+  </div>
+
+  <!-- ================= 视图 1：方案 B 详情页 + 参数预设系统 ================= -->
+  <div id="view-detail" class="bg-[#FAF8FF] rounded-2xl border border-gray-200 overflow-hidden relative">
+    <div class="p-3 space-y-2.5 max-h-[390px] overflow-y-auto">
+      <!-- 1. 极简顶部信息胶囊条 -->
+      <div class="flex items-center justify-between gap-1.5 bg-[#EEEDF4] px-3 py-2 rounded-2xl border border-black/5">
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span class="px-2 py-0.5 rounded-md bg-[#DAE1FF] text-[#23336E] text-xs font-medium shrink-0">蒙版重绘</span>
+          <span class="text-xs text-[#45464F] truncate">✓ 12节点 · 1图/1蒙版</span>
+        </div>
+        <div class="flex items-center gap-1 shrink-0">
+          <button onclick="document.getElementById('info-sheet').classList.toggle('hidden')" class="px-2 py-0.5 rounded-lg bg-[#E3E2EC] text-[#3C4A7E] text-xs">
+            ℹ 概览
+          </button>
+          <button class="px-2 py-0.5 rounded-lg bg-[#E3E2EC] text-[#3C4A7E] text-xs mono">{ }</button>
+        </div>
+      </div>
+
+      <div id="info-sheet" class="hidden p-2.5 rounded-xl bg-[#E8E7EF] text-xs text-[#45464F] space-y-1">
+        <div class="mono">源文件: inpaint_sdxl_api.json (输出 #9)</div>
+        <div>• 图片槽 #11 LoadImage · 蒙版槽 #14 LoadImageMask</div>
+      </div>
+
+      <!-- 2. 新增核心区域：【🔖 参数预设胶囊栏 (Preset Bar)】 -->
+      <div class="bg-[#EEEDF4]/70 p-2 rounded-2xl border border-black/5 space-y-1.5">
+        <div class="flex items-center justify-between px-0.5">
+          <div class="flex items-center gap-1.5 text-xs">
+            <span class="font-medium text-[#3C4A7E]">🔖 参数预设</span>
+            <span id="dirty-badge" class="hidden px-1.5 py-0.2 rounded bg-[#FEF3C7] text-[#92400E] text-xs">• 已修改</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <button onclick="openSavePresetModal()" class="px-2 py-0.5 rounded-lg bg-[#4F63AC] text-white text-xs font-medium hover:bg-[#3E5196]">
+              ＋ 存为新预设
+            </button>
+            <button onclick="deleteCurrentPreset()" id="btn-del-preset" class="hidden px-1.5 py-0.5 rounded-lg text-xs text-[#B91C1C] hover:bg-red-50" title="删除当前预设">
+              删除
+            </button>
+          </div>
+        </div>
+
+        <!-- 预设横向滚动胶囊列表（点击立即回填整套参数！） -->
+        <div id="preset-list" class="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs">
+          <!-- 由 JS 渲染 -->
+        </div>
+      </div>
+
+      <!-- 3. 模式分段栏 -->
+      <div class="flex items-center justify-between">
+        <div class="inline-flex bg-[#E8E7EF] p-0.5 rounded-xl text-xs">
+          <button class="px-2.5 py-1 rounded-[9px] bg-[#DAE1FF] text-[#23336E] font-medium">简单 (9)</button>
+          <button class="px-2.5 py-1 rounded-[9px] text-[#5E5F68]">高级 (24)</button>
+        </div>
+        <button class="text-xs text-[#4F63AC] font-medium">✎ 管理常用项</button>
+      </div>
+
+      <!-- 4. 分组大容器 A：图像与提示词 -->
+      <div class="group-card p-2.5 space-y-2">
+        <div class="flex items-center justify-between text-xs font-medium text-[#3C4A7E] px-0.5">
+          <span>🖼️ 图像与提示词</span>
+          <span class="mono text-[#5E5F68]">#14, #6</span>
+        </div>
+
+        <div class="inner-cell p-2 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="w-9 h-9 rounded-lg bg-[#DAE1FF] flex items-center justify-center text-[#3C4A7E] shrink-0">🖌️</div>
+            <div class="min-w-0">
+              <div class="text-xs font-medium text-[#1A1B21]">重绘蒙版槽</div>
+              <div class="mono text-xs text-[#5E5F68] truncate">mask_01.png</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button class="px-2.5 py-1.5 rounded-lg border border-[#4F63AC]/30 text-xs text-[#3C4A7E] font-medium">选图</button>
+            <button class="px-2.5 py-1.5 rounded-lg bg-[#DAE1FF] text-xs text-[#23336E] font-medium">画蒙版</button>
+          </div>
+        </div>
+
+        <div class="inner-cell p-2">
+          <div class="flex justify-between text-xs text-[#5E5F68] mb-1">
+            <span class="font-medium text-[#1A1B21]">正向提示词</span>
+            <span class="mono">#6 CLIPTextEncode</span>
+          </div>
+          <textarea id="inp-prompt" oninput="markDirty()" rows="2" class="w-full text-xs bg-transparent focus:outline-none text-[#1A1B21]"></textarea>
+        </div>
+      </div>
+
+      <!-- 5. 分组大容器 B：采样与尺寸 (2x2 双列 Bento 网格) -->
+      <div class="group-card p-2.5 space-y-2">
+        <div class="flex items-center justify-between text-xs font-medium text-[#3C4A7E] px-0.5">
+          <span>⚙️ 采样与尺寸</span>
+          <span class="mono text-[#5E5F68]">#3 KSampler</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div class="inner-cell p-2">
+            <div class="text-xs text-[#5E5F68]">采样步数 (steps)</div>
+            <input id="inp-steps" oninput="markDirty()" type="text" class="mono text-sm font-medium text-[#1A1B21] w-full bg-transparent mt-0.5 focus:outline-none">
+          </div>
+          <div class="inner-cell p-2">
+            <div class="text-xs text-[#5E5F68]">引导系数 (cfg)</div>
+            <input id="inp-cfg" oninput="markDirty()" type="text" class="mono text-sm font-medium text-[#1A1B21] w-full bg-transparent mt-0.5 focus:outline-none">
+          </div>
+          <div class="inner-cell p-2">
+            <div class="text-xs text-[#5E5F68]">宽度 (width)</div>
+            <input id="inp-w" oninput="markDirty()" type="text" class="mono text-sm font-medium text-[#1A1B21] w-full bg-transparent mt-0.5 focus:outline-none">
+          </div>
+          <div class="inner-cell p-2">
+            <div class="text-xs text-[#5E5F68]">高度 (height)</div>
+            <input id="inp-h" oninput="markDirty()" type="text" class="mono text-sm font-medium text-[#1A1B21] w-full bg-transparent mt-0.5 focus:outline-none">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. 单行一体式步进器底栏 -->
+    <div class="bg-[#EEEDF4] border-t border-gray-200 px-3 py-2 flex items-center justify-between gap-2">
+      <div class="flex items-center gap-1.5">
+        <button onclick="saveCurrentPreset()" title="覆盖保存到当前预设" class="px-2.5 py-1.5 rounded-xl border border-[#767680]/35 flex items-center gap-1 text-xs text-[#45464F] hover:bg-black/5">
+          <span>💾</span> <span id="btn-save-text">保存</span>
+        </button>
+        <button onclick="cycleSeed()" class="px-2.5 py-1.5 rounded-xl bg-[#DAE1FF] text-[#23336E] text-xs font-medium flex items-center gap-1">
+          <span>🎲</span> <span id="seed-mode-label">每次随机</span>
+        </button>
+      </div>
+
+      <div class="inline-flex items-center rounded-xl bg-[#4F63AC] text-white overflow-hidden">
+        <button onclick="stepBatch(-1)" class="px-2.5 py-2 text-xs font-bold hover:bg-[#3E5196]">−</button>
+        <span id="batch-num" class="mono text-xs px-1.5 font-medium select-none">1次</span>
+        <button onclick="stepBatch(1)" class="px-2.5 py-2 text-xs font-bold hover:bg-[#3E5196] border-r border-white/20">＋</button>
+        <button class="px-3.5 py-2 text-xs font-medium flex items-center gap-1 hover:bg-[#3E5196]">
+          <span>▶</span> <span>提交生成</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 弹窗：另存为新预设 -->
+    <div id="modal-save-preset" class="hidden absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-30">
+      <div class="bg-[#FAF8FF] rounded-[24px] p-4 w-full max-w-xs space-y-3 border border-gray-200">
+        <div class="text-base font-medium text-[#1A1B21]">保存为参数预设</div>
+        <div class="text-xs text-[#5E5F68]">将当前全部已选参数值保存为预设，方便随时切换或在列表页直接调用。</div>
+        <input id="new-preset-name" type="text" placeholder="输入预设名称，如：赛博夜景高细节" class="w-full px-3 py-2 text-xs rounded-xl bg-white border border-gray-300 focus:outline-none focus:border-[#4F63AC]">
+        <div class="flex justify-end gap-2 pt-1">
+          <button onclick="closeSavePresetModal()" class="px-3 py-1.5 rounded-xl text-xs text-[#5E5F68]">取消</button>
+          <button onclick="confirmAddPreset()" class="px-4 py-1.5 rounded-xl bg-[#4F63AC] text-white text-xs font-medium">保存预设</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 视图 2：方案 B 列表页（支持在卡片抽屉里直接选预设跑图！） ================= -->
+  <div id="view-list" class="hidden bg-[#FAF8FF] rounded-2xl border border-gray-200 p-3.5">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-[22px] font-bold text-[#1A1B21]">工作流</span>
+      <button class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-[#DAE1FF] text-[#23336E] text-xs font-medium">
+        <span>＋</span> 导入 JSON
+      </button>
+    </div>
+
+    <div class="card-base p-3">
+      <div onclick="switchView('detail')" class="flex items-start gap-2.5 cursor-pointer">
+        <div class="w-11 h-11 rounded-[13px] bg-[#DAE1FF] flex items-center justify-center shrink-0 text-[#3C4A7E]">
+          🖌️
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between">
+            <span class="text-[16px] font-medium text-[#1A1B21]">局部蒙版重绘 Inpaint</span>
+            <span class="text-[#5E5F68]">⋮</span>
+          </div>
+          <div id="list-card-prompt" class="text-xs text-[#5E5F68] truncate mt-0.5">
+            "1girl, silver hair, soft lighting, detailed eyes..."
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between mt-2.5 pt-2 border-t border-black/5">
+        <div class="flex items-center gap-1.5 text-xs text-[#45464F]">
+          <span class="px-2 py-0.5 rounded-md bg-[#DAE1FF] text-[#283874] font-medium">蒙版重绘</span>
+          <span id="list-preset-indicator" class="text-[#3C4A7E] font-medium">🔖 白发少女</span>
+        </div>
+        <div class="inline-flex rounded-xl overflow-hidden bg-[#4F63AC] text-white text-xs font-medium">
+          <button class="px-2.5 py-1 flex items-center gap-1"><span>▶</span> 运行</button>
+          <button class="px-1.5 py-1 border-l border-white/20">▾</button>
+        </div>
+      </div>
+
+      <!-- 卡片展开抽屉：不仅能选连发次数，还能直接秒切预设！ -->
+      <div class="mt-2 p-2.5 rounded-xl bg-[#E3E2EC] space-y-2 text-xs">
+        <div class="flex items-center gap-1.5 overflow-x-auto">
+          <span class="text-[#45464F] shrink-0">预设:</span>
+          <div id="list-drawer-presets" class="flex gap-1"></div>
+        </div>
+        <div class="flex items-center justify-between pt-1 border-t border-black/5">
+          <div class="flex items-center gap-1">
+            <span class="text-[#45464F]">连发:</span>
+            <span class="px-2 py-0.5 rounded bg-[#4F63AC] text-white font-medium">×1</span>
+            <span class="px-2 py-0.5 rounded bg-white/70 text-[#45464F]">×2</span>
+            <span class="px-2 py-0.5 rounded bg-white/70 text-[#45464F]">×4</span>
+          </div>
+          <span class="text-[#283874] font-medium">🎲 自动随机种子</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const presets = [
+    {
+      id: 'p1',
+      name: '默认参数',
+      prompt: '1girl, solo, smile, simple background',
+      steps: '20',
+      cfg: '7.0',
+      w: '1024',
+      h: '1024',
+      builtin: true
+    },
+    {
+      id: 'p2',
+      name: '✨ 白发少女光影',
+      prompt: '1girl, silver hair, soft lighting, detailed eyes, masterpiece',
+      steps: '28',
+      cfg: '6.5',
+      w: '832',
+      h: '1216',
+      builtin: false
+    },
+    {
+      id: 'p3',
+      name: '🏞️ 宽幅精绘 35步',
+      prompt: 'scenery, cyberpunk city, neon lights, rain, ultra detailed, 8k',
+      steps: '35',
+      cfg: '8.0',
+      w: '1344',
+      h: '768',
+      builtin: false
+    }
+  ];
+  let activeId = 'p2';
+  let isDirty = false;
+
+  function renderPresets() {
+    const container = document.getElementById('preset-list');
+    const drawerContainer = document.getElementById('list-drawer-presets');
+    container.innerHTML = '';
+    drawerContainer.innerHTML = '';
+
+    presets.forEach(p => {
+      const active = p.id === activeId;
+      const btn = document.createElement('button');
+      btn.className = 'px-2.5 py-1 rounded-xl shrink-0 transition ' + (active ? 'preset-active' : 'preset-idle');
+      btn.textContent = p.name;
+      btn.onclick = () => selectPreset(p.id);
+      container.appendChild(btn);
+
+      const dBtn = document.createElement('button');
+      dBtn.className = 'px-2 py-0.5 rounded shrink-0 ' + (active ? 'bg-[#4F63AC] text-white font-medium' : 'bg-white/70 text-[#45464F]');
+      dBtn.textContent = p.name;
+      dBtn.onclick = () => selectPreset(p.id);
+      drawerContainer.appendChild(dBtn);
+    });
+
+    const cur = presets.find(x => x.id === activeId);
+    document.getElementById('btn-del-preset').classList.toggle('hidden', cur.builtin);
+    document.getElementById('list-preset-indicator').textContent = '🔖 ' + cur.name;
+    document.getElementById('list-card-prompt').textContent = '"' + cur.prompt + '"';
+  }
+
+  function selectPreset(id) {
+    activeId = id;
+    const p = presets.find(x => x.id === id);
+    document.getElementById('inp-prompt').value = p.prompt;
+    document.getElementById('inp-steps').value = p.steps;
+    document.getElementById('inp-cfg').value = p.cfg;
+    document.getElementById('inp-w').value = p.w;
+    document.getElementById('inp-h').value = p.h;
+    isDirty = false;
+    document.getElementById('dirty-badge').classList.add('hidden');
+    document.getElementById('btn-save-text').textContent = '保存';
+    renderPresets();
+  }
+
+  function markDirty() {
+    isDirty = true;
+    document.getElementById('dirty-badge').classList.remove('hidden');
+    document.getElementById('btn-save-text').textContent = '更新预设';
+  }
+
+  function saveCurrentPreset() {
+    const p = presets.find(x => x.id === activeId);
+    p.prompt = document.getElementById('inp-prompt').value;
+    p.steps = document.getElementById('inp-steps').value;
+    p.cfg = document.getElementById('inp-cfg').value;
+    p.w = document.getElementById('inp-w').value;
+    p.h = document.getElementById('inp-h').value;
+    isDirty = false;
+    document.getElementById('dirty-badge').classList.add('hidden');
+    document.getElementById('btn-save-text').textContent = '✓ 已保存';
+    renderPresets();
+  }
+
+  function openSavePresetModal() {
+    document.getElementById('new-preset-name').value = '';
+    document.getElementById('modal-save-preset').classList.remove('hidden');
+  }
+  function closeSavePresetModal() {
+    document.getElementById('modal-save-preset').classList.add('hidden');
+  }
+  function confirmAddPreset() {
+    const name = document.getElementById('new-preset-name').value.trim() || ('自定义预设 ' + presets.length);
+    const id = 'p' + Date.now();
+    presets.push({
+      id,
+      name: '🔖 ' + name,
+      prompt: document.getElementById('inp-prompt').value,
+      steps: document.getElementById('inp-steps').value,
+      cfg: document.getElementById('inp-cfg').value,
+      w: document.getElementById('inp-w').value,
+      h: document.getElementById('inp-h').value,
+      builtin: false
+    });
+    closeSavePresetModal();
+    selectPreset(id);
+  }
+  function deleteCurrentPreset() {
+    const idx = presets.findIndex(x => x.id === activeId);
+    if (idx > 0) {
+      presets.splice(idx, 1);
+      selectPreset(presets[0].id);
+    }
+  }
+
+  function switchView(v) {
+    const isDetail = v === 'detail';
+    document.getElementById('view-detail').classList.toggle('hidden', !isDetail);
+    document.getElementById('view-list').classList.toggle('hidden', isDetail);
+    document.getElementById('btn-detail').className = 'flex-1 text-xs py-1.5 px-2.5 rounded-lg font-medium transition ' + (isDetail ? 'tab-on' : 'tab-off');
+    document.getElementById('btn-list').className = 'flex-1 text-xs py-1.5 px-2.5 rounded-lg font-medium transition ' + (!isDetail ? 'tab-on' : 'tab-off');
+  }
+
+  let batch = 1;
+  function stepBatch(d) {
+    batch = Math.min(16, Math.max(1, batch + d));
+    document.getElementById('batch-num').textContent = batch + '次';
+  }
+  const seeds = ['每次随机', '递增 +1', '固定种子'];
+  let sIdx = 0;
+  function cycleSeed() {
+    sIdx = (sIdx + 1) % seeds.length;
+    document.getElementById('seed-mode-label').textContent = seeds[sIdx];
+  }
+
+  // 初始化
+  selectPreset('p2');
+</script>
+</body>
+</html>

@@ -7,6 +7,8 @@ import android.provider.OpenableColumns
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
+import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
@@ -16,6 +18,7 @@ import io.github.xiaowu20245.nekopaint.core.network.PromptErrorResponseDto
 import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
+import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagExpander
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
@@ -319,8 +322,22 @@ class WorkflowRepository(
             return@withContext WorkflowSubmitResult.Error("没有选中任何参数")
         }
 
+        // 提示词里的 #标签组 在提交前展开，历史记录也保存展开后的值。
+        val expandedSelected = selected.map { candidate ->
+            if (candidate.group == ParameterGroup.PROMPT) {
+                candidate.copy(
+                    value = PromptTagExpander.expand(
+                        candidate.value,
+                        template.promptTagGroups,
+                    ),
+                )
+            } else {
+                candidate
+            }
+        }
+
         val prompt = runCatching {
-            WorkflowJsonApplier.apply(raw, selected)
+            WorkflowJsonApplier.apply(raw, expandedSelected)
         }.getOrElse { throwable ->
             return@withContext WorkflowSubmitResult.Error(
                 throwable.message ?: "应用参数失败",
@@ -394,7 +411,7 @@ class WorkflowRepository(
                     clientId = clientId,
                     queueNumber = body.number,
                     submittedAt = System.currentTimeMillis(),
-                    values = selected.associate { it.id to it.value },
+                    values = expandedSelected.associate { it.id to it.value },
                 ),
             )
         }

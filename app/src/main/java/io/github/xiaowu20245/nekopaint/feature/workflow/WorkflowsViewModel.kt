@@ -8,9 +8,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowImportResult
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,18 +26,28 @@ import kotlinx.coroutines.launch
 data class WorkflowsUiState(
     val loading: Boolean = true,
     val templates: List<WorkflowTemplate> = emptyList(),
+    val modeFilter: WorkflowMode? = null,
     val importing: Boolean = false,
     val busyTemplateId: String? = null,
+    val runningTemplateId: String? = null,
     val actionNotice: WorkflowActionNotice? = null,
     @param:StringRes val errorRes: Int? = null,
     val errorDetail: String? = null,
     val importedTemplateId: String? = null,
-)
+) {
+    val filteredTemplates: List<WorkflowTemplate>
+        get() = if (modeFilter == null) {
+            templates
+        } else {
+            templates.filter { it.compatibility?.mode == modeFilter }
+        }
+}
 
 sealed interface WorkflowActionNotice {
     data class Renamed(val name: String) : WorkflowActionNotice
     data class Copied(val name: String) : WorkflowActionNotice
     data object Deleted : WorkflowActionNotice
+    data class QuickSubmitted(val name: String, val count: Int) : WorkflowActionNotice
 }
 
 class WorkflowsViewModel(
@@ -46,6 +61,133 @@ class WorkflowsViewModel(
         viewModelScope.launch {
             val templates = runCatching { repository.listTemplates() }.getOrDefault(emptyList())
             _uiState.update { it.copy(loading = false, templates = templates) }
+            ensureTemplatesCompatibility(templates)
+        }
+    }
+
+    fun refreshList() {
+        viewModelScope.launch {
+            val templates = runCatching { repository.listTemplates() }
+                .getOrDefault(_uiState.value.templates)
+            _uiState.update { it.copy(templates = templates) }
+        }
+    }
+
+    fun setModeFilter(mode: WorkflowMode?) {
+        _uiState.update { it.copy(modeFilter = mode) }
+    }
+
+    /**
+     * 在列表页直接按工作流当前已保存的参数快捷运行（支持连发次数）。
+     * 若工作流含种子参数，每次自动生成新随机种子以避免命中 ComfyUI 缓存。
+     */
+    fun quickRun(id: String, batchCount: Int = 1) {
+        if (_uiState.value.runningTemplateId != null) return
+        val count = batchCount.coerceIn(1, 16)
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    runningTemplateId = id,
+                    errorRes = null,
+                    errorDetail = null,
+                )
+            }
+            val baseTemplate = runCatching { repository.getTemplate(id) }.getOrNull()
+                ?.let { current ->
+                    current.copy(
+                        candidates = current.candidates.map { candidate ->
+                            if (candidate.value.isBlank() && candidate.defaultValue.isNotBlank()) {
+                                candidate.copy(value = candidate.defaultValue)
+                            } else {
+                                candidate
+                            }
+                        },
+                    )
+                }
+            if (baseTemplate == null) {
+                _uiState.update {
+                    it.copy(
+                        runningTemplateId = null,
+                        errorRes = R.string.workflow_error_generic,
+                    )
+                }
+                return@launch
+            }
+
+            var successCount = 0
+            var lastTemplate: WorkflowTemplate = baseTemplate
+            var errorRes: Int? = null
+            var errorMessage: String? = null
+
+            for (index in 0 until count) {
+                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
+                    template = lastTemplate,
+                    strategy = SeedStrategy.RANDOM,
+                    runIndex = index,
+                )
+                when (val result = repository.submit(runTemplate)) {
+                    is WorkflowSubmitResult.Success -> {
+                        successCount++
+                        lastTemplate = runTemplate
+                    }
+                    WorkflowSubmitResult.NoServer -> {
+                        errorRes = R.string.workflow_submit_no_server
+                        break
+                    }
+                    is WorkflowSubmitResult.Validation -> {
+                        errorMessage = result.summary
+                        break
+                    }
+                    is WorkflowSubmitResult.Error -> {
+                        errorMessage = result.message
+                        break
+                    }
+                }
+            }
+
+            if (successCount > 0) {
+                runCatching { repository.updateTemplate(lastTemplate) }
+                refreshTemplates()
+            }
+
+            _uiState.update {
+                it.copy(
+                    runningTemplateId = null,
+                    actionNotice = if (successCount > 0) {
+                        WorkflowActionNotice.QuickSubmitted(baseTemplate.name, successCount)
+                    } else {
+                        it.actionNotice
+                    },
+                    errorRes = errorRes,
+                    errorDetail = errorMessage,
+                )
+            }
+        }
+    }
+
+    private fun ensureTemplatesCompatibility(templates: List<WorkflowTemplate>) {
+        viewModelScope.launch {
+            var changed = false
+            val updated = templates.map { template ->
+                if (
+                    template.compatibility == null ||
+                    template.compatibility.analyzerVersion != WorkflowCompatibilityAnalyzer.CURRENT_VERSION
+                ) {
+                    val analyzed = repository.analyzeCompatibility(template)
+                    if (analyzed != null) {
+                        changed = true
+                        runCatching { repository.updateTemplate(analyzed) }
+                        analyzed
+                    } else {
+                        template
+                    }
+                } else {
+                    template
+                }
+            }
+            if (changed) {
+                _uiState.update { it.copy(templates = updated) }
+            }
         }
     }
 

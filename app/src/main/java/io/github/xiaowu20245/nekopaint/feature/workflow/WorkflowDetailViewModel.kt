@@ -12,16 +12,21 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
+import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.ModelInputResolver
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +45,12 @@ data class SubmitErrorUi(
     val nodeErrors: List<NodeErrorInfo> = emptyList(),
 )
 
+sealed interface PresetNotice {
+    data class Saved(val name: String) : PresetNotice
+    data class Updated(val name: String) : PresetNotice
+    data object Deleted : PresetNotice
+}
+
 data class WorkflowDetailUiState(
     val loading: Boolean = true,
     val template: WorkflowTemplate? = null,
@@ -50,6 +61,10 @@ data class WorkflowDetailUiState(
     val saving: Boolean = false,
     val saved: Boolean = false,
     val submitting: Boolean = false,
+    val batchCount: Int = 1,
+    val seedStrategy: SeedStrategy = SeedStrategy.RANDOM,
+    val submittedBatchCount: Int = 1,
+    val presetNotice: PresetNotice? = null,
     val fieldErrors: Map<String, FieldError> = emptyMap(),
     val submitError: SubmitErrorUi? = null,
     val submission: WorkflowSubmitResult.Success? = null,
@@ -341,17 +356,229 @@ class WorkflowDetailViewModel(
         _uiState.update { it.copy(rawJsonVisible = false) }
     }
 
-    fun save() {
-        val template = _uiState.value.template ?: return
-        if (_uiState.value.saving) return
+    fun stepBatchCount(delta: Int) {
+        _uiState.update { state ->
+            state.copy(batchCount = (state.batchCount + delta).coerceIn(1, 16))
+        }
+    }
+
+    fun cycleSeedStrategy() {
+        _uiState.update { state ->
+            val next = when (state.seedStrategy) {
+                SeedStrategy.RANDOM -> SeedStrategy.INCREMENT
+                SeedStrategy.INCREMENT -> SeedStrategy.FIXED
+                SeedStrategy.FIXED -> SeedStrategy.RANDOM
+            }
+            state.copy(seedStrategy = next)
+        }
+    }
+
+    /**
+     * 切换参数预设。
+     * `presetId == null` 表示切回工作流初始默认参数；
+     * 非空时使用 `WorkflowPresetMatcher` 按精确节点 ID + 语义签名双重匹配回填。
+     */
+    fun selectPreset(presetId: String?) {
+        val current = _uiState.value.template ?: return
+        val nextCandidates = if (presetId == null) {
+            WorkflowPresetMatcher.resetToDefault(current.candidates)
+        } else {
+            val preset = current.presets.firstOrNull { it.id == presetId } ?: return
+            WorkflowPresetMatcher.applyPreset(current.candidates, preset)
+        }
+        val updated = current.copy(
+            candidates = nextCandidates,
+            activePresetId = presetId,
+        )
+        _uiState.update {
+            it.copy(
+                template = updated,
+                dirty = false,
+                saved = false,
+                fieldErrors = emptyMap(),
+                submission = null,
+                submitError = null,
+            )
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(saving = true, errorRes = null) }
-            val result = runCatching { repository.updateTemplate(template) }
+            runCatching { repository.updateTemplate(updated) }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
+        }
+    }
+
+    fun saveNewPreset(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val current = _uiState.value.template ?: return
+        val newPreset = WorkflowPreset(
+            id = UUID.randomUUID().toString(),
+            name = trimmed,
+            entries = WorkflowPresetMatcher.buildEntries(current.candidates),
+            updatedAt = System.currentTimeMillis(),
+        )
+        val updated = current.copy(
+            presets = current.presets + newPreset,
+            activePresetId = newPreset.id,
+        )
+        viewModelScope.launch {
+            val result = runCatching { repository.updateTemplate(updated) }
             _uiState.update {
                 it.copy(
+                    template = if (result.isSuccess) updated else it.template,
+                    dirty = if (result.isSuccess) false else it.dirty,
+                    presetNotice = if (result.isSuccess) PresetNotice.Saved(trimmed) else null,
+                    errorRes = if (result.isFailure) R.string.workflow_error_generic else null,
+                )
+            }
+        }
+    }
+
+    fun renameActivePreset(newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        val current = _uiState.value.template ?: return
+        val activeId = current.activePresetId ?: return
+        val updated = current.copy(
+            presets = current.presets.map { preset ->
+                if (preset.id == activeId) {
+                    preset.copy(name = trimmed, updatedAt = System.currentTimeMillis())
+                } else {
+                    preset
+                }
+            },
+        )
+        viewModelScope.launch {
+            if (runCatching { repository.updateTemplate(updated) }.isSuccess) {
+                _uiState.update {
+                    it.copy(
+                        template = updated,
+                        presetNotice = PresetNotice.Updated(trimmed),
+                    )
+                }
+            }
+        }
+    }
+
+    fun deleteActivePreset() {
+        val current = _uiState.value.template ?: return
+        val activeId = current.activePresetId ?: return
+        val updated = current.copy(
+            presets = current.presets.filterNot { it.id == activeId },
+            activePresetId = null,
+        )
+        viewModelScope.launch {
+            if (runCatching { repository.updateTemplate(updated) }.isSuccess) {
+                _uiState.update {
+                    it.copy(
+                        template = updated,
+                        presetNotice = PresetNotice.Deleted,
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearPresetNotice() {
+        _uiState.update { it.copy(presetNotice = null) }
+    }
+
+    /**
+     * 新增或更新提示词标签组。名称不带 `#`，在提示词文本中以 `#名称` 引用。
+     * 标签组随工作流模板持久化，因此这里立即写盘，避免只存在于弹窗内存中。
+     */
+    fun addPromptTagGroup(name: String, tags: List<String>) {
+        val groupName = name.trim().removePrefix("#").trim()
+        val cleanTags = tags.map { it.trim() }.filter { it.isNotBlank() }
+        if (groupName.isBlank() || cleanTags.isEmpty()) return
+        val current = _uiState.value.template ?: return
+        val existing = current.promptTagGroups.firstOrNull {
+            it.name.equals(groupName, ignoreCase = true)
+        }
+        val groups = if (existing == null) {
+            current.promptTagGroups + PromptTagGroup(
+                id = UUID.randomUUID().toString(),
+                name = groupName,
+                tags = cleanTags,
+            )
+        } else {
+            current.promptTagGroups.map { group ->
+                if (group.id == existing.id) group.copy(tags = cleanTags) else group
+            }
+        }
+        val updated = current.copy(promptTagGroups = groups)
+        _uiState.update { it.copy(template = updated, errorRes = null) }
+        viewModelScope.launch {
+            // 标签组管理立即落盘，但不能顺带提交尚未保存的提示词/参数编辑。
+            val persisted = runCatching { repository.getTemplate(current.id) }.getOrNull()
+                ?: current
+            val toWrite = persisted.copy(promptTagGroups = groups)
+            runCatching { repository.updateTemplate(toWrite) }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
+        }
+    }
+
+    fun deletePromptTagGroup(id: String) {
+        val current = _uiState.value.template ?: return
+        val groups = current.promptTagGroups.filterNot { it.id == id }
+        val updated = current.copy(promptTagGroups = groups)
+        _uiState.update { it.copy(template = updated, errorRes = null) }
+        viewModelScope.launch {
+            val persisted = runCatching { repository.getTemplate(current.id) }.getOrNull()
+                ?: current
+            val toWrite = persisted.copy(promptTagGroups = groups)
+            runCatching { repository.updateTemplate(toWrite) }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
+        }
+    }
+
+    fun save() {
+        val current = _uiState.value.template ?: return
+        if (_uiState.value.saving) return
+        val activeId = current.activePresetId
+        val activePresetName = current.presets.firstOrNull { it.id == activeId }?.name
+        val templateToSave = if (activeId != null) {
+            val freshEntries = WorkflowPresetMatcher.buildEntries(current.candidates)
+            current.copy(
+                presets = current.presets.map { preset ->
+                    if (preset.id == activeId) {
+                        preset.copy(
+                            entries = freshEntries,
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                    } else {
+                        preset
+                    }
+                },
+            )
+        } else {
+            current
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(saving = true, errorRes = null) }
+            val result = runCatching { repository.updateTemplate(templateToSave) }
+            _uiState.update {
+                it.copy(
+                    template = if (result.isSuccess) templateToSave else it.template,
                     saving = false,
                     dirty = result.isFailure,
-                    saved = result.isSuccess,
+                    saved = result.isSuccess && activePresetName == null,
+                    presetNotice = if (result.isSuccess && activePresetName != null) {
+                        PresetNotice.Updated(activePresetName)
+                    } else {
+                        it.presetNotice
+                    },
                     errorRes = if (result.isFailure) R.string.workflow_error_generic else null,
                 )
             }
@@ -376,6 +603,9 @@ class WorkflowDetailViewModel(
             return
         }
 
+        val totalRuns = state.batchCount.coerceIn(1, 16)
+        val strategy = state.seedStrategy
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -385,61 +615,85 @@ class WorkflowDetailViewModel(
                     submission = null,
                 )
             }
-            runCatching { repository.updateTemplate(template) }
 
-            when (val result = repository.submit(template)) {
-                is WorkflowSubmitResult.Success -> {
-                    _uiState.update {
-                        it.copy(
-                            submitting = false,
-                            submission = result,
-                            dirty = false,
-                            saved = true,
-                        )
+            var latestTemplate = template
+            var lastSuccess: WorkflowSubmitResult.Success? = null
+            var successCount = 0
+
+            for (runIndex in 0 until totalRuns) {
+                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
+                    template = template,
+                    strategy = strategy,
+                    runIndex = runIndex,
+                )
+                when (val result = repository.submit(runTemplate)) {
+                    is WorkflowSubmitResult.Success -> {
+                        latestTemplate = runTemplate
+                        lastSuccess = result
+                        successCount++
                     }
-                }
 
-                is WorkflowSubmitResult.Validation -> {
-                    val fieldErrors = mutableMapOf<String, FieldError>()
-                    template.selectedCandidates.forEach { candidate ->
-                        val nodeError = result.nodeErrors.firstOrNull {
-                            it.nodeId == candidate.nodeId
+                    is WorkflowSubmitResult.Validation -> {
+                        val fieldErrors = mutableMapOf<String, FieldError>()
+                        template.selectedCandidates.forEach { candidate ->
+                            val nodeError = result.nodeErrors.firstOrNull {
+                                it.nodeId == candidate.nodeId
+                            }
+                            if (nodeError != null) {
+                                fieldErrors[candidate.id] = FieldError.Server(nodeError.message)
+                            }
                         }
-                        if (nodeError != null) {
-                            fieldErrors[candidate.id] = FieldError.Server(nodeError.message)
+                        _uiState.update {
+                            it.copy(
+                                template = latestTemplate,
+                                submitting = false,
+                                fieldErrors = fieldErrors,
+                                submitError = SubmitErrorUi(
+                                    message = result.summary,
+                                    nodeErrors = result.nodeErrors,
+                                ),
+                            )
                         }
+                        return@launch
                     }
-                    _uiState.update {
-                        it.copy(
-                            submitting = false,
-                            fieldErrors = fieldErrors,
-                            submitError = SubmitErrorUi(
-                                message = result.summary,
-                                nodeErrors = result.nodeErrors,
-                            ),
-                        )
-                    }
-                }
 
-                WorkflowSubmitResult.NoServer -> {
-                    _uiState.update {
-                        it.copy(
-                            submitting = false,
-                            submitError = SubmitErrorUi(
-                                messageRes = R.string.workflow_submit_no_server,
-                            ),
-                        )
+                    WorkflowSubmitResult.NoServer -> {
+                        _uiState.update {
+                            it.copy(
+                                template = latestTemplate,
+                                submitting = false,
+                                submitError = SubmitErrorUi(
+                                    messageRes = R.string.workflow_submit_no_server,
+                                ),
+                            )
+                        }
+                        return@launch
                     }
-                }
 
-                is WorkflowSubmitResult.Error -> {
-                    _uiState.update {
-                        it.copy(
-                            submitting = false,
-                            submitError = SubmitErrorUi(message = result.message),
-                        )
+                    is WorkflowSubmitResult.Error -> {
+                        _uiState.update {
+                            it.copy(
+                                template = latestTemplate,
+                                submitting = false,
+                                submitError = SubmitErrorUi(message = result.message),
+                            )
+                        }
+                        return@launch
                     }
                 }
+            }
+
+            runCatching { repository.updateTemplate(latestTemplate) }
+
+            _uiState.update {
+                it.copy(
+                    template = latestTemplate,
+                    submitting = false,
+                    submission = lastSuccess,
+                    submittedBatchCount = successCount.coerceAtLeast(1),
+                    dirty = false,
+                    saved = true,
+                )
             }
         }
     }

@@ -13,7 +13,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -72,7 +76,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -113,7 +119,6 @@ fun ServerScreen() {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     var deleteTarget by remember { mutableStateOf<ServerProfile?>(null) }
-    var avatarCardTarget by remember { mutableStateOf<String?>(null) }
     var avatarForForm by remember { mutableStateOf(false) }
     var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
     var argvDialog by remember { mutableStateOf<List<String>?>(null) }
@@ -127,7 +132,6 @@ fun ServerScreen() {
             pendingCropUri = uri
         } else {
             avatarForForm = false
-            avatarCardTarget = null
         }
     }
 
@@ -181,10 +185,6 @@ fun ServerScreen() {
                             onEdit = { viewModel.startEdit(card.profile) },
                             onSetActive = { viewModel.setActive(card.profile) },
                             onDelete = { deleteTarget = card.profile },
-                            onPickAvatar = {
-                                avatarCardTarget = card.profile.id
-                                avatarPicker.launch("image/*")
-                            },
                             onShowLaunchArgs = { argvDialog = it },
                         )
                     }
@@ -341,18 +341,13 @@ fun ServerScreen() {
             onDismiss = {
                 pendingCropUri = null
                 avatarForForm = false
-                avatarCardTarget = null
             },
             onCropped = { bitmap ->
-                val target = avatarCardTarget
                 val forForm = avatarForForm
                 pendingCropUri = null
                 avatarForForm = false
-                avatarCardTarget = null
                 if (forForm) {
                     viewModel.setFormAvatar(bitmap)
-                } else if (target != null) {
-                    viewModel.setAvatar(target, bitmap)
                 }
             },
         )
@@ -370,6 +365,7 @@ private fun EmptyServers(onAdd: () -> Unit) {
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ServerListCard(
     card: ServerCardUi,
@@ -379,7 +375,6 @@ private fun ServerListCard(
     onEdit: () -> Unit,
     onSetActive: () -> Unit,
     onDelete: () -> Unit,
-    onPickAvatar: () -> Unit,
     onShowLaunchArgs: (List<String>) -> Unit,
 ) {
     Card(
@@ -420,7 +415,6 @@ private fun ServerListCard(
                 ServerAvatar(
                     avatarUri = card.profile.avatarUri,
                     name = card.profile.name,
-                    onClick = onPickAvatar,
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -433,7 +427,7 @@ private fun ServerListCard(
                             },
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontSize = 17.sp,
-                                fontWeight = FontWeight.SemiBold,
+                                fontWeight = FontWeight.Medium,
                             ),
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
@@ -458,26 +452,40 @@ private fun ServerListCard(
                     )
                     card.snapshot?.let { snapshot ->
                         if (expanded) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xxs),
+                            // 延迟与更新时间是两个不可拆分的原子项；窄屏时更新时间整行下移。
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(NekoSpacing.sm),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
-                                Icon(
-                                    imageVector = NekoIcons.Stopwatch,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(NekoIconSize.xs),
-                                )
+                                Row(
+                                    modifier = Modifier.wrapContentWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xxs),
+                                ) {
+                                    Icon(
+                                        imageVector = NekoIcons.Stopwatch,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(NekoIconSize.xs),
+                                    )
+                                    Text(
+                                        text = stringResource(
+                                            R.string.server_latency,
+                                            snapshot.latencyMs,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                }
                                 Text(
                                     text = stringResource(
-                                        R.string.server_latency,
-                                        snapshot.latencyMs,
-                                    ) + " · " + stringResource(
                                         R.string.server_last_updated,
                                         formatTime(snapshot.checkedAt),
                                     ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
                                 )
                             }
                         } else {
@@ -520,10 +528,6 @@ private fun ServerListCard(
                     onEdit = onEdit,
                     onSetActive = onSetActive,
                     onDelete = onDelete,
-                    showLaunchArgs = card.snapshot != null,
-                    onShowLaunchArgs = {
-                        onShowLaunchArgs(card.snapshot?.stats?.argv.orEmpty())
-                    },
                 )
 
                 card.error?.let { error ->
@@ -543,7 +547,12 @@ private fun ServerListCard(
 
                 card.snapshot?.let { snapshot ->
                     GpuSection(snapshot)
-                    SystemSection(snapshot.stats)
+                    SystemSection(
+                        stats = snapshot.stats,
+                        onShowLaunchArgs = {
+                            onShowLaunchArgs(snapshot.stats.argv.orEmpty())
+                        },
+                    )
                 }
             }
         }
@@ -554,7 +563,7 @@ private fun ServerListCard(
 private fun ServerAvatar(
     avatarUri: String?,
     name: String,
-    onClick: () -> Unit,
+    onClick: (() -> Unit)? = null,
 ) {
     val avatarDescription = stringResource(R.string.server_avatar_desc, name)
     Box(
@@ -562,9 +571,15 @@ private fun ServerAvatar(
             .size(56.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .clickable(
-                onClickLabel = stringResource(R.string.server_choose_icon),
-                onClick = onClick,
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        onClickLabel = stringResource(R.string.server_choose_icon),
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier
+                },
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -594,8 +609,6 @@ private fun CardActions(
     onEdit: () -> Unit,
     onSetActive: () -> Unit,
     onDelete: () -> Unit,
-    showLaunchArgs: Boolean,
-    onShowLaunchArgs: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -605,7 +618,12 @@ private fun CardActions(
             TextButton(
                 onClick = onSetActive,
                 enabled = !isTesting,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.textButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
             ) {
                 Icon(
                     imageVector = Icons.Outlined.CheckCircle,
@@ -613,7 +631,10 @@ private fun CardActions(
                     modifier = Modifier.size(NekoIconSize.sm),
                 )
                 Spacer(Modifier.width(NekoSpacing.xs))
-                Text(stringResource(R.string.server_set_current))
+                Text(
+                    text = stringResource(R.string.server_set_current),
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
         TextButton(
@@ -641,21 +662,6 @@ private fun CardActions(
             )
             Spacer(Modifier.width(NekoSpacing.xs))
             Text(stringResource(R.string.server_edit))
-        }
-        if (showLaunchArgs) {
-            TextButton(
-                onClick = onShowLaunchArgs,
-                enabled = !isTesting,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-            ) {
-                Icon(
-                    imageVector = NekoIcons.Terminal,
-                    contentDescription = null,
-                    modifier = Modifier.size(NekoIconSize.sm),
-                )
-                Spacer(Modifier.width(NekoSpacing.xs))
-                Text(stringResource(R.string.server_launch_args))
-            }
         }
         Spacer(Modifier.weight(1f))
         TextButton(
@@ -1029,30 +1035,51 @@ private fun ConnectionTestFailureBanner(error: ServerError) {
 @Composable
 private fun CollapsedMetrics(snapshot: ConnectionSnapshot) {
     val gpu = snapshot.stats.devices.firstOrNull()
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xs),
-    ) {
-        gpu?.let {
-            val parts = parseGpuName(it.name)
+    BoxWithConstraints {
+        // 列宽不足时只缩小字号与图标，仍保持三项单行，避免撑高卡片。
+        val compact = maxWidth < 160.dp
+        val style = if (compact) {
+            MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp)
+        } else {
+            MaterialTheme.typography.bodySmall
+        }
+        val iconSize = if (compact) 12.dp else NekoIconSize.xs
+        val itemGap = if (compact) 1.dp else 2.dp
+        val rowSpacing = if (compact) 2.dp else 4.dp
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(rowSpacing),
+        ) {
+            gpu?.let {
+                val parts = parseGpuName(it.name)
+                MetricIconText(
+                    icon = NekoIcons.Chip,
+                    text = parts.model,
+                    iconTint = MaterialTheme.colorScheme.primary,
+                    style = style,
+                    iconSize = iconSize,
+                    itemGap = itemGap,
+                )
+                MetricIconText(
+                    icon = NekoIcons.MemoryStick,
+                    text = stringResource(
+                        R.string.server_vram_percent_short,
+                        (it.vramUsedFraction.coerceIn(0f, 1f) * 100).roundToInt(),
+                    ),
+                    iconTint = NekoTheme.colors.success,
+                    style = style,
+                    iconSize = iconSize,
+                    itemGap = itemGap,
+                )
+            }
             MetricIconText(
-                icon = NekoIcons.Chip,
-                text = parts.model,
-                iconTint = MaterialTheme.colorScheme.primary,
-            )
-            MetricIconText(
-                icon = NekoIcons.MemoryStick,
-                text = stringResource(
-                    R.string.server_vram_percent_short,
-                    (it.vramUsedFraction.coerceIn(0f, 1f) * 100).roundToInt(),
-                ),
-                iconTint = NekoTheme.colors.success,
+                icon = NekoIcons.Stopwatch,
+                text = stringResource(R.string.server_latency, snapshot.latencyMs),
+                style = style,
+                iconSize = iconSize,
+                itemGap = itemGap,
             )
         }
-        MetricIconText(
-            icon = NekoIcons.Stopwatch,
-            text = stringResource(R.string.server_latency, snapshot.latencyMs),
-        )
     }
 }
 
@@ -1061,20 +1088,24 @@ private fun MetricIconText(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String,
     iconTint: androidx.compose.ui.graphics.Color? = null,
+    style: TextStyle,
+    iconSize: Dp,
+    itemGap: Dp,
 ) {
     Row(
+        modifier = Modifier.wrapContentWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(itemGap),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(NekoIconSize.xs),
+            modifier = Modifier.size(iconSize),
         )
         Text(
             text = text,
-            style = MaterialTheme.typography.bodySmall,
+            style = style,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
         )
@@ -1226,7 +1257,10 @@ private fun parseGpuName(raw: String?): GpuNameParts {
 }
 
 @Composable
-private fun SystemSection(stats: ServerStats) {
+private fun SystemSection(
+    stats: ServerStats,
+    onShowLaunchArgs: () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(NekoRadius.md),
@@ -1242,7 +1276,10 @@ private fun SystemSection(stats: ServerStats) {
             modifier = Modifier.padding(NekoSpacing.cardPaddingCompact),
             verticalArrangement = Arrangement.spacedBy(NekoSpacing.sm),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
                     imageVector = NekoIcons.Display,
                     contentDescription = null,
@@ -1258,6 +1295,33 @@ private fun SystemSection(stats: ServerStats) {
                     ),
                     color = MaterialTheme.colorScheme.primary,
                 )
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = onShowLaunchArgs,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.textButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(
+                            alpha = 0.8f,
+                        ),
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp),
+                ) {
+                    Icon(
+                        imageVector = NekoIcons.Terminal,
+                        contentDescription = null,
+                        modifier = Modifier.size(NekoIconSize.xs),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.server_launch_args),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                    )
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

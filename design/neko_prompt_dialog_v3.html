@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NekoPaint 原创蓝灰配色：简略提示词卡 + 弹窗式智能编辑器</title>
+<script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "MiSans", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: transparent;
+    color: #1A1B21;
+    margin: 0;
+    padding: 6px;
+  }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .group-card {
+    background: #EEEDF4;
+    border-radius: 16px;
+    border: 1px solid rgba(118, 118, 128, 0.14);
+  }
+  .inner-cell {
+    background: #F7F6FC;
+    border-radius: 12px;
+    border: 1px solid rgba(118, 118, 128, 0.14);
+  }
+  /* NekoPaint 蓝灰体系双语标签卡 */
+  .neko-tag-card {
+    background: #FAF8FF;
+    border: 1px solid rgba(79, 99, 172, 0.22);
+    border-radius: 10px;
+  }
+  .neko-group-card {
+    background: #DAE1FF;
+    border: 1px solid rgba(79, 99, 172, 0.45);
+    border-radius: 10px;
+  }
+</style>
+</head>
+<body>
+
+<div class="max-w-md mx-auto">
+  <!-- 顶部状态切换提示 -->
+  <div class="flex items-center justify-between gap-1.5 mb-2 bg-[#E3E2EC] p-1 rounded-xl text-xs">
+    <button id="tab-collapsed" onclick="showModal(false)" class="flex-1 py-1.5 px-2 rounded-lg bg-[#4F63AC] text-white font-medium transition">
+      1. 平时状态：简略提示词卡
+    </button>
+    <button id="tab-modal" onclick="showModal(true)" class="flex-1 py-1.5 px-2 rounded-lg text-[#45464F] transition">
+      2. 点击「智能编辑」打开弹窗
+    </button>
+  </div>
+
+  <!-- 主画布容器 -->
+  <div class="bg-[#FAF8FF] rounded-2xl border border-gray-200 p-3.5 relative min-h-[440px] overflow-hidden">
+
+    <!-- ================= 背景底层：工作流详情页的【简略提示词卡片】 ================= -->
+    <div class="space-y-2.5">
+      <div class="flex items-center justify-between bg-[#EEEDF4] px-3 py-2 rounded-2xl border border-black/5 text-xs">
+        <div class="flex items-center gap-1.5">
+          <span class="px-2 py-0.5 rounded-md bg-[#DAE1FF] text-[#23336E] font-medium">蒙版重绘</span>
+          <span class="text-[#45464F]">✓ 9 节点 · 2 图 / 1 蒙版</span>
+        </div>
+        <span class="mono text-[#3C4A7E] bg-[#E3E2EC] px-2 py-0.5 rounded-lg">{ } JSON</span>
+      </div>
+
+      <!-- 提示词分组（平时简略显示，高度极省！） -->
+      <div class="group-card p-3 space-y-2.5">
+        <div class="flex items-center justify-between text-xs font-medium text-[#3C4A7E]">
+          <span>提示词</span>
+          <span class="mono text-[#5E5F68]">#4, #5</span>
+        </div>
+
+        <!-- 简略态：正面提示词 -->
+        <div onclick="showModal(true)" class="inner-cell p-2.5 cursor-pointer hover:border-[#4F63AC]/50 transition space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm font-medium text-[#1A1B21]">正面提示词</span>
+              <span class="mono text-xs text-[#5E5F68] bg-[#E6E5F0] px-1.5 py-0.5 rounded">#4</span>
+            </div>
+            <!-- 点击打开智能编辑弹窗的按钮 -->
+            <button onclick="showModal(true);event.stopPropagation()" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#DAE1FF] text-[#23336E] text-xs font-medium hover:bg-[#C8D3FF]">
+              <span>🏷️</span> <span>智能编辑</span>
+            </button>
+          </div>
+
+          <!-- 简略两行预览 + 内含标签组小胶囊提示 -->
+          <div id="brief-pos-text" class="mono text-xs text-[#45464F] line-clamp-2 leading-relaxed">
+            original, kemomimi-chan \(naga u\), 1girl, silver hair, red eyes, white thighhighs, #起手画质组, fox_girl
+          </div>
+
+          <div class="flex items-center justify-between text-xs text-[#5E5F68] pt-0.5">
+            <div class="flex items-center gap-1.5">
+              <span class="px-1.5 py-0.2 rounded bg-[#DAE1FF]/70 text-[#23336E] font-medium">📦 含 1 个标签组</span>
+              <span>· 共 8 项</span>
+            </div>
+            <span id="brief-token-count" class="mono">24 tokens</span>
+          </div>
+        </div>
+
+        <!-- 简略态：负面提示词 -->
+        <div onclick="showModal(true)" class="inner-cell p-2.5 cursor-pointer hover:border-[#4F63AC]/50 transition space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5">
+              <span class="text-sm font-medium text-[#1A1B21]">负面提示词</span>
+              <span class="mono text-xs text-[#5E5F68] bg-[#E6E5F0] px-1.5 py-0.5 rounded">#5</span>
+            </div>
+            <button onclick="showModal(true);event.stopPropagation()" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#E3E2EC] text-[#3C4A7E] text-xs font-medium">
+              <span>🏷️</span> <span>智能编辑</span>
+            </button>
+          </div>
+          <div class="mono text-xs text-[#5E5F68] truncate">
+            worst quality, blurry, low quality, bad anatomy
+          </div>
+        </div>
+      </div>
+
+      <!-- 下方其他参数示意 -->
+      <div class="group-card p-3">
+        <div class="text-xs font-medium text-[#3C4A7E] mb-2">采样 (由于提示词卡简略显示，首屏直接能看到采样参数！)</div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="inner-cell p-2"><span class="text-[#5E5F68]">CFG:</span> <b class="mono">7.0</b></div>
+          <div class="inner-cell p-2"><span class="text-[#5E5F68]">步数:</span> <b class="mono">20</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 顶层弹窗：点击「🏷️ 智能编辑」后打开的 NekoPaint 蓝灰风弹窗 ================= -->
+    <div id="editor-modal" class="hidden absolute inset-0 bg-black/35 flex items-center justify-center p-2.5 z-20">
+      <div class="bg-[#FAF8FF] w-full rounded-[24px] border border-gray-200 p-3.5 space-y-2.5 max-h-[420px] overflow-y-auto">
+        <!-- 弹窗标题栏 -->
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="text-base font-bold text-[#1A1B21]">正面提示词</span>
+            <span class="mono text-xs text-[#5E5F68] ml-1">#4 · CLIPTextEncode</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button onclick="toggleMgrInModal()" id="btn-toggle-mgr" class="px-2.5 py-1 rounded-lg bg-[#E3E2EC] text-[#3C4A7E] text-xs font-medium">
+              📦 标签组管理
+            </button>
+            <button onclick="showModal(false)" class="px-3 py-1 rounded-lg bg-[#4F63AC] text-white text-xs font-medium">
+              完成
+            </button>
+          </div>
+        </div>
+
+        <!-- 弹窗子视图 A：提示词编辑主界面 -->
+        <div id="modal-edit-body" class="space-y-2.5">
+          <!-- 1. 输入框 + NekoPaint 浅蓝灰风浮动补全菜单 -->
+          <div class="relative">
+            <textarea id="ta-modal" rows="2" oninput="onModalInput()" class="mono w-full p-2.5 pb-6 text-xs rounded-xl bg-white border-2 border-[#4F63AC] text-[#1A1B21] focus:outline-none">original, kemomimi-chan \(naga u\), 1girl, silver hair, red eyes, #起手画质组, fox</textarea>
+            <span id="modal-tokens" class="mono absolute right-2 bottom-1.5 px-2 py-0.5 rounded-md bg-[#DAE1FF] text-[#23336E] text-xs font-medium">
+              22 tokens
+            </span>
+
+            <!-- NekoPaint 原创浅蓝灰配色浮动候选列表 -->
+            <div id="neko-dropdown" class="mt-1 rounded-xl bg-[#EEEDF4] border border-[#4F63AC]/35 overflow-hidden">
+              <div class="flex items-center justify-between px-2.5 py-1 bg-[#E3E2EC] text-xs text-[#5E5F68]">
+                <span id="neko-dd-title">🔍 联想匹配 "fox"（点选补全）</span>
+                <button onclick="document.getElementById('neko-dropdown').classList.add('hidden')" class="text-[#45464F] px-1 font-bold">×</button>
+              </div>
+              <div id="neko-dd-list" class="max-h-[120px] overflow-y-auto divide-y divide-black/5 text-xs">
+                <!-- JS 渲染：选中项采用 #DAE1FF 柔和蓝灰底 + #23336E 深蓝字 -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. 翻译与 AI 润色小栏 -->
+          <div class="bg-[#EEEDF4] p-2 rounded-xl space-y-1.5">
+            <div class="flex items-center gap-1.5">
+              <input id="neko-trans-inp" type="text" value="神社台阶，飘落的樱花" placeholder="输入中文进行翻译或 AI 润色..." class="flex-1 px-2.5 py-1 text-xs rounded-lg bg-white border border-gray-200 focus:outline-none">
+              <button onclick="nekoTranslate()" class="px-2.5 py-1 rounded-lg bg-[#E3E2EC] text-[#23336E] text-xs font-medium">翻译</button>
+              <button onclick="nekoPolish()" class="px-2.5 py-1 rounded-lg bg-[#DAE1FF] text-[#23336E] text-xs font-medium">✨ 润色</button>
+            </div>
+            <div class="flex items-center justify-between gap-2 bg-white px-2.5 py-1 rounded-lg text-xs">
+              <span id="neko-trans-out" class="mono text-[#1A1B21] truncate">shrine stairs, falling cherry blossoms</span>
+              <button onclick="nekoAppendTrans()" class="px-2 py-0.5 rounded-md bg-[#4F63AC] text-white font-medium shrink-0">＋ 加入</button>
+            </div>
+          </div>
+
+          <!-- 3. NekoPaint 蓝灰风已选词条与标签组卡片池 -->
+          <div class="bg-[#EEEDF4] p-2.5 rounded-xl space-y-1.5">
+            <div class="flex items-center justify-between text-xs text-[#5E5F68]">
+              <span>已选词条与标签组（点击 × 移除）</span>
+              <span class="text-[#3C4A7E]">提交时自动展开标签组</span>
+            </div>
+            <div id="neko-tag-pool" class="flex flex-wrap gap-1.5 max-h-[115px] overflow-y-auto">
+              <!-- JS 渲染 -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 弹窗子视图 B：标签组新建与管理 -->
+        <div id="modal-mgr-body" class="hidden space-y-2 text-xs">
+          <div class="p-2.5 rounded-xl bg-[#EEEDF4] space-y-1.5">
+            <div class="font-medium text-[#23336E]">＋ 创建新标签组</div>
+            <input id="new-grp-name" type="text" placeholder="标签组名（如：光影氛围组）" class="w-full px-2.5 py-1.5 rounded-lg bg-white border border-gray-200">
+            <input id="new-grp-val" type="text" placeholder="包含的提示词，用英文逗号分隔" class="mono w-full px-2.5 py-1.5 rounded-lg bg-white border border-gray-200">
+            <button onclick="addNekoGroup()" class="w-full py-1.5 rounded-lg bg-[#4F63AC] text-white font-medium">保存标签组</button>
+          </div>
+          <div id="neko-grp-items" class="space-y-1.5"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const ITEMS = [
+    { type: 'group', key: '#起手画质组', zh: '📦 标签组 (4词)', expand: 'masterpiece, best quality, very aesthetic, absurdres', kw: '起手 画质' },
+    { type: 'group', key: '#白发狐娘组', zh: '📦 标签组 (5词)', expand: '1girl, fox ears, fox tail, silver hair, red eyes', kw: 'fox 狐娘 白发' },
+    { type: 'tag', key: 'fox_girl', zh: '狐娘', kw: 'fox girl 狐娘' },
+    { type: 'tag', key: 'fox ears', zh: '狐狸耳朵', kw: 'fox ears 狐狸耳朵' },
+    { type: 'tag', key: 'fox tail', zh: '狐狸尾巴', kw: 'fox tail 狐狸尾巴' },
+    { type: 'tag', key: 'original', zh: '原创', kw: 'original' },
+    { type: 'tag', key: 'kemomimi-chan \\(naga u\\)', zh: '兽耳酱', kw: 'kemomimi' },
+    { type: 'tag', key: '1girl', zh: '1个女孩', kw: '1girl' },
+    { type: 'tag', key: 'silver hair', zh: '银发', kw: 'silver hair' },
+    { type: 'tag', key: 'red eyes', zh: '红瞳', kw: 'red eyes' }
+  ];
+
+  function showModal(open) {
+    document.getElementById('editor-modal').classList.toggle('hidden', !open);
+    document.getElementById('tab-collapsed').className = 'flex-1 py-1.5 px-2 rounded-lg transition ' + (!open ? 'bg-[#4F63AC] text-white font-medium' : 'text-[#45464F]');
+    document.getElementById('tab-modal').className = 'flex-1 py-1.5 px-2 rounded-lg transition ' + (open ? 'bg-[#4F63AC] text-white font-medium' : 'text-[#45464F]');
+    if (!open) {
+      document.getElementById('brief-pos-text').textContent = document.getElementById('ta-modal').value;
+    } else {
+      onModalInput();
+    }
+  }
+
+  function onModalInput() {
+    const ta = document.getElementById('ta-modal');
+    const raw = ta.value;
+    const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+
+    // 渲染标签池
+    const pool = document.getElementById('neko-tag-pool');
+    pool.innerHTML = '';
+    parts.forEach((p, idx) => {
+      const found = ITEMS.find(x => x.key.toLowerCase() === p.toLowerCase());
+      const isGrp = found && found.type === 'group';
+      const el = document.createElement('div');
+      el.className = (isGrp ? 'neko-group-card' : 'neko-tag-card') + ' px-2.5 py-1 flex flex-col justify-between';
+      el.innerHTML = `
+        <div class="flex items-center justify-between gap-2 text-xs font-medium text-[#1A1B21]">
+          <span class="mono">${p}</span>
+          <button onclick="delModalPart(${idx})" class="text-[#5E5F68] hover:text-[#B91C1C]">×</button>
+        </div>
+        <div class="text-xs text-[#4F63AC] mt-0.5">${found ? found.zh : '自定义词条'}</div>
+      `;
+      pool.appendChild(el);
+    });
+
+    // 联想匹配最后一个逗号后的词
+    const query = raw.includes(',') ? raw.substring(raw.lastIndexOf(',') + 1).trim() : raw.trim();
+    const dd = document.getElementById('neko-dropdown');
+    const list = document.getElementById('neko-dd-list');
+    if (!query) {
+      dd.classList.add('hidden');
+      return;
+    }
+    const q = query.toLowerCase();
+    const matches = ITEMS.filter(x => x.key.toLowerCase().includes(q) || x.zh.toLowerCase().includes(q) || x.kw.toLowerCase().includes(q));
+    if (matches.length === 0) {
+      dd.classList.add('hidden');
+      return;
+    }
+    dd.classList.remove('hidden');
+    document.getElementById('neko-dd-title').textContent = `🔍 联想匹配 "${query}"（点选补全）`;
+    list.innerHTML = '';
+    matches.forEach((m, i) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between px-3 py-1.5 cursor-pointer ' +
+        (i === 0 ? 'bg-[#DAE1FF] text-[#23336E] font-medium' : 'hover:bg-[#E3E2EC] text-[#1A1B21]');
+      row.innerHTML = `<span class="mono">${m.key}</span><span class="text-[#4F63AC]">${m.zh}</span>`;
+      row.onclick = () => {
+        const prefix = raw.includes(',') ? raw.substring(0, raw.lastIndexOf(',') + 1) + ' ' : '';
+        ta.value = prefix + m.key + ', ';
+        dd.classList.add('hidden');
+        onModalInput();
+      };
+      list.appendChild(row);
+    });
+  }
+
+  function delModalPart(idx) {
+    const ta = document.getElementById('ta-modal');
+    const parts = ta.value.split(',').map(s => s.trim()).filter(Boolean);
+    parts.splice(idx, 1);
+    ta.value = parts.join(', ');
+    onModalInput();
+  }
+
+  function nekoTranslate() {
+    document.getElementById('neko-trans-out').textContent = 'shrine stairs, falling cherry blossoms';
+  }
+  function nekoPolish() {
+    document.getElementById('neko-trans-out').textContent = 'stone shrine steps, falling sakura petals, cinematic warm lighting';
+  }
+  function nekoAppendTrans() {
+    const ta = document.getElementById('ta-modal');
+    const out = document.getElementById('neko-trans-out').textContent;
+    ta.value = ta.value.trim().replace(/,\s*$/, '') + ', ' + out;
+    onModalInput();
+  }
+
+  let mgrOpen = false;
+  function toggleMgrInModal() {
+    mgrOpen = !mgrOpen;
+    document.getElementById('modal-edit-body').classList.toggle('hidden', mgrOpen);
+    document.getElementById('modal-mgr-body').classList.toggle('hidden', !mgrOpen);
+    document.getElementById('btn-toggle-mgr').textContent = mgrOpen ? '← 返回编辑' : '📦 标签组管理';
+    if (mgrOpen) renderNekoGroups();
+  }
+
+  function renderNekoGroups() {
+    const c = document.getElementById('neko-grp-items');
+    c.innerHTML = '';
+    ITEMS.filter(x => x.type === 'group').forEach(g => {
+      const d = document.createElement('div');
+      d.className = 'p-2.5 rounded-xl bg-[#EEEDF4] space-y-1';
+      d.innerHTML = `<div class="flex justify-between font-medium text-[#23336E]"><span>${g.key}</span><span>${g.zh}</span></div><div class="mono text-[#5E5F68]">${g.expand}</div>`;
+      c.appendChild(d);
+    });
+  }
+
+  function addNekoGroup() {
+    const name = document.getElementById('new-grp-name').value.trim() || '自定义组';
+    const val = document.getElementById('new-grp-val').value.trim() || 'cinematic lighting, best quality';
+    ITEMS.unshift({
+      type: 'group',
+      key: '#' + name.replace(/^#/, ''),
+      zh: '📦 标签组',
+      expand: val,
+      kw: name
+    });
+    renderNekoGroups();
+  }
+</script>
+</body>
+</html>

@@ -33,6 +33,7 @@ class ServerViewModel(
 
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
+    private val refreshingIds = mutableSetOf<String>()
 
     init {
         viewModelScope.launch {
@@ -63,21 +64,26 @@ class ServerViewModel(
 
     fun refreshActive() {
         val card = _uiState.value.activeCard ?: return
-        if (!card.isTesting) refreshCard(card.profile.id)
+        if (!card.isTesting) refreshCard(card.profile.id, silent = true)
     }
 
-    fun refreshCard(id: String) {
+    fun refreshCard(id: String, silent: Boolean = false) {
         val card = _uiState.value.cards.firstOrNull { it.profile.id == id } ?: return
-        if (card.isTesting) return
-        _uiState.update { state ->
-            state.copy(
-                cards = state.cards.map {
-                    if (it.profile.id == id) it.copy(isTesting = true, error = null) else it
-                },
-            )
+        if (card.isTesting || !refreshingIds.add(id)) return
+        // 静默刷新保留徽章与按钮状态；只有手动刷新或首次无数据时才显示“检测中”。
+        val showTesting = !silent || card.snapshot == null
+        if (showTesting) {
+            _uiState.update { state ->
+                state.copy(
+                    cards = state.cards.map {
+                        if (it.profile.id == id) it.copy(isTesting = true, error = null) else it
+                    },
+                )
+            }
         }
         viewModelScope.launch {
-            repository.check(card.profile.toConfig())
+            try {
+                repository.check(card.profile.toConfig())
                 .onSuccess { snapshot ->
                     _uiState.update { state ->
                         state.copy(
@@ -109,6 +115,9 @@ class ServerViewModel(
                         )
                     }
                 }
+            } finally {
+                refreshingIds.remove(id)
+            }
         }
     }
 
@@ -117,7 +126,7 @@ class ServerViewModel(
         val willExpand = _uiState.value.expandedId != id
         _uiState.update { it.copy(expandedId = if (willExpand) id else null) }
         if (willExpand && !card.isTesting) {
-            refreshCard(id)
+            refreshCard(id, silent = card.snapshot != null)
         }
     }
 

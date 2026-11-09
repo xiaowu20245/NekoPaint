@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-2">
+  <div class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-4 max-w-2xl mx-auto">
+    <!-- Top Note -->
+    <div class="flex items-center justify-between mb-3 pb-2 border-b border-[var(--border)]">
+      <span class="text-sm font-semibold text-[var(--foreground)]">非当前但在线 · 展开态预览（启动参数移入系统环境右上角）</span>
+      <span class="text-xs text-[var(--muted-foreground)]">操作栏最多 4 项，绝不挤爆</span>
+    </div>
+
+    <!-- Simulated TopAppBar Title (22sp Bold 700) -->
+    <div class="px-1 mb-2.5 flex items-baseline justify-between">
+      <span class="text-[22px] font-bold tracking-tight text-[var(--foreground)]">服务器</span>
+      <span class="text-xs text-[var(--muted-foreground)]">顶栏 Bold(700) &gt; 卡片名 Medium(500)</span>
+    </div>
+
+    <!-- Expanded Non-Active Online Card -->
+    <div class="rounded-2xl p-3.5 bg-[#EEEDF4] text-[#1A1B21] space-y-2.5">
+      <!-- Header -->
+      <div class="flex items-center gap-3.5">
+        <!-- Non-clickable display avatar -->
+        <div class="w-14 h-14 rounded-2xl bg-[#DEE4FA] flex items-center justify-center shrink-0">
+          <svg class="w-6 h-6 text-[#4F63AC]" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24">
+            <rect x="3" y="4" width="18" height="6" rx="1.5"/>
+            <rect x="3" y="14" width="18" height="6" rx="1.5"/>
+            <circle cx="7" cy="7" r="1" fill="currentColor"/>
+            <circle cx="7" cy="17" r="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="flex-1 min-w-0">
+          <!-- Medium (500) 17sp so it never looks bolder than TopAppBar on HyperOS/MiSans -->
+          <div class="text-[17px] font-medium text-[#1E2028] truncate">客厅 4090 主机</div>
+          <div class="mono text-xs text-[#5A5D68] mt-0.5 truncate">http://192.168.1.23:8188/</div>
+          <div class="flex items-center gap-1.5 mt-1 text-xs text-[#686B78]">
+            <svg class="w-3.5 h-3.5 text-[#686B78]" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5M9 2h6"/></svg>
+            <span>18 ms · 更新于 10:45:12（静默刷新不闪烁）</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <div class="flex flex-col items-end gap-1.5">
+            <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#D2F6DF] text-[#0D4A29]">✓ 在线</span>
+            <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#DAE1FF] text-[#283868]">▷ 任务 0</span>
+          </div>
+          <svg class="w-5 h-5 text-[#686B78]" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+        </div>
+      </div>
+
+      <!-- Action Row: At most 4 items! Spacious and clean -->
+      <div class="border-t border-[#C6C5D0]/50 pt-2 flex items-center justify-between text-xs font-medium">
+        <div class="flex items-center gap-4 text-[#4F63AC]">
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#DAE1FF] text-[#283868]">✓ 设为当前</span>
+          <span class="inline-flex items-center gap-1">↻ 刷新</span>
+          <span class="inline-flex items-center gap-1">✎ 编辑</span>
+        </div>
+        <span class="inline-flex items-center gap-1 text-[#BA1A1A]">🗑 删除</span>
+      </div>
+
+      <!-- GPU Section -->
+      <div class="rounded-xl bg-[#E4E6F1] p-3 space-y-2">
+        <div class="flex items-center justify-between">
+          <span class="inline-flex items-center gap-1.5 text-xs font-medium text-[#3C4A7E]">
+            <svg class="w-4 h-4 text-[#4F63AC]" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M19 9h3M19 15h3M2 9h3M2 15h3"/></svg>
+            NVIDIA GeForce RTX 4090
+          </span>
+          <span class="mono text-xs text-[#686B78]">cuda:0</span>
+        </div>
+        <div class="space-y-1">
+          <div class="flex items-center justify-between text-xs">
+            <span class="inline-flex items-center gap-1.5 text-[#5A5D68]">
+              <svg class="w-3.5 h-3.5 text-[#686B78]" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="10" rx="2"/><path d="M6 10v2M10 10v2M14 10v2M18 10v2"/></svg>
+              显存 3.2 / 24.0 GiB（可用 20.8 GiB）
+            </span>
+            <span class="font-medium text-[#1B7F4B]">13%</span>
+          </div>
+          <div class="w-full h-1.5 rounded-full bg-[#C6C5D0]/60 overflow-hidden">
+            <div class="h-full bg-[#1B7F4B] rounded-full" style="width: 13%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Section: 'Launch Args' moved cleanly to the top-right header! -->
+      <div class="rounded-xl bg-[#E4E6F1] p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="inline-flex items-center gap-1.5 text-xs font-medium text-[#3C4A7E]">
+            <svg class="w-4 h-4 text-[#4F63AC]" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            系统环境
+          </span>
+          <!-- Launch Args Pill Button right-aligned in System Header -->
+          <button class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#DAE1FF]/80 text-[#3C4A7E] text-xs font-medium hover:bg-[#DAE1FF]">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>
+            启动参数
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-x-5 gap-y-2 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="inline-flex items-center gap-1.5 text-[#686B78]">🖥 OS</span>
+            <span class="mono text-[#2E3038]">win32</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="inline-flex items-center gap-1.5 text-[#686B78]">🧩 ComfyUI</span>
+            <span class="mono text-[#2E3038]">0.27.0</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="inline-flex items-center gap-1.5 text-[#686B78]">🐍 Python</span>
+            <span class="mono text-[#2E3038]">3.13.11</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="inline-flex items-center gap-1.5 text-[#686B78]">🔥 PyTorch</span>
+            <span class="mono text-[#2E3038]">2.9.1+cu128</span>
+          </div>
+          <div class="col-span-2 flex items-center justify-between pt-1.5 border-t border-[#C6C5D0]/40 text-[#686B78]">
+            <span class="inline-flex items-center gap-1.5">💾 系统内存</span>
+            <span class="mono text-[#2E3038]">14.8 GiB / 15.4 GiB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
