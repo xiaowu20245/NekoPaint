@@ -39,6 +39,9 @@ class TaskManager(
     private val _progress = MutableStateFlow<Map<String, TaskProgress>>(emptyMap())
     val progress: StateFlow<Map<String, TaskProgress>> = _progress.asStateFlow()
 
+    // 每个 prompt 已完成的节点集合，用于计算工作流总进度。
+    private val executedNodeIds = mutableMapOf<String, MutableSet<String>>()
+
     private val _queue = MutableStateFlow<QueueSnapshot?>(null)
     val queue: StateFlow<QueueSnapshot?> = _queue.asStateFlow()
 
@@ -92,6 +95,7 @@ class TaskManager(
                     _history.value = emptyList()
                     _queue.value = null
                     _progress.value = emptyMap()
+                    executedNodeIds.clear()
                     _queueError.value = null
                     _historyError.value = null
                     _hasMoreHistory.value = false
@@ -131,6 +135,8 @@ class TaskManager(
                     _queue.value = snapshot
                     _queueError.value = null
                     syncTasksWithQueue(snapshot)
+                    // 队列快照到达后才知道工作流节点总数，重算一次总进度。
+                    refreshOverallProgress()
                 }
                 .onFailure { throwable ->
                     // 失败时保留上次队列，界面据此标记为过期。
@@ -262,6 +268,8 @@ class TaskManager(
             is ComfyEvent.Status -> _queueRemaining.value = event.queueRemaining
 
             is ComfyEvent.ExecutionStart -> {
+                // 新任务开始，重置节点完成集合，避免 promptId 复用时串数据。
+                executedNodeIds[event.promptId] = mutableSetOf()
                 updateTask(event.promptId) {
                     it.copy(
                         status = "running",
@@ -277,7 +285,7 @@ class TaskManager(
                 _progress.update { current ->
                     val old = current[event.promptId]
                     current + (
-                        event.promptId to TaskProgress(
+                        event.promptId to buildProgress(
                             promptId = event.promptId,
                             status = "running",
                             currentNode = nodeId,
@@ -293,7 +301,7 @@ class TaskManager(
                 val label = nodeLabel(event.promptId, event.nodeId)
                 _progress.update { current ->
                     current + (
-                        event.promptId to TaskProgress(
+                        event.promptId to buildProgress(
                             promptId = event.promptId,
                             status = "running",
                             currentNode = event.nodeId,
@@ -312,7 +320,7 @@ class TaskManager(
                     val label = nodeLabel(event.promptId, running.nodeId)
                     _progress.update { current ->
                         current + (
-                            event.promptId to TaskProgress(
+                            event.promptId to buildProgress(
                                 promptId = event.promptId,
                                 status = "running",
                                 currentNode = running.nodeId,
@@ -327,6 +335,7 @@ class TaskManager(
 
             is ComfyEvent.Success -> {
                 _progress.update { it - event.promptId }
+                executedNodeIds.remove(event.promptId)
                 updateTask(event.promptId) {
                     it.copy(
                         status = "success",
@@ -338,6 +347,7 @@ class TaskManager(
 
             is ComfyEvent.Error -> {
                 _progress.update { it - event.promptId }
+                executedNodeIds.remove(event.promptId)
                 updateTask(event.promptId) {
                     it.copy(
                         status = "failed",
@@ -349,6 +359,7 @@ class TaskManager(
 
             is ComfyEvent.Interrupted -> {
                 _progress.update { it - event.promptId }
+                executedNodeIds.remove(event.promptId)
                 updateTask(event.promptId) {
                     it.copy(
                         status = "interrupted",
@@ -357,9 +368,90 @@ class TaskManager(
                 }
             }
 
-            is ComfyEvent.ExecutionCached,
-            is ComfyEvent.Executed,
-            -> Unit
+            is ComfyEvent.ExecutionCached -> {
+                // 命中缓存的节点不会再执行，直接计入已完成。
+                executedNodeIds.getOrPut(event.promptId) { mutableSetOf() }
+                    .addAll(event.nodes)
+                updateOverallProgress(event.promptId)
+            }
+
+            is ComfyEvent.Executed -> {
+                executedNodeIds.getOrPut(event.promptId) { mutableSetOf() }
+                    .add(event.nodeId)
+                updateOverallProgress(event.promptId)
+            }
+        }
+    }
+
+    private fun buildProgress(
+        promptId: String,
+        status: String,
+        currentNode: String?,
+        currentNodeLabel: String?,
+        value: Double?,
+        max: Double?,
+    ): TaskProgress {
+        val completed = executedNodeIds[promptId]?.size ?: 0
+        val workflowTotal = totalNodeCount(promptId)
+        val total = if (workflowTotal > 0) workflowTotal else maxOf(completed + 1, 1)
+        val nodeFraction = if (max != null && max > 0) {
+            ((value ?: 0.0) / max).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        val overallPercent = ((completed + nodeFraction) / total)
+            .toFloat()
+            .coerceIn(0f, 1f)
+        return TaskProgress(
+            promptId = promptId,
+            status = status,
+            currentNode = currentNode,
+            currentNodeLabel = currentNodeLabel,
+            value = value,
+            max = max,
+            completedNodes = completed,
+            totalNodes = total,
+            overallPercent = overallPercent,
+        )
+    }
+
+    private fun totalNodeCount(promptId: String): Int {
+        val snapshot = _queue.value ?: return 0
+        return (snapshot.running + snapshot.pending)
+            .firstOrNull { it.promptId == promptId }
+            ?.prompt
+            ?.size
+            ?: 0
+    }
+
+    private fun updateOverallProgress(promptId: String) {
+        _progress.update { current ->
+            val old = current[promptId] ?: return@update current
+            current + (
+                promptId to buildProgress(
+                    promptId = promptId,
+                    status = old.status,
+                    currentNode = old.currentNode,
+                    currentNodeLabel = old.currentNodeLabel,
+                    value = old.value,
+                    max = old.max,
+                )
+                )
+        }
+    }
+
+    private fun refreshOverallProgress() {
+        _progress.update { current ->
+            current.mapValues { (promptId, old) ->
+                buildProgress(
+                    promptId = promptId,
+                    status = old.status,
+                    currentNode = old.currentNode,
+                    currentNodeLabel = old.currentNodeLabel,
+                    value = old.value,
+                    max = old.max,
+                )
+            }
         }
     }
 

@@ -73,7 +73,16 @@ enum class WorkflowMode {
     IMAGE_TO_IMAGE,
     MASK_INPAINT,
     AUTO_DETAIL,
+    VIDEO,
     UNKNOWN,
+}
+
+@Serializable
+enum class WorkflowCapability {
+    CONTROL_NET,
+    UPSCALE,
+    DETAILER,
+    VIDEO,
 }
 
 enum class WorkflowSlotKind {
@@ -106,6 +115,7 @@ data class WorkflowIssue(
 @Serializable
 data class WorkflowCompatibility(
     val mode: WorkflowMode = WorkflowMode.UNKNOWN,
+    val capabilities: Set<WorkflowCapability> = emptySet(),
     val imageSlots: List<WorkflowInputSlot> = emptyList(),
     val maskSlots: List<WorkflowInputSlot> = emptyList(),
     val issues: List<WorkflowIssue> = emptyList(),

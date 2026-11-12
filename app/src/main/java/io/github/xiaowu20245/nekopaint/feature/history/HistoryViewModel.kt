@@ -13,6 +13,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
+import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
@@ -46,6 +47,18 @@ sealed interface HistoryEditNotice {
     data class Error(val message: String) : HistoryEditNotice
 }
 
+enum class HistoryViewMode {
+    TIMELINE,
+    GRID,
+    COMPACT,
+}
+
+enum class HistoryFilter {
+    ALL,
+    OUTPUTS,
+    TEMP,
+}
+
 data class HistoryUiState(
     val entries: List<HistoryEntry> = emptyList(),
     val tasks: List<TaskRecord> = emptyList(),
@@ -64,22 +77,35 @@ data class HistoryUiState(
     val deletingPromptIds: Set<String> = emptySet(),
     val clearingHistory: Boolean = false,
     val editNotice: HistoryEditNotice? = null,
+    val viewMode: HistoryViewMode = HistoryViewMode.TIMELINE,
+    val filter: HistoryFilter = HistoryFilter.ALL,
+    val exporting: Boolean = false,
+    val exportNotice: String? = null,
+    val refillNotice: String? = null,
 )
 
 class HistoryViewModel(
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
+    private val pendingRefillStore: PendingWorkflowRefillStore,
     private val imageSaver: ImageSaver,
     private val imageShareManager: ImageShareManager,
     private val settingsStore: SettingsStore,
 ) : ViewModel() {
 
+    private val demoEntries = MutableStateFlow<List<HistoryEntry>>(emptyList())
+    private val demoTasks = MutableStateFlow<List<TaskRecord>>(emptyList())
+
     private val base = combine(
         taskManager.history,
         taskManager.tasks,
         taskManager.connection,
-    ) { entries, tasks, connection ->
-        HistoryUiState(entries = entries, tasks = tasks, connection = connection)
+        demoEntries,
+        demoTasks,
+    ) { entries, tasks, connection, dEntries, dTasks ->
+        val effectiveEntries = if (dEntries.isNotEmpty()) dEntries + entries else entries
+        val effectiveTasks = if (dTasks.isNotEmpty()) dTasks + tasks else tasks
+        HistoryUiState(entries = effectiveEntries, tasks = effectiveTasks, connection = connection)
     }
 
     private val resubmitState = MutableStateFlow(ResubmitState())
@@ -109,14 +135,19 @@ class HistoryViewModel(
     }
 
     private val editState = MutableStateFlow(EditState())
+    private val customViewState = MutableStateFlow(CustomViewState())
+
+    private val combinedEditState = combine(editState, customViewState) { edit, custom ->
+        edit to custom
+    }
 
     val uiState: StateFlow<HistoryUiState> = combine(
         base,
         runtimeState,
         operationState,
-        editState,
+        combinedEditState,
         settingsStore.showTempPreviews,
-    ) { state, runtime, operation, edit, showTempPreviews ->
+    ) { state, runtime, operation, (edit, custom), showTempPreviews ->
         state.copy(
             error = runtime.error,
             refreshing = runtime.refreshing,
@@ -132,6 +163,11 @@ class HistoryViewModel(
             deletingPromptIds = edit.deletingPromptIds,
             clearingHistory = edit.clearing,
             editNotice = edit.notice,
+            viewMode = custom.viewMode,
+            filter = custom.filter,
+            exporting = custom.exporting,
+            exportNotice = custom.exportNotice,
+            refillNotice = custom.refillNotice,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -141,6 +177,153 @@ class HistoryViewModel(
 
     init {
         taskManager.refresh()
+    }
+
+    fun loadDemoHistory() {
+        val now = System.currentTimeMillis()
+        val p1 = "demo-hist-001"
+        val p2 = "demo-hist-002"
+        val p3 = "demo-hist-003"
+
+        demoEntries.value = listOf(
+            HistoryEntry(
+                promptId = p1,
+                status = "success",
+                completed = true,
+                timestamp = now - 1000 * 60 * 12,
+                startedAt = now - 1000 * 60 * 12 - 18000,
+                finishedAt = now - 1000 * 60 * 12,
+                images = listOf(
+                    HistoryImage("flux_out_01.png", "", "output", "https://picsum.photos/512/512?random=1"),
+                    HistoryImage("flux_out_02.png", "", "output", "https://picsum.photos/512/512?random=2"),
+                ),
+                errorNodeId = null,
+                errorMessage = null,
+            ),
+            HistoryEntry(
+                promptId = p2,
+                status = "success",
+                completed = true,
+                timestamp = now - 1000 * 60 * 95,
+                startedAt = now - 1000 * 60 * 95 - 24000,
+                finishedAt = now - 1000 * 60 * 95,
+                images = listOf(
+                    HistoryImage("anime_01.png", "", "output", "https://picsum.photos/512/512?random=3"),
+                    HistoryImage("anime_preview_temp.png", "", "temp", "https://picsum.photos/512/512?random=4"),
+                ),
+                errorNodeId = null,
+                errorMessage = null,
+            ),
+            HistoryEntry(
+                promptId = p3,
+                status = "success",
+                completed = true,
+                timestamp = now - 1000 * 60 * 60 * 28,
+                startedAt = now - 1000 * 60 * 60 * 28 - 15000,
+                finishedAt = now - 1000 * 60 * 60 * 28,
+                images = listOf(
+                    HistoryImage("scenic_lake.png", "", "output", "https://picsum.photos/512/512?random=5"),
+                ),
+                errorNodeId = null,
+                errorMessage = null,
+            ),
+        )
+
+        demoTasks.value = listOf(
+            TaskRecord(
+                promptId = p1,
+                templateId = "flux-dev",
+                templateName = "Flux 快速生图",
+                clientId = "local-client",
+                submittedAt = now - 1000 * 60 * 12 - 20000,
+                startedAt = now - 1000 * 60 * 12 - 18000,
+                finishedAt = now - 1000 * 60 * 12,
+                status = "success",
+                values = mapOf(
+                    "6:text" to "masterpiece, 1girl, cat ears, neon cyberpunk city, cinematic lighting, 8k",
+                    "7:text" to "worst quality, low quality",
+                    "3:seed" to "42819024",
+                    "3:steps" to "20",
+                    "3:cfg" to "7.0",
+                    "3:sampler_name" to "euler",
+                    "3:scheduler" to "normal",
+                    "4:ckpt_name" to "flux1-dev-fp8.safetensors",
+                    "5:width" to "1024",
+                    "5:height" to "1024",
+                ),
+            ),
+            TaskRecord(
+                promptId = p2,
+                templateId = "anime-sdxl",
+                templateName = "动漫插画精细生成",
+                clientId = "local-client",
+                submittedAt = now - 1000 * 60 * 95 - 26000,
+                startedAt = now - 1000 * 60 * 95 - 24000,
+                finishedAt = now - 1000 * 60 * 95,
+                status = "success",
+                values = mapOf(
+                    "6:text" to "1girl, silver hair, starry sky, floating glowing petals, beautiful eyes",
+                    "3:seed" to "987654321",
+                    "3:steps" to "28",
+                    "3:cfg" to "6.5",
+                    "3:sampler_name" to "euler_ancestral",
+                    "3:scheduler" to "karras",
+                    "4:ckpt_name" to "animagineXLV31.safetensors",
+                    "5:width" to "1024",
+                    "5:height" to "1024",
+                ),
+            ),
+            TaskRecord(
+                promptId = p3,
+                templateId = "landscape-v1",
+                templateName = "自然风景与建筑",
+                clientId = "local-client",
+                submittedAt = now - 1000 * 60 * 60 * 28 - 18000,
+                startedAt = now - 1000 * 60 * 60 * 28 - 15000,
+                finishedAt = now - 1000 * 60 * 60 * 28,
+                status = "success",
+                values = mapOf(
+                    "6:text" to "scenic mountain lake at dawn, reflection in crystal clear water, pine trees",
+                    "3:seed" to "554433221",
+                    "3:steps" to "20",
+                    "3:cfg" to "7.0",
+                    "4:ckpt_name" to "sd_xl_base_1.0.safetensors",
+                    "5:width" to "1024",
+                    "5:height" to "1024",
+                ),
+            ),
+        )
+        bindDemoTasksToLocalTemplate()
+    }
+
+    /**
+     * 调试用演示数据在本地存在工作流时，自动映射到真实模板 ID 与候选参数，
+     * 便于在模拟器验证“回填至工作流”闭环；正式包不显示入口。
+     */
+    private fun bindDemoTasksToLocalTemplate() {
+        viewModelScope.launch {
+            val template = runCatching { workflowRepository.listTemplates() }
+                .getOrDefault(emptyList())
+                .firstOrNull() ?: return@launch
+            demoTasks.value = demoTasks.value.map { task ->
+                val mapped = buildMap {
+                    task.values.forEach { (key, value) ->
+                        val inputName = key.substringAfter(':', key)
+                        val negative = key.endsWith(":text") && key.startsWith("7:")
+                        val candidate = template.candidates.firstOrNull {
+                            !it.readOnly && it.inputName == inputName &&
+                                (negative == it.label.contains("负"))
+                        }
+                        if (candidate != null) put(candidate.id, value)
+                    }
+                }
+                task.copy(
+                    templateId = template.id,
+                    templateName = template.name,
+                    values = mapped,
+                )
+            }
+        }
     }
 
     fun refresh() = taskManager.refresh()
@@ -267,6 +450,63 @@ class HistoryViewModel(
         editState.value = editState.value.copy(notice = null)
     }
 
+    fun setViewMode(mode: HistoryViewMode) {
+        customViewState.value = customViewState.value.copy(viewMode = mode)
+    }
+
+    fun setFilter(filter: HistoryFilter) {
+        customViewState.value = customViewState.value.copy(filter = filter)
+    }
+
+    fun refillWorkflow(task: TaskRecord, onComplete: (Result<String>) -> Unit) {
+        if (task.values.isEmpty()) {
+            onComplete(Result.failure(IllegalStateException("该记录没有保存参数快照")))
+            return
+        }
+        viewModelScope.launch {
+            val template = runCatching { workflowRepository.getTemplate(task.templateId) }.getOrNull()
+            if (template == null) {
+                onComplete(Result.failure(IllegalStateException("找不到原工作流模板")))
+                return@launch
+            }
+            // 只暂存参数，到详情页由用户确认后保存，避免直接覆盖已保存模板。
+            pendingRefillStore.put(template.id, task.values)
+            onComplete(Result.success(template.id))
+        }
+    }
+
+    fun exportImages(images: List<HistoryImage>, onComplete: (success: Int, failed: Int) -> Unit) {
+        if (images.isEmpty() || customViewState.value.exporting) return
+        customViewState.value = customViewState.value.copy(exporting = true)
+        viewModelScope.launch {
+            var successCount = 0
+            var failCount = 0
+            for (img in images) {
+                val url = img.url ?: continue
+                val result = imageSaver.save(url, img.filename)
+                if (result.isSuccess) successCount++ else failCount++
+            }
+            customViewState.value = customViewState.value.copy(exporting = false)
+            onComplete(successCount, failCount)
+        }
+    }
+
+    fun clearRefillNotice() {
+        customViewState.value = customViewState.value.copy(refillNotice = null)
+    }
+
+    fun clearExportNotice() {
+        customViewState.value = customViewState.value.copy(exportNotice = null)
+    }
+
+    private data class CustomViewState(
+        val viewMode: HistoryViewMode = HistoryViewMode.TIMELINE,
+        val filter: HistoryFilter = HistoryFilter.ALL,
+        val exporting: Boolean = false,
+        val exportNotice: String? = null,
+        val refillNotice: String? = null,
+    )
+
     private data class ResubmitState(
         val submitting: Boolean = false,
         val notice: HistoryNotice? = null,
@@ -307,6 +547,7 @@ class HistoryViewModel(
                 HistoryViewModel(
                     taskManager = container.taskManager,
                     workflowRepository = container.workflowRepository,
+                    pendingRefillStore = container.pendingWorkflowRefillStore,
                     imageSaver = container.imageSaver,
                     imageShareManager = container.imageShareManager,
                     settingsStore = container.settingsStore,

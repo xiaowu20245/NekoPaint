@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.feature.workflow
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -32,6 +33,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
@@ -44,6 +47,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
@@ -64,10 +69,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -111,6 +118,9 @@ import kotlin.random.Random
 fun WorkflowDetailScreen(
     templateId: String,
     onTopBarActionChange: (NekoTopBarAction?) -> Unit,
+    onOpenAiSettings: () -> Unit = {},
+    onBack: () -> Unit = {},
+    onBackHandlerChange: ((() -> Boolean)?) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as NekoPaintApplication
@@ -123,6 +133,13 @@ fun WorkflowDetailScreen(
     val simpleListState = rememberLazyListState()
     val advancedListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val currentListState = if (pagerState.currentPage == 1) advancedListState else simpleListState
+    val headerCollapsed by remember(currentListState) {
+        derivedStateOf {
+            currentListState.firstVisibleItemIndex > 0 ||
+                currentListState.firstVisibleItemScrollOffset > 24
+        }
+    }
     val template = state.template
     val savedMessage = stringResource(R.string.workflow_saved)
     val errorMessage = state.errorRes?.let { stringResource(it) }
@@ -140,6 +157,25 @@ fun WorkflowDetailScreen(
     var newPresetName by remember { mutableStateOf("") }
     var showRenamePresetDialog by remember { mutableStateOf(false) }
     var renamePresetName by remember { mutableStateOf("") }
+    var showUnsavedDialog by rememberSaveable { mutableStateOf(false) }
+    val currentDirty by rememberUpdatedState(state.dirty)
+
+    DisposableEffect(Unit) {
+        // 外部 TopAppBar 的返回箭头也走同一套未保存拦截。
+        onBackHandlerChange {
+            if (currentDirty) {
+                showUnsavedDialog = true
+                true
+            } else {
+                false
+            }
+        }
+        onDispose { onBackHandlerChange(null) }
+    }
+
+    BackHandler(enabled = state.dirty && !showUnsavedDialog) {
+        showUnsavedDialog = true
+    }
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -225,39 +261,48 @@ fun WorkflowDetailScreen(
                 var overviewExpanded by rememberSaveable(template.id) {
                     mutableStateOf(false)
                 }
+                val activePresetName = template.presets
+                    .firstOrNull { it.id == template.activePresetId }
+                    ?.name
+                    ?: stringResource(R.string.workflow_preset_default)
                 Column(modifier = Modifier.fillMaxSize()) {
-                    // 顶部固定区：概览 / 预设 / 模式切换，不参与左右滑动。
+                    // 顶部固定区：未滚动时完整展示；向下滚动后自动收起概览与预设。
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        CompactOverviewStrip(
-                            template = template,
-                            expanded = overviewExpanded,
-                            onToggleExpanded = { overviewExpanded = !overviewExpanded },
-                            onShowRawJson = viewModel::showRawJson,
-                        )
-                        WorkflowPresetSection(
-                            template = template,
-                            dirty = state.dirty,
-                            onSelectPreset = viewModel::selectPreset,
-                            onRequestAddPreset = {
-                                newPresetName = ""
-                                showAddPresetDialog = true
-                            },
-                            onRequestRenamePreset = { currentName ->
-                                renamePresetName = currentName
-                                showRenamePresetDialog = true
-                            },
-                            onDeleteActivePreset = viewModel::deleteActivePreset,
-                        )
+                        AnimatedVisibility(visible = !headerCollapsed) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                CompactOverviewStrip(
+                                    template = template,
+                                    expanded = overviewExpanded,
+                                    onToggleExpanded = { overviewExpanded = !overviewExpanded },
+                                    onShowRawJson = viewModel::showRawJson,
+                                )
+                                WorkflowPresetSection(
+                                    template = template,
+                                    dirty = state.dirty,
+                                    onSelectPreset = viewModel::selectPreset,
+                                    onRequestAddPreset = {
+                                        newPresetName = ""
+                                        showAddPresetDialog = true
+                                    },
+                                    onRequestRenamePreset = { currentName ->
+                                        renamePresetName = currentName
+                                        showRenamePresetDialog = true
+                                    },
+                                    onDeleteActivePreset = viewModel::deleteActivePreset,
+                                )
+                            }
+                        }
                         ModeControlRow(
                             selectedCount = template.selectedCount,
                             totalCount = template.candidates.size,
                             advanced = state.advanced,
                             editing = state.editing,
+                            compactPresetName = activePresetName.takeIf { headerCollapsed },
                             onSelectMode = { targetPage ->
                                 viewModel.setAdvanced(targetPage == 1)
                                 scope.launch {
@@ -318,7 +363,7 @@ fun WorkflowDetailScreen(
                         submitting = state.submitting,
                         batchCount = state.batchCount,
                         seedStrategy = state.seedStrategy,
-                        onSave = viewModel::save,
+                        onSave = { viewModel.save() },
                         onCycleSeedStrategy = viewModel::cycleSeedStrategy,
                         onStepBatch = viewModel::stepBatchCount,
                         onSubmit = viewModel::submit,
@@ -406,6 +451,42 @@ fun WorkflowDetailScreen(
         )
     }
 
+    if (showUnsavedDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedDialog = false },
+            title = { Text(stringResource(R.string.workflow_unsaved_dialog_title)) },
+            text = { Text(stringResource(R.string.workflow_unsaved_dialog_desc)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.save {
+                            showUnsavedDialog = false
+                            onBack()
+                        }
+                    },
+                    enabled = !state.saving,
+                ) {
+                    Text(stringResource(R.string.workflow_unsaved_dialog_save))
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { showUnsavedDialog = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                    TextButton(
+                        onClick = {
+                            showUnsavedDialog = false
+                            onBack()
+                        },
+                    ) {
+                        Text(stringResource(R.string.workflow_unsaved_dialog_discard))
+                    }
+                }
+            },
+        )
+    }
+
     template?.let { current ->
         promptEditorCandidateId?.let { candidateId ->
             current.candidates.firstOrNull { it.id == candidateId }?.let { candidate ->
@@ -417,6 +498,7 @@ fun WorkflowDetailScreen(
                     },
                     onSaveTagGroup = viewModel::addPromptTagGroup,
                     onDeleteTagGroup = viewModel::deletePromptTagGroup,
+                    onOpenAiSettings = onOpenAiSettings,
                     onDismiss = { promptEditorCandidateId = null },
                 )
             }
@@ -623,10 +705,7 @@ private fun CompactOverviewStrip(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        ),
+        border = null,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -668,7 +747,6 @@ private fun CompactOverviewStrip(
 
                     val statusSummary = buildString {
                         if (template.missingNodeTypes.isNotEmpty()) {
-                            append("⚠ ")
                             append(
                                 stringResource(
                                     R.string.workflow_missing_nodes,
@@ -676,10 +754,8 @@ private fun CompactOverviewStrip(
                                 ),
                             )
                         } else if (hasError || hasWarning) {
-                            append("⚠ ")
                             append(stringResource(R.string.workflow_compat_warn_short, issues.size))
                         } else {
-                            append("✓ ")
                             append(stringResource(R.string.workflow_meta_nodes_short, template.nodeCount))
                         }
                         if (imageCount > 0 || maskCount > 0) {
@@ -817,6 +893,23 @@ private fun OverviewDetailPanel(
                 color = MaterialTheme.colorScheme.error,
             )
         }
+        compatibility?.capabilities?.takeIf { it.isNotEmpty() }?.let { capabilities ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                capabilities.forEach { capability ->
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ) {
+                        Text(
+                            text = workflowCapabilityLabel(capability),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
         compatibility?.imageSlots?.forEach { slot ->
             Text(
                 text = "• 图片槽 #${slot.nodeId} · ${slot.title}",
@@ -862,10 +955,7 @@ private fun WorkflowPresetSection(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        ),
+        border = null,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(
@@ -963,13 +1053,23 @@ private fun WorkflowPresetSection(
                             .clip(RoundedCornerShape(8.dp))
                             .clickable(onClick = onRequestAddPreset),
                     ) {
-                        Text(
-                            text = stringResource(R.string.workflow_preset_add),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Medium,
-                            ),
+                        Row(
                             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                        )
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Text(
+                                text = stringResource(R.string.workflow_preset_add),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
                     }
                 }
             }
@@ -1015,11 +1115,6 @@ private fun PresetChip(
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
-        border = if (selected) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-        } else {
-            null
-        },
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick),
@@ -1040,12 +1135,15 @@ private fun ModeControlRow(
     totalCount: Int,
     advanced: Boolean,
     editing: Boolean,
+    compactPresetName: String? = null,
     onSelectMode: (Int) -> Unit,
     onStartEditing: () -> Unit,
     onFinishEditing: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -1053,7 +1151,7 @@ private fun ModeControlRow(
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
-            Row(modifier = Modifier.padding(3.dp)) {
+            Row(modifier = Modifier.padding(2.dp)) {
                 SegmentedTabItem(
                     label = stringResource(R.string.workflow_mode_simple_count, selectedCount),
                     selected = !advanced,
@@ -1067,25 +1165,66 @@ private fun ModeControlRow(
             }
         }
 
-        if (!advanced) {
-            TextButton(
-                onClick = if (editing) onFinishEditing else onStartEditing,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Edit,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = stringResource(
-                        if (editing) R.string.workflow_done else R.string.workflow_manage_selected,
-                    ),
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Medium,
-                    ),
-                )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (compactPresetName != null) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.workflow_preset_current_short,
+                            compactPresetName,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    )
+                }
+            }
+            if (!advanced) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(
+                            onClick = if (editing) onFinishEditing else onStartEditing,
+                        ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .height(32.dp)
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Edit,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                        )
+                        Text(
+                            text = stringResource(
+                                if (editing) {
+                                    R.string.workflow_done
+                                } else {
+                                    R.string.workflow_manage_selected
+                                },
+                            ),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        )
+                    }
+                }
             }
         }
     }
@@ -1151,10 +1290,7 @@ private fun ParameterGroupSection(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        ),
+        border = null,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(
@@ -1261,15 +1397,12 @@ private fun CompactNumericCell(
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (errorText != null) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-            },
-        ),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = if (errorText != null) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+        } else {
+            null
+        },
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
@@ -1316,40 +1449,17 @@ private fun CompactNumericCell(
                         KeyboardType.Decimal
                     },
                 ),
-            )
-
-            if (presets.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    presets.forEach { preset ->
-                        val active = candidate.value == preset
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (active) {
-                                MaterialTheme.colorScheme.secondaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            },
-                            contentColor = if (active) {
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onValueChange(preset) },
-                        ) {
-                            Text(
-                                text = preset,
-                                style = NekoMonoSmall.copy(fontSize = 11.sp),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
+                trailingIcon = if (presets.isNotEmpty()) {
+                    {
+                        NumericPresetDropdown(
+                            presets = presets,
+                            onSelect = onValueChange,
+                        )
                     }
-                }
-            }
+                } else {
+                    null
+                },
+            )
         }
     }
 }
@@ -1366,13 +1476,15 @@ private fun CandidateRow(
     isMaskSlot: Boolean,
     onDrawMask: () -> Unit,
 ) {
+    val errorText = fieldErrorText(error)
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-        ),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = if (errorText != null) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+        } else {
+            null
+        },
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -1526,6 +1638,16 @@ private fun ParameterField(
                                 KeyboardType.Decimal
                             },
                         ),
+                        trailingIcon = if (presets.isNotEmpty()) {
+                            {
+                                NumericPresetDropdown(
+                                    presets = presets,
+                                    onSelect = onValueChange,
+                                )
+                            }
+                        } else {
+                            null
+                        },
                     )
                     if (isSeed) {
                         Surface(
@@ -1555,20 +1677,6 @@ private fun ParameterField(
                                     ),
                                 )
                             }
-                        }
-                    }
-                }
-                if (presets.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        presets.forEach { preset ->
-                            FilterChip(
-                                selected = candidate.value == preset,
-                                onClick = { onValueChange(preset) },
-                                label = { Text(preset) },
-                            )
                         }
                     }
                 }
@@ -1680,10 +1788,6 @@ private fun StickyBatchBottomBar(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        ),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -1710,10 +1814,6 @@ private fun StickyBatchBottomBar(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                    ),
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .clickable(enabled = !saving && !submitting, onClick = onSave),
@@ -2058,6 +2158,49 @@ private fun numericPresets(candidate: ParameterCandidate): List<String> = when {
     candidate.label.contains("宽度") -> listOf("512", "768", "1024", "1280", "1536", "1920")
     candidate.label.contains("高度") -> listOf("512", "768", "1024", "1280", "1536", "1920")
     else -> emptyList()
+}
+
+@Composable
+private fun NumericPresetDropdown(
+    presets: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { expanded = true }
+                .padding(4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ArrowDropDown,
+                contentDescription = stringResource(R.string.workflow_numeric_presets),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            presets.forEach { preset ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = preset,
+                            style = NekoMonoSmall,
+                        )
+                    },
+                    onClick = {
+                        onSelect(preset)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 1000)

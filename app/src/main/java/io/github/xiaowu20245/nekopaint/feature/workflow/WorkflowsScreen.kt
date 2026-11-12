@@ -3,7 +3,6 @@ package io.github.xiaowu20245.nekopaint.feature.workflow
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -82,6 +81,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCompatibility
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowInputSlot
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowIssueSeverity
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCapability
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowSlotKind
@@ -362,6 +362,25 @@ private fun WorkflowCard(
     val issueCount = template.compatibility?.issues?.count {
         it.severity == WorkflowIssueSeverity.ERROR || it.severity == WorkflowIssueSeverity.WARNING
     } ?: 0
+    val hasMissingNodes = template.missingNodeTypes.isNotEmpty()
+    val statusPillLabel = when {
+        hasMissingNodes -> stringResource(
+            R.string.workflow_missing_nodes,
+            template.missingNodeTypes.size,
+        )
+        issueCount > 0 -> stringResource(R.string.workflow_compat_warn_short, issueCount)
+        else -> null
+    }
+    val modePillColor = when {
+        hasMissingNodes -> NekoTheme.colors.dangerContainer
+        issueCount > 0 -> NekoTheme.colors.warningContainer
+        else -> MaterialTheme.colorScheme.secondaryContainer
+    }
+    val modePillContentColor = when {
+        hasMissingNodes -> NekoTheme.colors.onDangerContainer
+        issueCount > 0 -> NekoTheme.colors.onWarningContainer
+        else -> MaterialTheme.colorScheme.onSecondaryContainer
+    }
     val promptPreview = template.primaryPromptPreview
 
     Card(
@@ -371,10 +390,7 @@ private fun WorkflowCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
-        ),
+        border = null,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(
@@ -508,16 +524,36 @@ private fun WorkflowCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = modePillColor,
+                        contentColor = modePillContentColor,
                     ) {
-                        Text(
-                            text = workflowModeLabel(mode),
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Medium,
-                            ),
+                        Row(
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                        )
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            if (statusPillLabel != null) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Warning,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                            Text(
+                                text = workflowModeLabel(mode),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                            if (statusPillLabel != null) {
+                                Text(
+                                    text = "· $statusPillLabel",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
 
                     Text(
@@ -544,45 +580,6 @@ private fun WorkflowCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                    }
-
-                    if (template.missingNodeTypes.isNotEmpty()) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = NekoTheme.colors.dangerContainer,
-                            contentColor = NekoTheme.colors.onDangerContainer,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Warning,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(12.dp),
-                                )
-                                Text(
-                                    text = stringResource(
-                                        R.string.workflow_missing_nodes,
-                                        template.missingNodeTypes.size,
-                                    ),
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        }
-                    } else if (issueCount > 0) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = NekoTheme.colors.warningContainer,
-                            contentColor = NekoTheme.colors.onWarningContainer,
-                        ) {
-                            Text(
-                                text = "⚠ ${stringResource(R.string.workflow_compat_warn_short, issueCount)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
                     }
                 }
 
@@ -767,7 +764,16 @@ internal fun workflowModeLabel(mode: WorkflowMode): String = when (mode) {
     WorkflowMode.IMAGE_TO_IMAGE -> stringResource(R.string.workflow_mode_image_to_image)
     WorkflowMode.MASK_INPAINT -> stringResource(R.string.workflow_mode_mask_inpaint)
     WorkflowMode.AUTO_DETAIL -> stringResource(R.string.workflow_mode_auto_detail)
+    WorkflowMode.VIDEO -> stringResource(R.string.workflow_mode_video)
     WorkflowMode.UNKNOWN -> stringResource(R.string.workflow_mode_unknown)
+}
+
+@Composable
+internal fun workflowCapabilityLabel(capability: WorkflowCapability): String = when (capability) {
+    WorkflowCapability.CONTROL_NET -> stringResource(R.string.workflow_capability_control_net)
+    WorkflowCapability.UPSCALE -> stringResource(R.string.workflow_capability_upscale)
+    WorkflowCapability.DETAILER -> stringResource(R.string.workflow_capability_detailer)
+    WorkflowCapability.VIDEO -> stringResource(R.string.workflow_capability_video)
 }
 
 internal fun workflowModeIcon(mode: WorkflowMode): ImageVector = when (mode) {
@@ -775,6 +781,7 @@ internal fun workflowModeIcon(mode: WorkflowMode): ImageVector = when (mode) {
     WorkflowMode.IMAGE_TO_IMAGE -> NekoIcons.ImageFrame
     WorkflowMode.MASK_INPAINT -> NekoIcons.BrushMask
     WorkflowMode.AUTO_DETAIL -> NekoIcons.TargetCrosshair
+    WorkflowMode.VIDEO -> NekoIcons.PlayFilled
     WorkflowMode.UNKNOWN -> NekoIcons.WorkflowNodes
 }
 

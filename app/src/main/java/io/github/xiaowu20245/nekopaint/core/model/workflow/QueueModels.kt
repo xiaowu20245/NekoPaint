@@ -45,4 +45,7 @@ data class TaskProgress(
     val currentNodeLabel: String?,
     val value: Double?,
     val max: Double?,
+    val completedNodes: Int = 0,
+    val totalNodes: Int = 0,
+    val overallPercent: Float? = null,
 )

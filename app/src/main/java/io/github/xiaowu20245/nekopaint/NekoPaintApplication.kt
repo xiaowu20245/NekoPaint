@@ -8,6 +8,10 @@ import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okio.Path.Companion.toOkioPath
 
 class NekoPaintApplication : Application(), SingletonImageLoader.Factory {
@@ -15,9 +19,15 @@ class NekoPaintApplication : Application(), SingletonImageLoader.Factory {
     lateinit var container: AppContainer
         private set
 
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // 外部词库在启动时加载，保证提示词编辑器首次打开即可联想。
+        applicationScope.launch {
+            container.promptLexiconRepository.load()
+        }
     }
 
     override fun newImageLoader(context: Context): ImageLoader =

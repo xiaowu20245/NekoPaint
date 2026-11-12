@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -391,14 +390,7 @@ private fun ServerListCard(
                 MaterialTheme.colorScheme.surfaceContainer
             },
         ),
-        border = if (card.isActive) {
-            BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.42f),
-            )
-        } else {
-            null
-        },
+        border = null,
     ) {
         Column(
             modifier = Modifier
@@ -1142,11 +1134,7 @@ private fun GpuCard(gpu: GpuInfo) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(NekoRadius.md),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-        ),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
@@ -1264,11 +1252,7 @@ private fun SystemSection(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(NekoRadius.md),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-        ),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
     ) {
@@ -1360,36 +1344,42 @@ private fun SystemSection(
             }
             stats.ramTotal?.let { total ->
                 val used = (total - (stats.ramFree ?: 0L)).coerceAtLeast(0L)
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = NekoSpacing.xs),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = NekoSpacing.xs),
                 ) {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xs),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Icon(
-                            imageVector = NekoIcons.MemoryStick,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(NekoIconSize.xs),
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xs),
+                        ) {
+                            Icon(
+                                imageVector = NekoIcons.MemoryStick,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(NekoIconSize.xs),
+                            )
+                            Text(
+                                text = stringResource(R.string.server_system_memory),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Text(
-                            text = stringResource(R.string.server_system_memory),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "${formatBytes(used)} / ${formatBytes(total)}",
+                            style = NekoMonoSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
-                    Text(
-                        text = "${formatBytes(used)} / ${formatBytes(total)}",
-                        style = NekoMonoSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
                 }
             }
         }
@@ -1403,34 +1393,42 @@ private fun SystemMetric(
     value: String,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = modifier,
     ) {
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xs),
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(NekoIconSize.xs),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NekoSpacing.xs),
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(NekoIconSize.xs),
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = value,
+                style = NekoMonoSmall.copy(fontSize = 11.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            text = value,
-            style = NekoMonoSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
 

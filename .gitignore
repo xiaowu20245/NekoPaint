@@ -15,3 +15,9 @@ keystore.properties
 
 # 本地第三方工作流模板，不随仓库分发
 /workflows/
+
+# 本地设计稿、截图与分析产物，脱敏确认前不推送
+/design/screenshots/
+/design/settings_scheme_a_nav.html
+/workflow_analysis.txt
+/workflow_keynodes.txt

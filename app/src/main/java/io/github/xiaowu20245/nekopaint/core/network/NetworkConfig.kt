@@ -8,6 +8,7 @@ object NetworkConfig {
     const val ReadTimeoutSeconds = 15L
     const val WriteTimeoutSeconds = 15L
     const val ImageReadTimeoutSeconds = 30L
+    const val AiReadTimeoutSeconds = 60L
     const val WebSocketPingSeconds = 20L
     const val StatusPollSeconds = 5L
     const val QueueFallbackPollSeconds = 2L

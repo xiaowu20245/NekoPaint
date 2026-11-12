@@ -22,6 +22,7 @@ import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyz
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
+import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
@@ -91,6 +92,7 @@ class WorkflowDetailViewModel(
     private val repository: WorkflowRepository,
     private val modelsRepository: ModelsRepository,
     private val taskManager: TaskManager,
+    private val pendingRefillStore: PendingWorkflowRefillStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowDetailUiState())
@@ -98,7 +100,7 @@ class WorkflowDetailViewModel(
 
     init {
         viewModelScope.launch {
-            val template = runCatching { repository.getTemplate(templateId) }.getOrNull()
+            val loaded = runCatching { repository.getTemplate(templateId) }.getOrNull()
                 ?.let { current ->
                     current.copy(
                         candidates = current.candidates.map { candidate ->
@@ -110,10 +112,28 @@ class WorkflowDetailViewModel(
                         },
                     )
                 }
+            val refillValues = loaded?.let { pendingRefillStore.consume(templateId) }
+            val template = if (loaded != null && refillValues != null) {
+                loaded.copy(
+                    candidates = loaded.candidates.map { candidate ->
+                        val value = refillValues[candidate.id]
+                        if (value != null && !candidate.readOnly) {
+                            candidate.copy(value = value, selected = true)
+                        } else {
+                            candidate
+                        }
+                    },
+                    // 历史参数是临时回填，不应继续显示为某个已保存预设。
+                    activePresetId = null,
+                )
+            } else {
+                loaded
+            }
             _uiState.update {
                 it.copy(
                     loading = false,
                     template = template,
+                    dirty = refillValues != null && template != null,
                     errorRes = if (template == null) R.string.workflow_error_generic else null,
                 )
             }
@@ -543,7 +563,7 @@ class WorkflowDetailViewModel(
         }
     }
 
-    fun save() {
+    fun save(onSaved: (() -> Unit)? = null) {
         val current = _uiState.value.template ?: return
         if (_uiState.value.saving) return
         val activeId = current.activePresetId
@@ -581,6 +601,9 @@ class WorkflowDetailViewModel(
                     },
                     errorRes = if (result.isFailure) R.string.workflow_error_generic else null,
                 )
+            }
+            if (result.isSuccess) {
+                onSaved?.invoke()
             }
         }
     }
@@ -786,6 +809,7 @@ class WorkflowDetailViewModel(
                     repository = container.workflowRepository,
                     modelsRepository = container.modelsRepository,
                     taskManager = container.taskManager,
+                    pendingRefillStore = container.pendingWorkflowRefillStore,
                 )
             }
         }

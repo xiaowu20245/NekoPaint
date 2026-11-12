@@ -13,7 +13,7 @@ data class PromptTagSuggestion(
 
 object PromptTagCatalog {
 
-    val suggestions: List<PromptTagSuggestion> = listOf(
+    val builtInSuggestions: List<PromptTagSuggestion> = listOf(
         PromptTagSuggestion("masterpiece", "杰作", listOf("画质", "高质量")),
         PromptTagSuggestion("best quality", "最佳质量", listOf("画质")),
         PromptTagSuggestion("very aesthetic", "高美感", listOf("美感")),
@@ -45,6 +45,32 @@ object PromptTagCatalog {
         PromptTagSuggestion("from below", "仰视"),
         PromptTagSuggestion("original", "原创"),
     )
+
+    /** 外部导入词覆盖层；由 PromptLexiconRepository 在启动与导入后写入。 */
+    @Volatile
+    private var mergedSuggestions: List<PromptTagSuggestion> = builtInSuggestions
+
+    @Volatile
+    private var externalSuggestions: List<PromptTagSuggestion> = emptyList()
+
+    val suggestions: List<PromptTagSuggestion>
+        get() = mergedSuggestions
+
+    val builtInCount: Int
+        get() = builtInSuggestions.size
+
+    val externalCount: Int
+        get() = externalSuggestions.size
+
+    @Synchronized
+    fun setExternalSuggestions(external: List<PromptTagSuggestion>) {
+        externalSuggestions = external
+        // 同名 tag 以内置词为准，避免社区词库覆盖精选翻译。
+        val builtInTags = builtInSuggestions.mapTo(HashSet()) { it.tag.lowercase() }
+        mergedSuggestions = builtInSuggestions + external.filter {
+            it.tag.lowercase() !in builtInTags
+        }
+    }
 
     fun search(query: String, limit: Int = 8): List<PromptTagSuggestion> {
         val keyword = query.trim().lowercase()

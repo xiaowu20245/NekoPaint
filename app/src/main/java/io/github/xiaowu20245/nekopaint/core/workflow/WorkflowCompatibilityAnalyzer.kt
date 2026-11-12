@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.core.workflow
 
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCapability
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCompatibility
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowGraph
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowInputSlot
@@ -17,13 +18,23 @@ import kotlinx.serialization.json.contentOrNull
  */
 object WorkflowCompatibilityAnalyzer {
 
-    const val CURRENT_VERSION = 2
+    const val CURRENT_VERSION = 3
 
-    private val autoDetailNodes = setOf(
+    private val detailerClassNames = setOf(
         "DetailerForEach",
+        "DetailerForEachDebug",
+        "FaceDetailer",
         "SAM3_Detect",
         "MaskToSEGS",
         "INPAINT_ExpandMask",
+    )
+
+    private val upscaleClassNames = setOf(
+        "ImageUpscaleWithModel",
+        "UltimateSDUpscale",
+        "UpscaleModelLoader",
+        "ESRGAN",
+        "SwinIR",
     )
 
     private val uiOnlyNodes = setOf(
@@ -54,7 +65,7 @@ object WorkflowCompatibilityAnalyzer {
         val issues = mutableListOf<WorkflowIssue>()
 
         for (node in graph.nodes.values) {
-            val isLoadImage = node.classType == "LoadImage" || node.classType == "LoadImageMask"
+            val isLoadImage = isImageLoader(node.classType)
             if (node.id !in reachable) {
                 if (isLoadImage) {
                     issues += WorkflowIssue(
@@ -179,28 +190,76 @@ object WorkflowCompatibilityAnalyzer {
             )
         }
 
-        val hasAutoDetail = graph.nodes.values.any {
-            it.id in reachable && it.classType in autoDetailNodes
+        val reachableNodes = graph.nodes.values.filter { it.id in reachable }
+        val hasAutoDetail = reachableNodes.any { isDetailer(it.classType) }
+        val hasLatent = reachableNodes.any { isLatentGenerator(it.classType) }
+        val hasVideo = reachableNodes.any { isVideoNode(it.classType) }
+        val hasMaskInput = reachableNodes.any { node ->
+            node.inputs.any { (name, value) ->
+                name.contains("mask", ignoreCase = true) &&
+                    value.asNodeLink(graph.nodes.keys) != null
+            }
         }
-        val hasEmptyLatent = graph.nodes.values.any {
-            it.id in reachable && it.classType == "EmptyLatentImage"
+        val hasControlNet = reachableNodes.any {
+            it.classType.contains("controlnet", ignoreCase = true)
+        }
+        val hasUpscale = reachableNodes.any {
+            it.classType in upscaleClassNames ||
+                it.classType.contains("upscale", ignoreCase = true) ||
+                it.classType.contains("esrgan", ignoreCase = true) ||
+                it.classType.contains("swinir", ignoreCase = true)
+        }
+        val capabilities = buildSet {
+            if (hasControlNet) add(WorkflowCapability.CONTROL_NET)
+            if (hasUpscale) add(WorkflowCapability.UPSCALE)
+            if (hasAutoDetail) add(WorkflowCapability.DETAILER)
+            if (hasVideo) add(WorkflowCapability.VIDEO)
         }
         val mode = when {
-            imageSlots.isNotEmpty() && maskSlots.isNotEmpty() -> WorkflowMode.MASK_INPAINT
+            // 不含 latent 生成器的细节修复工作流，以既有图片为输入，主分类仍是自动重绘。
+            hasAutoDetail && !hasLatent -> WorkflowMode.AUTO_DETAIL
+            maskSlots.isNotEmpty() || (hasMaskInput && imageSlots.isNotEmpty()) ->
+                WorkflowMode.MASK_INPAINT
+            hasVideo -> WorkflowMode.VIDEO
             imageSlots.isNotEmpty() -> WorkflowMode.IMAGE_TO_IMAGE
-            hasAutoDetail -> WorkflowMode.AUTO_DETAIL
-            hasEmptyLatent -> WorkflowMode.TEXT_TO_IMAGE
+            hasLatent -> WorkflowMode.TEXT_TO_IMAGE
             else -> WorkflowMode.UNKNOWN
         }
 
         return WorkflowCompatibility(
             mode = mode,
+            capabilities = capabilities,
             imageSlots = imageSlots,
             maskSlots = maskSlots,
             issues = issues.distinct(),
             catalogChecked = catalog != null,
             analyzerVersion = CURRENT_VERSION,
         )
+    }
+
+    private fun isImageLoader(classType: String): Boolean =
+        classType.contains("LoadImage", ignoreCase = true) ||
+            classType.contains("ImageLoader", ignoreCase = true)
+
+    private fun isDetailer(classType: String): Boolean =
+        classType in detailerClassNames ||
+            classType.contains("Detailer", ignoreCase = true)
+
+    private fun isLatentGenerator(classType: String): Boolean {
+        if (isVideoNode(classType)) return false
+        val lower = classType.lowercase()
+        return lower.contains("empty") && lower.contains("latent")
+    }
+
+    private fun isVideoNode(classType: String): Boolean {
+        val lower = classType.lowercase()
+        return lower.contains("loadvideo") ||
+            lower.contains("videoloader") ||
+            lower.contains("wanimagetovideo") ||
+            lower.contains("wanvideo") ||
+            lower.contains("svd") ||
+            lower.contains("hunyuanvideo") ||
+            lower.contains("latentvideo")
     }
 
     private fun buildConsumers(

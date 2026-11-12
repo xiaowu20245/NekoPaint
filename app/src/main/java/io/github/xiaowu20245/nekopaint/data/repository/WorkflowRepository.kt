@@ -442,12 +442,38 @@ class WorkflowRepository(
         )
     }
 
-    private fun readProfile(dir: File): WorkflowTemplate? {
+    private suspend fun readProfile(dir: File): WorkflowTemplate? {
         val file = File(dir, "profile.json")
         if (!file.exists()) return null
-        return runCatching {
+        val template = runCatching {
             json.decodeFromString(WorkflowTemplate.serializer(), file.readText())
-        }.getOrNull()
+        }.getOrNull() ?: return null
+
+        // 分析器升级后，读取旧模板时按当前版本重算分类与能力标签，避免必须重新导入。
+        val compatibility = template.compatibility
+        if (compatibility != null &&
+            compatibility.analyzerVersion < WorkflowCompatibilityAnalyzer.CURRENT_VERSION
+        ) {
+            val rawFile = File(dir, "api.json")
+            val raw = runCatching { rawFile.readText() }.getOrNull()
+            val parsed = raw?.let {
+                WorkflowParser.parse(it) as? WorkflowParseResult.Success
+            }
+            if (parsed != null) {
+                val refreshed = WorkflowCompatibilityAnalyzer.analyze(
+                    graph = parsed.graph,
+                    catalog = null,
+                    missingNodeTypes = template.missingNodeTypes,
+                ).copy(
+                    issues = compatibility.issues,
+                    catalogChecked = compatibility.catalogChecked,
+                )
+                val updated = template.copy(compatibility = refreshed)
+                writeProfile(dir, updated)
+                return updated
+            }
+        }
+        return template
     }
 
     private fun ensureRoot() {

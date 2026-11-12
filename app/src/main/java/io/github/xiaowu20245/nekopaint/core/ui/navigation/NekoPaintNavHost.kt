@@ -13,11 +13,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarAction
+import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.feature.generate.GenerateScreen
+import io.github.xiaowu20245.nekopaint.feature.chat.ChatScreen
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryDetailScreen
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryScreen
 import io.github.xiaowu20245.nekopaint.feature.queue.QueueScreen
 import io.github.xiaowu20245.nekopaint.feature.server.ServerScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.AiAssistantSettingsScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.PromptLexiconScreen
 import io.github.xiaowu20245.nekopaint.feature.settings.SettingsScreen
 import io.github.xiaowu20245.nekopaint.feature.workflow.WorkflowDetailScreen
 import io.github.xiaowu20245.nekopaint.feature.workflow.WorkflowsScreen
@@ -27,6 +31,8 @@ fun NekoPaintNavHost(
     navController: NavHostController,
     onTopBarActionChange: (NekoTopBarAction?) -> Unit,
     modifier: Modifier = Modifier,
+    onTopBarIconActionsChange: (List<NekoTopBarIconAction>) -> Unit = {},
+    onBackHandlerChange: ((() -> Boolean)?) -> Unit = {},
 ) {
     NavHost(
         navController = navController,
@@ -74,6 +80,11 @@ fun NekoPaintNavHost(
             WorkflowDetailScreen(
                 templateId = entry.arguments?.getString("templateId").orEmpty(),
                 onTopBarActionChange = onTopBarActionChange,
+                onOpenAiSettings = {
+                    navController.navigate(NekoPaintDestination.AiAssistant.route)
+                },
+                onBack = { navController.popBackStack() },
+                onBackHandlerChange = onBackHandlerChange,
             )
         }
         composable(NekoPaintDestination.Generate.route) { GenerateScreen() }
@@ -89,6 +100,18 @@ fun NekoPaintNavHost(
                 onOpenDetail = { promptId ->
                     navController.navigate("history/$promptId")
                 },
+                onOpenWorkflow = { templateId ->
+                    navController.navigate("workflow/$templateId")
+                },
+                onTopBarIconActionsChange = onTopBarIconActionsChange,
+            )
+        }
+        composable(NekoPaintDestination.Chat.route) {
+            ChatScreen(
+                onOpenAiSettings = {
+                    navController.navigate(NekoPaintDestination.AiAssistant.route)
+                },
+                onTopBarIconActionsChange = onTopBarIconActionsChange,
             )
         }
         composable(
@@ -100,8 +123,26 @@ fun NekoPaintNavHost(
             HistoryDetailScreen(
                 promptId = entry.arguments?.getString("promptId").orEmpty(),
                 onBack = { navController.popBackStack() },
+                onOpenWorkflow = { templateId ->
+                    navController.navigate("workflow/$templateId")
+                },
             )
         }
-        composable(NekoPaintDestination.Settings.route) { SettingsScreen() }
+        composable(NekoPaintDestination.Settings.route) {
+            SettingsScreen(
+                onOpenLexicon = {
+                    navController.navigate(NekoPaintDestination.PromptLexicon.route)
+                },
+                onOpenAiSettings = {
+                    navController.navigate(NekoPaintDestination.AiAssistant.route)
+                },
+            )
+        }
+        composable(NekoPaintDestination.PromptLexicon.route) {
+            PromptLexiconScreen()
+        }
+        composable(NekoPaintDestination.AiAssistant.route) {
+            AiAssistantSettingsScreen()
+        }
     }
 }

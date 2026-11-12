@@ -7,10 +7,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.BuildConfig
+import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ThemeMode
+import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
+import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagCatalog
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
+import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
@@ -33,6 +37,10 @@ data class SettingsUiState(
     val error: String? = null,
     val showTempPreviews: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val builtInWords: Int = 0,
+    val externalWords: Int = 0,
+    val externalFileName: String = "",
+    val aiConfig: AiAssistantConfig = AiAssistantConfig(),
 )
 
 class SettingsViewModel(
@@ -41,6 +49,8 @@ class SettingsViewModel(
     private val serverConfigStore: ServerConfigStore,
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
+    private val promptLexiconRepository: PromptLexiconRepository,
+    private val aiAssistantStore: AiAssistantStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -56,6 +66,22 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsStore.themeMode.collect { themeMode ->
                 _uiState.update { it.copy(themeMode = themeMode) }
+            }
+        }
+        viewModelScope.launch {
+            promptLexiconRepository.state.collect { lexicon ->
+                _uiState.update {
+                    it.copy(
+                        builtInWords = PromptTagCatalog.builtInCount,
+                        externalWords = lexicon.externalCount,
+                        externalFileName = lexicon.fileName,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            aiAssistantStore.config.collect { config ->
+                _uiState.update { it.copy(aiConfig = config) }
             }
         }
     }
@@ -89,6 +115,9 @@ class SettingsViewModel(
             .getOrDefault(ThemeMode.SYSTEM)
         val showTemp = runCatching { settingsStore.showTempPreviews.first() }
             .getOrDefault(false)
+        val aiConfig = runCatching { aiAssistantStore.current() }
+            .getOrDefault(AiAssistantConfig())
+        val externalWords = promptLexiconRepository.state.value.externalCount
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             .format(Date())
 
@@ -112,6 +141,16 @@ class SettingsViewModel(
             appendLine("图片缓存：${cacheBytes / 1024 / 1024} MB")
             appendLine("主题：${theme.name}")
             appendLine("显示临时预览图：$showTemp")
+            appendLine("外部词库：$externalWords 词")
+            appendLine(
+                "AI 助手：${
+                    if (aiConfig.isConfigured) {
+                        "已配置 · ${aiConfig.textModel}"
+                    } else {
+                        "未配置"
+                    }
+                }",
+            )
             appendLine()
             appendLine("队列错误：${sanitize(taskManager.queueError.value)}")
             appendLine("历史错误：${sanitize(taskManager.historyError.value)}")
@@ -120,10 +159,12 @@ class SettingsViewModel(
         }
     }
 
-    fun refreshCacheSize() {
+    fun refreshCacheSize(silent: Boolean = false) {
         if (_uiState.value.clearing) return
         viewModelScope.launch {
-            _uiState.update { it.copy(loading = true) }
+            if (!silent) {
+                _uiState.update { it.copy(loading = true) }
+            }
             val bytes = runCatching { cacheManager.sizeBytes() }.getOrDefault(0L)
             _uiState.update { it.copy(cacheBytes = bytes, loading = false) }
         }
@@ -173,6 +214,8 @@ class SettingsViewModel(
                     serverConfigStore = container.serverConfigStore,
                     taskManager = container.taskManager,
                     workflowRepository = container.workflowRepository,
+                    promptLexiconRepository = container.promptLexiconRepository,
+                    aiAssistantStore = container.aiAssistantStore,
                 )
             }
         }

@@ -10,6 +10,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 
 enum class NekoPaintDestination(
     val route: String,
@@ -24,6 +25,11 @@ enum class NekoPaintDestination(
     // 保留路由，后续由工作流详情 / 队列历史进入，不放在底部导航。
     Generate("generate", R.string.nav_generate, Icons.Outlined.PlayArrow),
     History("history", R.string.nav_history, Icons.Outlined.Star),
+    Chat("chat", R.string.chat_title, NekoIcons.Sparkles),
+
+    // 设置二级页：只从设置主页进入，复用全局返回箭头。
+    PromptLexicon("settings/lexicon", R.string.prompt_lexicon_title, NekoIcons.Bookmark),
+    AiAssistant("settings/ai", R.string.ai_assistant_title, NekoIcons.Sparkles),
     ;
 
     companion object {

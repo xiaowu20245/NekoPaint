@@ -3,17 +3,22 @@ package io.github.xiaowu20245.nekopaint.di
 import android.content.Context
 import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
+import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
+import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
+import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
 import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.data.repository.ModelCatalogStore
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
+import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
+import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
@@ -42,6 +47,9 @@ class AppContainer(context: Context) {
     val serverConfigStore = ServerConfigStore(context.applicationContext, json)
     val clientIdStore = ClientIdStore(context.applicationContext)
     val settingsStore = SettingsStore(context.applicationContext)
+    val aiAssistantStore = AiAssistantStore(context.applicationContext)
+    val promptLexiconRepository = PromptLexiconRepository(context.applicationContext, json)
+    val pendingWorkflowRefillStore = PendingWorkflowRefillStore()
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(NetworkConfig.ConnectTimeoutSeconds, TimeUnit.SECONDS)
@@ -65,6 +73,17 @@ class AppContainer(context: Context) {
         .readTimeout(NetworkConfig.ImageReadTimeoutSeconds, TimeUnit.SECONDS)
         .build()
 
+    // 大模型响应可能超过普通请求的 15 秒读取超时，单独放宽到 60 秒。
+    val aiOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
+        .readTimeout(NetworkConfig.AiReadTimeoutSeconds, TimeUnit.SECONDS)
+        .build()
+
+    val aiAssistantClient = AiAssistantClient(
+        client = aiOkHttpClient,
+        json = json,
+        sessionIdProvider = clientIdStore::getOrCreate,
+    )
+
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)
 
     val serverRepository = ServerRepository(serverConfigStore, comfyApiFactory)
@@ -73,6 +92,8 @@ class AppContainer(context: Context) {
     val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)
 
     val imageShareManager = ImageShareManager(context.applicationContext, imageOkHttpClient)
+
+    val chatImageEncoder = ChatImageEncoder(context.applicationContext)
 
     val mediaCacheManager = MediaCacheManager(context.applicationContext, imageShareManager)
 
