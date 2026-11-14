@@ -136,6 +136,7 @@ fun ServerScreen() {
 
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            delay(250)
             while (isActive) {
                 viewModel.refreshActive()
                 delay(5_000)

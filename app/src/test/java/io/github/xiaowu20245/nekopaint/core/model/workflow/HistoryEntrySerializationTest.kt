@@ -18,6 +18,7 @@ class HistoryEntrySerializationTest {
     fun roundTripsCachedHistoryEntry() {
         val entry = HistoryEntry(
             promptId = "prompt-1",
+            serverId = "autodl",
             status = "success",
             completed = true,
             timestamp = 1000L,

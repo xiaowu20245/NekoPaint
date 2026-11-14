@@ -23,6 +23,40 @@ class AiChatResponseParserTest {
     }
 
     @Test
+    fun `parses tool calls`() {
+        val body = """
+            {
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                      {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                          "name": "get_queue_snapshot",
+                          "arguments": "{}"
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": "tool_calls"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val completion = AiChatResponseParser.parseCompletion(json, body)
+
+        assertEquals("tool_calls", completion?.finishReason)
+        assertEquals(1, completion?.toolCalls?.size)
+        assertEquals("get_queue_snapshot", completion?.toolCalls?.first()?.name)
+        assertEquals("call_1", completion?.toolCalls?.first()?.id)
+    }
+
+    @Test
     fun `parses openai error message`() {
         val body = """{"error":{"message":"Incorrect API key provided","type":"auth"}}"""
 

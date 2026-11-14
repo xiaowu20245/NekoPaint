@@ -11,12 +11,15 @@ import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
+import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
 import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
+import io.github.xiaowu20245.nekopaint.data.repository.HistoryAutoSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.data.repository.ModelCatalogStore
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
+import io.github.xiaowu20245.nekopaint.data.repository.NodeInstallRepository
 import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
 import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
@@ -25,10 +28,16 @@ import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
+import io.github.xiaowu20245.nekopaint.feature.chat.ChatHistoryStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
+
+private const val MANAGER_READ_TIMEOUT_SECONDS = 60L
 
 /**
  * 手动依赖注入容器。
@@ -36,6 +45,9 @@ import java.util.concurrent.TimeUnit
  * V0.0 只搭建骨架；当依赖数量明显增加时，再评估是否迁移到 Hilt。
  */
 class AppContainer(context: Context) {
+
+    // 应用级协程作用域：聊天请求在离开页面后仍继续完成并写盘。
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -48,6 +60,7 @@ class AppContainer(context: Context) {
     val clientIdStore = ClientIdStore(context.applicationContext)
     val settingsStore = SettingsStore(context.applicationContext)
     val aiAssistantStore = AiAssistantStore(context.applicationContext)
+    val chatHistoryStore = ChatHistoryStore(context.applicationContext, json)
     val promptLexiconRepository = PromptLexiconRepository(context.applicationContext, json)
     val pendingWorkflowRefillStore = PendingWorkflowRefillStore()
 
@@ -78,6 +91,11 @@ class AppContainer(context: Context) {
         .readTimeout(NetworkConfig.AiReadTimeoutSeconds, TimeUnit.SECONDS)
         .build()
 
+    // Manager 首次拉取节点映射时可能需要访问远程源，单独放宽读取超时。
+    val managerOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
+        .readTimeout(MANAGER_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .build()
+
     val aiAssistantClient = AiAssistantClient(
         client = aiOkHttpClient,
         json = json,
@@ -85,15 +103,25 @@ class AppContainer(context: Context) {
     )
 
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)
+    val managerApiFactory = ComfyApiFactory(managerOkHttpClient, json)
 
     val serverRepository = ServerRepository(serverConfigStore, comfyApiFactory)
     val serverAvatarStore = ServerAvatarStore(context.applicationContext)
 
     val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)
 
+    val historyAutoSaver = HistoryAutoSaver(
+        context = context.applicationContext,
+        json = json,
+        settingsStore = settingsStore,
+        imageSaver = imageSaver,
+    )
+
     val imageShareManager = ImageShareManager(context.applicationContext, imageOkHttpClient)
 
     val chatImageEncoder = ChatImageEncoder(context.applicationContext)
+
+    val chatImageStore = ChatImageStore(context.applicationContext)
 
     val mediaCacheManager = MediaCacheManager(context.applicationContext, imageShareManager)
 
@@ -122,6 +150,7 @@ class AppContainer(context: Context) {
         webSocketManager = webSocketManager,
         clientIdStore = clientIdStore,
         serverConfigStore = serverConfigStore,
+        historyAutoSaver = historyAutoSaver,
     )
 
     val workflowRepository = WorkflowRepository(
@@ -131,5 +160,11 @@ class AppContainer(context: Context) {
         serverConfigStore = serverConfigStore,
         clientIdStore = clientIdStore,
         taskStore = taskStore,
+    )
+
+    val nodeInstallRepository = NodeInstallRepository(
+        apiFactory = managerApiFactory,
+        serverConfigStore = serverConfigStore,
+        workflowRepository = workflowRepository,
     )
 }

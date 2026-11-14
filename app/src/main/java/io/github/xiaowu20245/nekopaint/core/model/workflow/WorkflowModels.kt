@@ -177,6 +177,7 @@ data class WorkflowTemplate(
     val missingNodeTypes: List<String> = emptyList(),
     val catalogChecked: Boolean = false,
     val candidates: List<ParameterCandidate> = emptyList(),
+    val primaryPromptCandidateId: String? = null,
     val compatibility: WorkflowCompatibility? = null,
     val presets: List<WorkflowPreset> = emptyList(),
     val activePresetId: String? = null,

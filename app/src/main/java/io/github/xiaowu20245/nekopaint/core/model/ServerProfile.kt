@@ -22,6 +22,22 @@ data class ServerProfile(
         avatarUri = avatarUri,
     )
 
+    /**
+     * 同一物理 ComfyUI 的轻量标识。
+     *
+     * 多个配置可以起不同名字但指向同一地址；历史操作以此判断是否可复用当前主机连接。
+     */
+    val endpointKey: String
+        get() = "${scheme.trim().lowercase()}:${normalizedHost()}:$port"
+
+    private fun normalizedHost(): String {
+        val value = host.trim().lowercase().removeSuffix(".")
+        return when (value) {
+            "localhost", "::1", "[::1]" -> "127.0.0.1"
+            else -> value
+        }
+    }
+
     companion object {
         fun fromConfig(
             config: ServerConfig,

@@ -59,6 +59,23 @@ class TaskStore(
             .sortedByDescending { it.submittedAt }
     }
 
+    /**
+     * 读取所有主机的本地任务归档，任务记录自身带 serverId。
+     */
+    suspend fun listAll(): List<TaskRecord> = withContext(Dispatchers.IO) {
+        val ids = rootDir.listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .map { it.name }
+            .toMutableSet()
+        ids += ServerConfigStore.DEFAULT_SERVER_ID
+        val result = mutableListOf<TaskRecord>()
+        ids.forEach { id -> result += list(id) }
+        result
+            .distinctBy { task -> task.serverId to task.promptId }
+            .sortedByDescending { it.submittedAt }
+    }
+
     private fun dirFor(serverId: String): File {
         val dir = File(rootDir, "$serverId/tasks")
         if (serverId == ServerConfigStore.DEFAULT_SERVER_ID &&

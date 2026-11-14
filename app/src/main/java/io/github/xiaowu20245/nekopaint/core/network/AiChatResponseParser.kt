@@ -12,13 +12,30 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 object AiChatResponseParser {
 
-    fun parseContent(json: Json, rawBody: String): String? {
+    fun parseContent(json: Json, rawBody: String): String? =
+        parseCompletion(json, rawBody)?.content
+
+    fun parseCompletion(json: Json, rawBody: String): AiChatCompletion? {
         val root = runCatching { json.parseToJsonElement(rawBody).jsonObject }.getOrNull()
             ?: return null
         val choices = root["choices"] as? JsonArray ?: return null
         val firstChoice = choices.firstOrNull() as? JsonObject ?: return null
         val message = firstChoice["message"] as? JsonObject ?: return null
-        return message["content"]?.jsonPrimitive?.contentOrNull?.trim()
+        val content = message["content"]?.jsonPrimitive?.contentOrNull?.trim()
+        val toolCalls = (message["tool_calls"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val toolCall = element as? JsonObject ?: return@mapNotNull null
+            val id = toolCall["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val function = toolCall["function"] as? JsonObject ?: return@mapNotNull null
+            val name = function["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val arguments = function["arguments"]?.jsonPrimitive?.contentOrNull ?: "{}"
+            AiToolCall(id = id, name = name, arguments = arguments)
+        }
+        val finishReason = firstChoice["finish_reason"]?.jsonPrimitive?.contentOrNull
+        return AiChatCompletion(
+            content = content?.takeIf { it.isNotBlank() },
+            toolCalls = toolCalls,
+            finishReason = finishReason,
+        )
     }
 
     fun parseErrorMessage(json: Json, rawBody: String): String? {

@@ -28,6 +28,7 @@ data class HistoryImage(
 @Serializable
 data class HistoryEntry(
     val promptId: String,
+    val serverId: String = "",
     val status: String,
     val completed: Boolean,
     val timestamp: Long?,

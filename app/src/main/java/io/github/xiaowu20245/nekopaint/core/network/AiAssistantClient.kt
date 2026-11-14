@@ -14,14 +14,18 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 data class AiChatMessage(
     val role: String,
-    val content: String,
+    val content: String? = null,
     val imageDataUrl: String? = null,
+    val toolCalls: List<AiToolCall> = emptyList(),
+    val toolCallId: String? = null,
+    val name: String? = null,
 )
 
 /**
@@ -41,7 +45,7 @@ class AiAssistantClient(
             return@withContext Result.failure(IllegalStateException("请填写 Base URL 和文本模型"))
         }
         val startedAt = System.nanoTime()
-        val result = executeChat(
+        val result = executeTextChat(
             config = config,
             messages = listOf(AiChatMessage("user", "hi")),
             maxTokens = 8,
@@ -53,7 +57,7 @@ class AiAssistantClient(
         if (!config.isConfigured) {
             return Result.failure(IllegalStateException("尚未配置 AI 助手"))
         }
-        return executeChat(
+        return executeTextChat(
             config = config,
             messages = listOf(
                 AiChatMessage(
@@ -70,7 +74,7 @@ class AiAssistantClient(
         if (!config.isConfigured) {
             return Result.failure(IllegalStateException("尚未配置 AI 助手"))
         }
-        return executeChat(
+        return executeTextChat(
             config = config,
             messages = listOf(
                 AiChatMessage(
@@ -103,7 +107,7 @@ class AiAssistantClient(
                 ),
             )
         }
-        return executeChat(
+        return executeTextChat(
             config = config,
             messages = messages,
             maxTokens = 1024,
@@ -111,32 +115,137 @@ class AiAssistantClient(
         )
     }
 
+    /**
+     * 带只读工具的对话；模型可以自行决定调用哪个工具。
+     */
+    suspend fun chatWithTools(
+        config: AiAssistantConfig,
+        messages: List<AiChatMessage>,
+        tools: List<AiToolDefinition>,
+        toolChoice: String? = "auto",
+    ): Result<AiChatCompletion> {
+        if (!config.isConfigured) {
+            return Result.failure(IllegalStateException("尚未配置 AI 助手"))
+        }
+        if (messages.any { !it.imageDataUrl.isNullOrBlank() }) {
+            return Result.failure(IllegalStateException("图片对话暂不支持工具调用"))
+        }
+        val model = config.textModel.trim()
+        if (model.isBlank()) {
+            return Result.failure(IllegalStateException("请先在设置中填写文本模型"))
+        }
+        return executeChat(
+            config = config,
+            messages = messages,
+            maxTokens = 1024,
+            model = model,
+            tools = tools,
+            toolChoice = toolChoice,
+        )
+    }
+
+    /**
+     * 带只读工具的流式对话；[onDelta] 会在模型逐字返回时被调用。
+     */
+    suspend fun chatWithToolsStream(
+        config: AiAssistantConfig,
+        messages: List<AiChatMessage>,
+        tools: List<AiToolDefinition>,
+        toolChoice: String? = "auto",
+        onDelta: (String) -> Unit,
+    ): Result<AiChatCompletion> {
+        if (!config.isConfigured) {
+            return Result.failure(IllegalStateException("尚未配置 AI 助手"))
+        }
+        if (messages.any { !it.imageDataUrl.isNullOrBlank() }) {
+            return Result.failure(IllegalStateException("图片对话暂不支持工具调用"))
+        }
+        val model = config.textModel.trim()
+        if (model.isBlank()) {
+            return Result.failure(IllegalStateException("请先在设置中填写文本模型"))
+        }
+        return executeChat(
+            config = config,
+            messages = messages,
+            maxTokens = 1024,
+            model = model,
+            tools = tools,
+            toolChoice = toolChoice,
+            stream = true,
+            onDelta = onDelta,
+        )
+    }
+
+    private suspend fun executeTextChat(
+        config: AiAssistantConfig,
+        messages: List<AiChatMessage>,
+        maxTokens: Int = 512,
+        model: String = config.textModel,
+    ): Result<String> = executeChat(
+        config = config,
+        messages = messages,
+        maxTokens = maxTokens,
+        model = model,
+    ).mapCatching { completion ->
+        completion.content?.takeIf { it.isNotBlank() }
+            ?: error("服务已响应，但未返回可用文本")
+    }
+
     private suspend fun executeChat(
         config: AiAssistantConfig,
         messages: List<AiChatMessage>,
         maxTokens: Int = 512,
         model: String = config.textModel,
-    ): Result<String> = withContext(Dispatchers.IO) {
+        tools: List<AiToolDefinition> = emptyList(),
+        toolChoice: String? = null,
+        stream: Boolean = false,
+        onDelta: (String) -> Unit = {},
+    ): Result<AiChatCompletion> = withContext(Dispatchers.IO) {
         val url = buildEndpoint(config.baseUrl)
         val body = buildJsonObject {
             put("model", model.trim())
             putJsonArray("messages") {
                 messages.forEach { message ->
                     addJsonObject {
-                        put("role", message.role)
-                        val image = message.imageDataUrl
-                        if (image.isNullOrBlank()) {
-                            put("content", message.content)
-                        } else {
-                            putJsonArray("content") {
-                                addJsonObject {
-                                    put("type", "text")
-                                    put("text", message.content)
+                        when {
+                            message.role == "tool" -> {
+                                put("role", "tool")
+                                put("content", message.content.orEmpty())
+                                put("tool_call_id", message.toolCallId.orEmpty())
+                            }
+                            message.toolCalls.isNotEmpty() -> {
+                                put("role", message.role)
+                                put("content", message.content.orEmpty())
+                                putJsonArray("tool_calls") {
+                                    message.toolCalls.forEach { call ->
+                                        addJsonObject {
+                                            put("id", call.id)
+                                            put("type", "function")
+                                            putJsonObject("function") {
+                                                put("name", call.name)
+                                                put("arguments", call.arguments)
+                                            }
+                                        }
+                                    }
                                 }
-                                addJsonObject {
-                                    put("type", "image_url")
-                                    putJsonObject("image_url") {
-                                        put("url", image)
+                            }
+                            else -> {
+                                put("role", message.role)
+                                val image = message.imageDataUrl
+                                if (image.isNullOrBlank()) {
+                                    put("content", message.content.orEmpty())
+                                } else {
+                                    putJsonArray("content") {
+                                        addJsonObject {
+                                            put("type", "text")
+                                            put("text", message.content.orEmpty())
+                                        }
+                                        addJsonObject {
+                                            put("type", "image_url")
+                                            putJsonObject("image_url") {
+                                                put("url", image)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -144,7 +253,22 @@ class AiAssistantClient(
                     }
                 }
             }
-            put("stream", false)
+            if (tools.isNotEmpty()) {
+                putJsonArray("tools") {
+                    tools.forEach { tool ->
+                        addJsonObject {
+                            put("type", "function")
+                            putJsonObject("function") {
+                                put("name", tool.name)
+                                put("description", tool.description)
+                                put("parameters", tool.parameters)
+                            }
+                        }
+                    }
+                }
+                toolChoice?.let { put("tool_choice", it) }
+            }
+            put("stream", stream)
             put("max_tokens", maxTokens)
         }.toString()
 
@@ -166,8 +290,8 @@ class AiAssistantClient(
 
         try {
             client.newCall(request).execute().use { response ->
-                val rawBody = response.body.string()
                 if (!response.isSuccessful) {
+                    val rawBody = response.body.string()
                     val detail = AiChatResponseParser.parseErrorMessage(json, rawBody)
                     return@withContext Result.failure(
                         IllegalStateException(
@@ -175,13 +299,19 @@ class AiAssistantClient(
                         ),
                     )
                 }
-                val content = AiChatResponseParser.parseContent(json, rawBody)
-                if (content.isNullOrBlank()) {
+                val completion = if (stream) {
+                    readStreamingCompletion(response.body.source(), onDelta)
+                } else {
+                    AiChatResponseParser.parseCompletion(json, response.body.string())
+                }
+                if (completion == null ||
+                    (completion.content.isNullOrBlank() && completion.toolCalls.isEmpty())
+                ) {
                     return@withContext Result.failure(
-                        IllegalStateException("服务已响应，但未返回可用文本"),
+                        IllegalStateException("服务已响应，但未返回可用内容"),
                     )
                 }
-                Result.success(content)
+                Result.success(completion)
             }
         } catch (timeout: SocketTimeoutException) {
             Result.failure(timeout)
@@ -190,6 +320,45 @@ class AiAssistantClient(
         } catch (io: IOException) {
             Result.failure(IllegalStateException("网络请求失败：${io.message ?: "请检查网络和地址"}"))
         }
+    }
+
+    private fun readStreamingCompletion(
+        source: BufferedSource,
+        onDelta: (String) -> Unit,
+    ): AiChatCompletion {
+        val content = StringBuilder()
+        val toolCalls = mutableMapOf<Int, MutableToolCall>()
+        var finishReason: String? = null
+
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            val payload = AiChatStreamParser.extractPayload(line) ?: continue
+            if (AiChatStreamParser.isDone(payload)) break
+            val delta = AiChatStreamParser.parseDelta(json, payload) ?: continue
+            delta.content?.let { text ->
+                content.append(text)
+                onDelta(text)
+            }
+            delta.toolCalls.forEach { call ->
+                val builder = toolCalls.getOrPut(call.index) { MutableToolCall() }
+                call.id?.takeIf { it.isNotBlank() }?.let { builder.id = it }
+                call.name?.takeIf { it.isNotBlank() }?.let { builder.name = it }
+                call.arguments?.let { builder.arguments.append(it) }
+            }
+            delta.finishReason?.let { finishReason = it }
+        }
+
+        return AiChatCompletion(
+            content = content.toString().trim().takeIf { it.isNotBlank() },
+            toolCalls = toolCalls.toSortedMap().map { (index, builder) ->
+                AiToolCall(
+                    id = builder.id.ifBlank { "call_$index" },
+                    name = builder.name,
+                    arguments = builder.arguments.toString().ifBlank { "{}" },
+                )
+            },
+            finishReason = finishReason,
+        )
     }
 
     private fun buildEndpoint(baseUrl: String): String {
@@ -216,4 +385,10 @@ class AiAssistantClient(
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
+}
+
+private class MutableToolCall {
+    var id: String = ""
+    var name: String = ""
+    val arguments = StringBuilder()
 }

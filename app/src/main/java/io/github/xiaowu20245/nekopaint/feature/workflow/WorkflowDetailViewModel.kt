@@ -10,7 +10,9 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
@@ -22,6 +24,7 @@ import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyz
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
+import io.github.xiaowu20245.nekopaint.data.repository.NodeInstallRepository
 import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
@@ -29,10 +32,13 @@ import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 sealed interface FieldError {
@@ -72,9 +78,9 @@ data class WorkflowDetailUiState(
     val uploadingCandidateId: String? = null,
     val uploadedImageName: String? = null,
     val imageUploadError: String? = null,
-    val maskSourceImages: List<HistoryImage> = emptyList(),
     val rawJsonVisible: Boolean = false,
     val rawJson: String? = null,
+    val checkingNodes: Boolean = false,
     @param:StringRes val errorRes: Int? = null,
 ) {
     val visibleCandidates: List<ParameterCandidate>
@@ -87,16 +93,49 @@ data class WorkflowDetailUiState(
         }.orEmpty()
 }
 
+data class NodeInstallUiState(
+    val visible: Boolean = false,
+    val loading: Boolean = false,
+    val plan: NodeInstallPlan? = null,
+    val error: String? = null,
+    val installing: Boolean = false,
+    val progress: String? = null,
+    val restartAfterInstall: Boolean = true,
+    val result: String? = null,
+    val remainingMissing: List<String> = emptyList(),
+)
+
 class WorkflowDetailViewModel(
     private val templateId: String,
     private val repository: WorkflowRepository,
     private val modelsRepository: ModelsRepository,
     private val taskManager: TaskManager,
     private val pendingRefillStore: PendingWorkflowRefillStore,
+    private val nodeInstallRepository: NodeInstallRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowDetailUiState())
     val uiState: StateFlow<WorkflowDetailUiState> = _uiState.asStateFlow()
+
+    private val _nodeInstallState = MutableStateFlow(NodeInstallUiState())
+    val nodeInstallState: StateFlow<NodeInstallUiState> = _nodeInstallState.asStateFlow()
+
+    /**
+     * 蒙版来源图只在打开蒙版编辑器时订阅，避免历史刷新触发表单整页重组。
+     */
+    val maskSourceImages: StateFlow<List<HistoryImage>> = taskManager.history
+        .map { entries ->
+            entries
+                .flatMap { entry -> entry.images.filter { it.type == "output" } }
+                .take(60)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
+    private var compatibilityFresh = false
 
     init {
         viewModelScope.launch {
@@ -138,36 +177,37 @@ class WorkflowDetailViewModel(
                 )
             }
             template?.let { loadModelOptions(it) }
-            template?.takeIf {
-                it.compatibility == null ||
-                    !it.catalogChecked ||
-                    it.compatibility.analyzerVersion != WorkflowCompatibilityAnalyzer.CURRENT_VERSION
-            }?.let { refreshCompatibility(it) }
-        }
-        viewModelScope.launch {
-            taskManager.history.collect { entries ->
-                val images = entries
-                    .flatMap { entry -> entry.images.filter { it.type == "output" } }
-                    .take(60)
-                _uiState.update { it.copy(maskSourceImages = images) }
-            }
+            // 服务器可能切换过，旧模板的缺失节点缓存不一定适用于当前主机；每次打开都复核一次。
+            template?.let { refreshCompatibility(it) }
         }
         taskManager.refresh()
     }
 
     private fun refreshCompatibility(template: WorkflowTemplate) {
+        compatibilityFresh = false
         viewModelScope.launch {
-            val analyzed = repository.analyzeCompatibility(template) ?: return@launch
-            _uiState.update { state ->
-                val current = state.template ?: return@update state
-                if (current.id != analyzed.id) return@update state
-                state.copy(
-                    template = current.copy(
-                        missingNodeTypes = analyzed.missingNodeTypes,
-                        catalogChecked = analyzed.catalogChecked,
-                        compatibility = analyzed.compatibility,
-                    ),
-                )
+            // 避开页面进入动画；模板内容先稳定绘制，再开始兼容性复核。
+            delay(INITIAL_SETTLE_DELAY_MS)
+            _uiState.update { it.copy(checkingNodes = true) }
+            try {
+                val analyzed = repository.analyzeCompatibility(template) ?: return@launch
+                // 未连接服务器时 catalogChecked 为 false，不能把“无法检查”写成“没有缺失”。
+                if (!analyzed.catalogChecked) return@launch
+                val saved = repository.saveCompatibility(template.id, analyzed) ?: analyzed
+                compatibilityFresh = true
+                _uiState.update { state ->
+                    val current = state.template ?: return@update state
+                    if (current.id != saved.id) return@update state
+                    state.copy(
+                        template = current.copy(
+                            missingNodeTypes = saved.missingNodeTypes,
+                            catalogChecked = saved.catalogChecked,
+                            compatibility = saved.compatibility,
+                        ),
+                    )
+                }
+            } finally {
+                _uiState.update { it.copy(checkingNodes = false) }
             }
         }
     }
@@ -186,6 +226,7 @@ class WorkflowDetailViewModel(
         if (folderByCandidate.isEmpty()) return
 
         viewModelScope.launch {
+            delay(INITIAL_SETTLE_DELAY_MS)
             modelsRepository.load(folderByCandidate.values.toSet())
                 .onSuccess { catalog ->
                     _uiState.update { state ->
@@ -273,6 +314,29 @@ class WorkflowDetailViewModel(
                 submission = null,
                 submitError = null,
             )
+        }
+    }
+
+    fun setPrimaryPrompt(candidateId: String?) {
+        val template = _uiState.value.template ?: return
+        if (candidateId != null) {
+            val valid = template.candidates.any { candidate ->
+                candidate.id == candidateId &&
+                    candidate.group == ParameterGroup.PROMPT &&
+                    !candidate.readOnly &&
+                    !candidate.label.contains("负")
+            }
+            if (!valid) return
+        }
+        val updated = template.copy(primaryPromptCandidateId = candidateId)
+        _uiState.update { it.copy(template = updated, errorRes = null) }
+        viewModelScope.launch {
+            runCatching { repository.updateTemplate(updated) }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
         }
     }
 
@@ -563,6 +627,138 @@ class WorkflowDetailViewModel(
         }
     }
 
+    fun openNodeInstall() {
+        if (_uiState.value.template == null) return
+        _nodeInstallState.value = NodeInstallUiState(visible = true, loading = true)
+        viewModelScope.launch {
+            nodeInstallRepository.preparePlan(
+                templateId = templateId,
+                reanalyze = !compatibilityFresh,
+            ).fold(
+                onSuccess = { plan ->
+                    _nodeInstallState.update {
+                        it.copy(loading = false, plan = plan, error = null)
+                    }
+                },
+                onFailure = { error ->
+                    if (error.message == "节点已经齐全，无需安装") {
+                        repository.getTemplate(templateId)?.let(::applyCompatibilityUpdate)
+                    }
+                    _nodeInstallState.update {
+                        it.copy(
+                            loading = false,
+                            error = error.message ?: "检查缺失节点失败",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun dismissNodeInstall() {
+        if (_nodeInstallState.value.installing) return
+        _nodeInstallState.value = NodeInstallUiState()
+    }
+
+    fun setRestartAfterInstall(value: Boolean) {
+        _nodeInstallState.update { it.copy(restartAfterInstall = value) }
+    }
+
+    fun confirmNodeInstall() {
+        val current = _nodeInstallState.value
+        val plan = current.plan ?: return
+        if (current.installing) return
+        _nodeInstallState.update {
+            it.copy(
+                installing = true,
+                error = null,
+                progress = "正在提交安装请求…",
+            )
+        }
+        viewModelScope.launch {
+            nodeInstallRepository.install(
+                plan = plan,
+                restartAfterInstall = current.restartAfterInstall,
+                onProgress = { message ->
+                    _nodeInstallState.update { it.copy(progress = message) }
+                },
+            ).fold(
+                onSuccess = { outcome ->
+                    outcome.updatedTemplate?.let(::applyCompatibilityUpdate)
+                    _nodeInstallState.update {
+                        it.copy(
+                            installing = false,
+                            plan = null,
+                            progress = null,
+                            result = outcome.summary(),
+                            remainingMissing = outcome.remainingMissingNodeTypes,
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    _nodeInstallState.update {
+                        it.copy(
+                            installing = false,
+                            progress = null,
+                            error = error.message ?: "安装失败",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun recheckNodeInstall() {
+        val current = _nodeInstallState.value
+        if (current.installing) return
+        _nodeInstallState.update {
+            it.copy(loading = true, error = null, result = null)
+        }
+        viewModelScope.launch {
+            nodeInstallRepository.recheck(templateId).fold(
+                onSuccess = { updated ->
+                    applyCompatibilityUpdate(updated)
+                    val remaining = updated.missingNodeTypes
+                    _nodeInstallState.update {
+                        it.copy(
+                            loading = false,
+                            plan = null,
+                            result = if (remaining.isEmpty()) {
+                                "节点已齐全。"
+                            } else {
+                                "仍有 ${remaining.size} 个节点缺失：" +
+                                    remaining.take(8).joinToString("、")
+                            },
+                            remainingMissing = remaining,
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    _nodeInstallState.update {
+                        it.copy(
+                            loading = false,
+                            error = error.message ?: "重新检查失败",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    private fun applyCompatibilityUpdate(updated: WorkflowTemplate) {
+        _uiState.update { state ->
+            val current = state.template ?: return@update state
+            if (current.id != updated.id) return@update state
+            state.copy(
+                template = current.copy(
+                    missingNodeTypes = updated.missingNodeTypes,
+                    catalogChecked = updated.catalogChecked,
+                    compatibility = updated.compatibility,
+                ),
+            )
+        }
+    }
+
     fun save(onSaved: (() -> Unit)? = null) {
         val current = _uiState.value.template ?: return
         if (_uiState.value.saving) return
@@ -677,6 +873,8 @@ class WorkflowDetailViewModel(
                                 ),
                             )
                         }
+                        // 提交校验失败常意味着当前主机缺少节点；立即复检并刷新安装入口。
+                        refreshCompatibility(latestTemplate)
                         return@launch
                     }
 
@@ -799,6 +997,8 @@ class WorkflowDetailViewModel(
     }
 
     companion object {
+        private const val INITIAL_SETTLE_DELAY_MS = 250L
+
         fun factory(
             container: AppContainer,
             templateId: String,
@@ -810,6 +1010,7 @@ class WorkflowDetailViewModel(
                     modelsRepository = container.modelsRepository,
                     taskManager = container.taskManager,
                     pendingRefillStore = container.pendingWorkflowRefillStore,
+                    nodeInstallRepository = container.nodeInstallRepository,
                 )
             }
         }

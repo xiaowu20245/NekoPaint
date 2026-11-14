@@ -57,6 +57,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -128,6 +129,7 @@ fun WorkflowDetailScreen(
         factory = WorkflowDetailViewModel.factory(app.container, templateId),
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val nodeInstallState by viewModel.nodeInstallState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val pagerState = rememberPagerState(pageCount = { 2 })
     val simpleListState = rememberLazyListState()
@@ -278,8 +280,10 @@ fun WorkflowDetailScreen(
                                 CompactOverviewStrip(
                                     template = template,
                                     expanded = overviewExpanded,
+                                    checkingNodes = state.checkingNodes,
                                     onToggleExpanded = { overviewExpanded = !overviewExpanded },
                                     onShowRawJson = viewModel::showRawJson,
+                                    onInstallMissingNodes = viewModel::openNodeInstall,
                                 )
                                 WorkflowPresetSection(
                                     template = template,
@@ -352,6 +356,7 @@ fun WorkflowDetailScreen(
                             onOpenPromptEditor = { candidateId ->
                                 promptEditorCandidateId = candidateId
                             },
+                            onSetPrimaryPrompt = viewModel::setPrimaryPrompt,
                         )
                     }
 
@@ -514,8 +519,9 @@ fun WorkflowDetailScreen(
     }
 
     maskEditorCandidateId?.let { candidateId ->
+        val maskSourceImages by viewModel.maskSourceImages.collectAsStateWithLifecycle()
         MaskEditorDialog(
-            images = state.maskSourceImages,
+            images = maskSourceImages,
             uploading = state.uploadingCandidateId == candidateId,
             uploadError = state.imageUploadError,
             onDismiss = {
@@ -541,6 +547,17 @@ fun WorkflowDetailScreen(
             },
         )
     }
+
+    if (nodeInstallState.visible) {
+        NodeInstallDialog(
+            state = nodeInstallState,
+            onDismiss = viewModel::dismissNodeInstall,
+            onConfirm = viewModel::confirmNodeInstall,
+            onRetry = viewModel::openNodeInstall,
+            onRecheck = viewModel::recheckNodeInstall,
+            onRestartChange = viewModel::setRestartAfterInstall,
+        )
+    }
 }
 
 @Composable
@@ -556,6 +573,7 @@ private fun WorkflowPage(
     onValueChange: (String, String) -> Unit,
     promptTagGroups: List<PromptTagGroup>,
     onOpenPromptEditor: (String) -> Unit,
+    onSetPrimaryPrompt: (String?) -> Unit = {},
     uploadingCandidateId: String?,
     onPickImage: (String) -> Unit,
     onDrawMask: (String) -> Unit,
@@ -673,6 +691,8 @@ private fun WorkflowPage(
                     uploadingCandidateId = uploadingCandidateId,
                     promptTagGroups = promptTagGroups,
                     onOpenPromptEditor = onOpenPromptEditor,
+                    primaryPromptCandidateId = template.primaryPromptCandidateId,
+                    onSetPrimaryPrompt = onSetPrimaryPrompt,
                     onToggleCandidate = onToggleCandidate,
                     onValueChange = onValueChange,
                     onPickImage = onPickImage,
@@ -687,8 +707,10 @@ private fun WorkflowPage(
 private fun CompactOverviewStrip(
     template: WorkflowTemplate,
     expanded: Boolean,
+    checkingNodes: Boolean,
     onToggleExpanded: () -> Unit,
     onShowRawJson: () -> Unit,
+    onInstallMissingNodes: () -> Unit,
 ) {
     val compatibility = template.compatibility
     val mode = compatibility?.mode ?: WorkflowMode.UNKNOWN
@@ -789,6 +811,12 @@ private fun CompactOverviewStrip(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (checkingNodes) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp,
+                        )
+                    }
                 }
 
                 Row(
@@ -840,6 +868,15 @@ private fun CompactOverviewStrip(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                         )
                     }
+                }
+            }
+
+            if (template.missingNodeTypes.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = onInstallMissingNodes,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.workflow_install_missing_nodes))
                 }
             }
 
@@ -1275,6 +1312,8 @@ private fun ParameterGroupSection(
     uploadingCandidateId: String?,
     promptTagGroups: List<PromptTagGroup>,
     onOpenPromptEditor: (String) -> Unit,
+    primaryPromptCandidateId: String? = null,
+    onSetPrimaryPrompt: (String?) -> Unit = {},
     onToggleCandidate: (String) -> Unit,
     onValueChange: (String, String) -> Unit,
     onPickImage: (String) -> Unit,
@@ -1320,9 +1359,17 @@ private fun ParameterGroupSection(
 
             if (!showCheckbox && group == ParameterGroup.PROMPT) {
                 candidates.forEach { promptCandidate ->
+                    val isPrimary = promptCandidate.id == primaryPromptCandidateId
                     PromptSummaryCard(
                         candidate = promptCandidate,
                         groups = promptTagGroups,
+                        isPrimary = isPrimary,
+                        canSetPrimary = !promptCandidate.label.contains("负"),
+                        onTogglePrimary = {
+                            onSetPrimaryPrompt(
+                                if (isPrimary) null else promptCandidate.id,
+                            )
+                        },
                         onOpen = { onOpenPromptEditor(promptCandidate.id) },
                     )
                 }
@@ -2089,6 +2136,216 @@ private fun RawJsonDialog(
     )
 }
 
+@Composable
+private fun NodeInstallDialog(
+    state: NodeInstallUiState,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    onRetry: () -> Unit,
+    onRecheck: () -> Unit,
+    onRestartChange: (Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!state.installing) onDismiss() },
+        title = { Text(stringResource(R.string.workflow_install_dialog_title)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (state.loading) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = stringResource(R.string.workflow_install_loading),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                state.error?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    if (state.plan == null &&
+                        !state.installing &&
+                        !error.contains("映射里找不到")
+                    ) {
+                        Text(
+                            text = stringResource(R.string.workflow_install_prerequisites),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                state.plan?.let { plan ->
+                    Text(
+                        text = stringResource(
+                            R.string.workflow_install_missing_summary,
+                            plan.missingNodeTypes.size,
+                            plan.packageCount,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.workflow_install_warning),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(9.dp),
+                        )
+                    }
+                    plan.packages.forEach { pkg ->
+                        Surface(
+                            shape = RoundedCornerShape(9.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(9.dp),
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Text(
+                                    text = pkg.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.workflow_install_package_source,
+                                        pkg.sourceLabel,
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                    if (plan.unresolvedNodeTypes.isNotEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.workflow_install_unresolved,
+                                plan.unresolvedNodeTypes.take(8).joinToString("、"),
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Checkbox(
+                            checked = state.restartAfterInstall,
+                            onCheckedChange = onRestartChange,
+                            enabled = !state.installing,
+                        )
+                        Text(
+                            text = stringResource(R.string.workflow_install_restart),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+
+                if (state.installing) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    state.progress?.let { progress ->
+                        Text(
+                            text = progress,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                state.result?.let { result ->
+                    Text(
+                        text = result,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (state.remainingMissing.isNotEmpty()) {
+                        Text(
+                            text = state.remainingMissing.take(10).joinToString("\n"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    TextButton(
+                        onClick = onRecheck,
+                        enabled = !state.loading && !state.installing,
+                    ) {
+                        Text(stringResource(R.string.workflow_install_recheck))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when {
+                state.loading || state.installing -> Unit
+                state.result != null -> {
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.workflow_close))
+                    }
+                }
+
+                state.plan != null -> {
+                    TextButton(onClick = onConfirm) {
+                        Text(
+                            stringResource(
+                                if (state.restartAfterInstall) {
+                                    R.string.workflow_install_confirm_restart
+                                } else {
+                                    R.string.workflow_install_confirm
+                                },
+                            ),
+                        )
+                    }
+                }
+
+                state.error != null -> {
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.workflow_install_retry))
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (!state.installing) {
+                TextButton(onClick = onDismiss) {
+                    Text(
+                        stringResource(
+                            if (state.result != null) {
+                                R.string.workflow_close
+                            } else {
+                                R.string.action_cancel
+                            },
+                        ),
+                    )
+                }
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EnumField(
@@ -2218,8 +2475,10 @@ private fun WorkflowDetailControlsPreview() {
             CompactOverviewStrip(
                 template = template,
                 expanded = false,
+                checkingNodes = false,
                 onToggleExpanded = {},
                 onShowRawJson = {},
+                onInstallMissingNodes = {},
             )
             WorkflowPresetSection(
                 template = template,

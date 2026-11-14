@@ -37,6 +37,8 @@ class AiAssistantStore(
             apiKey = if (encryptedKey.isBlank()) "" else cipher.decrypt(encryptedKey).orEmpty(),
             textModel = preferences[TextModel] ?: "",
             visionModel = preferences[VisionModel] ?: "",
+            persona = preferences[Persona] ?: "",
+            preInstruction = preferences[PreInstruction] ?: "",
         )
     }
 
@@ -54,6 +56,8 @@ class AiAssistantStore(
             preferences[BaseUrl] = config.baseUrl.trim()
             preferences[TextModel] = config.textModel.trim()
             preferences[VisionModel] = config.visionModel.trim()
+            preferences[Persona] = config.persona.trim()
+            preferences[PreInstruction] = config.preInstruction.trim()
             preferences[ApiKey] = encryptedKey
         }
     }
@@ -64,6 +68,8 @@ class AiAssistantStore(
             preferences.remove(BaseUrl)
             preferences.remove(TextModel)
             preferences.remove(VisionModel)
+            preferences.remove(Persona)
+            preferences.remove(PreInstruction)
             preferences.remove(ApiKey)
         }
     }
@@ -73,6 +79,8 @@ class AiAssistantStore(
         val BaseUrl = stringPreferencesKey("base_url")
         val TextModel = stringPreferencesKey("text_model")
         val VisionModel = stringPreferencesKey("vision_model")
+        val Persona = stringPreferencesKey("persona")
+        val PreInstruction = stringPreferencesKey("pre_instruction")
         val ApiKey = stringPreferencesKey("api_key_encrypted")
     }
 }

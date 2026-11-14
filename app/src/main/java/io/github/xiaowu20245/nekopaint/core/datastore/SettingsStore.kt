@@ -28,6 +28,10 @@ class SettingsStore(context: Context) {
         preferences[ShowTempPreviews] ?: false
     }
 
+    val autoSaveHistoryImages: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AutoSaveHistoryImages] ?: false
+    }
+
     val themeMode: Flow<ThemeMode> = dataStore.data.map { preferences ->
         val raw = preferences[ThemeModeKey]
         runCatching { ThemeMode.valueOf(raw.orEmpty()) }.getOrDefault(ThemeMode.SYSTEM)
@@ -37,12 +41,17 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[ShowTempPreviews] = value }
     }
 
+    suspend fun setAutoSaveHistoryImages(value: Boolean) {
+        dataStore.edit { it[AutoSaveHistoryImages] = value }
+    }
+
     suspend fun setThemeMode(value: ThemeMode) {
         dataStore.edit { it[ThemeModeKey] = value.name }
     }
 
     private companion object {
         val ShowTempPreviews = booleanPreferencesKey("show_temp_previews")
+        val AutoSaveHistoryImages = booleanPreferencesKey("auto_save_history_images")
         val ThemeModeKey = stringPreferencesKey("theme_mode")
     }
 }

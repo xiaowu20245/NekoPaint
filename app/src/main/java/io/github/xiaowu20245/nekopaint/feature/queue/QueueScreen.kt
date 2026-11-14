@@ -111,6 +111,7 @@ fun QueueScreen(
 
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            delay(250)
             while (isActive) {
                 viewModel.refresh()
                 delay(if (state.connection == ComfyConnectionState.Connected) 5_000L else 2_000L)

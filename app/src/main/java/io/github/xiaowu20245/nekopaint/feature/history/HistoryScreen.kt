@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -42,7 +43,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MoreVert
@@ -56,6 +57,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -75,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -85,6 +89,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -109,6 +114,7 @@ import coil3.compose.SubcomposeAsyncImageContent
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
@@ -128,6 +134,7 @@ import java.util.Locale
 fun HistoryScreen(
     onOpenDetail: (String) -> Unit,
     onOpenWorkflow: (String) -> Unit = {},
+    onAskNekoI: (String) -> Unit = {},
     onTopBarIconActionsChange: (List<NekoTopBarIconAction>) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -190,16 +197,70 @@ fun HistoryScreen(
         }
     }
 
-    LaunchedEffect(state.entries) {
-        val existing = state.entries.map { it.promptId }.toSet()
-        selectedIds = selectedIds.intersect(existing)
-        if (selectionMode && state.entries.isEmpty()) {
+    val readOnlyNoticeTemplate = stringResource(R.string.history_host_readonly_notice)
+    val activeHost = remember(state.hosts) { state.hosts.firstOrNull { it.active } }
+    val activeServerIds = remember(activeHost) { activeHost?.serverIds.orEmpty() }
+    val hostByServerId = remember(state.hosts) {
+        buildMap<String, HistoryHost> {
+            state.hosts.forEach { host ->
+                host.serverIds.forEach { serverId -> put(serverId, host) }
+            }
+        }
+    }
+    val hostDisplayNames = remember(state.hosts) {
+        buildMap<String, String> {
+            state.hosts.forEach { host ->
+                val displayName = if (host.aliasCount > 1) {
+                    "${host.name} +${host.aliasCount - 1}"
+                } else {
+                    host.name
+                }
+                host.serverIds.forEach { serverId -> put(serverId, displayName) }
+            }
+        }
+    }
+    val hostSimpleName: (String) -> String = { serverId ->
+        hostByServerId[serverId]?.name ?: serverId.take(8)
+    }
+    val hostDisplayName: (String) -> String = { serverId ->
+        val host = hostByServerId[serverId]
+        when {
+            host == null -> serverId.take(8)
+            host.aliasCount > 1 -> "${host.name} +${host.aliasCount - 1}"
+            else -> host.name
+        }
+    }
+    val activeHostName = activeHost?.name ?: hostSimpleName(state.activeServerId)
+    val isOperable: (String) -> Boolean = { serverId ->
+        serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } in activeServerIds
+    }
+    val notifyReadOnly: (String) -> Unit = { serverId ->
+        scope.launch {
+            snackbarHostState.showSnackbar(
+                String.format(readOnlyNoticeTemplate, hostSimpleName(serverId)),
+            )
+        }
+    }
+
+    LaunchedEffect(state.entries, state.activeServerId) {
+        val selectable = state.entries
+            .filter { isOperable(it.serverId) }
+            .map { it.promptId }
+            .toSet()
+        selectedIds = selectedIds.intersect(selectable)
+        if (selectionMode && selectable.isEmpty()) {
             selectionMode = false
         }
     }
 
+    LaunchedEffect(state.activeServerId, state.selectedHostId) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
+
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            delay(250)
             while (isActive) {
                 viewModel.refresh()
                 delay(10_000)
@@ -207,42 +268,109 @@ fun HistoryScreen(
         }
     }
 
-    // Filter entries according to filter state
-    val filteredEntries = remember(state.entries, state.filter, state.showTempPreviews) {
+    val selectedHost = remember(state.hosts, state.selectedHostId) {
+        state.hosts.firstOrNull { it.id == state.selectedHostId }
+    }
+    // 先按主机组筛选，再按成图/草稿筛选。
+    val hostFilteredEntries = remember(state.entries, selectedHost) {
+        if (selectedHost == null) {
+            state.entries
+        } else {
+            state.entries.filter { it.serverId in selectedHost.serverIds }
+        }
+    }
+    val filteredEntries = remember(hostFilteredEntries, state.filter) {
         when (state.filter) {
-            HistoryFilter.ALL -> state.entries
-            HistoryFilter.OUTPUTS -> state.entries.filter { entry ->
+            HistoryFilter.ALL -> hostFilteredEntries
+            HistoryFilter.OUTPUTS -> hostFilteredEntries.filter { entry ->
                 entry.images.any { it.type == "output" }
             }
-            HistoryFilter.TEMP -> state.entries.filter { entry ->
+            HistoryFilter.TEMP -> hostFilteredEntries.filter { entry ->
                 entry.images.any { it.type == "temp" }
             }
         }
     }
-    val tasksById = remember(state.tasks) { state.tasks.associateBy { it.promptId } }
+    val activeHostEntries = remember(state.entries, activeServerIds) {
+        state.entries.filter { isOperable(it.serverId) }
+    }
+    val selectableEntries = remember(hostFilteredEntries, activeServerIds) {
+        hostFilteredEntries.filter { isOperable(it.serverId) }
+    }
+    val tasksById = remember(state.tasks) {
+        state.tasks.associateBy { it.promptId }
+    }
     val openLightbox: (HistoryEntry, Int) -> Unit = { entry, index ->
         entry.visibleImages(state.showTempPreviews)
             .getOrNull(index)
             ?.let { lightboxTarget = entry to it }
     }
-    val enterSelection = { promptId: String ->
-        if (!selectionMode) {
+    val enterSelection: (HistoryEntry) -> Unit = { entry ->
+        if (!isOperable(entry.serverId)) {
+            notifyReadOnly(entry.serverId)
+        } else if (!selectionMode) {
             selectionMode = true
-            selectedIds = setOf(promptId)
+            selectedIds = setOf(entry.promptId)
+        }
+    }
+    val toggleSelection: (HistoryEntry) -> Unit = { entry ->
+        if (!isOperable(entry.serverId)) {
+            notifyReadOnly(entry.serverId)
+        } else {
+            selectedIds = if (entry.promptId in selectedIds) {
+                selectedIds - entry.promptId
+            } else {
+                selectedIds + entry.promptId
+            }
+        }
+    }
+    val openDetail: (HistoryEntry) -> Unit = { entry ->
+        if (!isOperable(entry.serverId)) {
+            notifyReadOnly(entry.serverId)
+        } else {
+            onOpenDetail(entry.promptId)
+        }
+    }
+    val refillWorkflow: (TaskRecord) -> Unit = { task ->
+        if (!isOperable(task.serverId)) {
+            notifyReadOnly(task.serverId)
+        } else {
+            viewModel.refillWorkflow(task) { result ->
+                result.fold(
+                    onSuccess = { templateId ->
+                        onOpenWorkflow(templateId)
+                    },
+                    onFailure = { err ->
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                String.format(refillFailedTemplate, err.message),
+                            )
+                        }
+                    },
+                )
+            }
+        }
+    }
+    val askNekoI: (HistoryEntry) -> Unit = { entry ->
+        if (!isOperable(entry.serverId)) {
+            notifyReadOnly(entry.serverId)
+        } else {
+            activeSheetEntry = null
+            onAskNekoI(entry.promptId)
         }
     }
 
-    val canClearHistory = state.entries.isNotEmpty()
+    val canClearHistory = activeHostEntries.isNotEmpty()
+    val canLoadMore = selectedHost == null || selectedHost.active
     val refreshDescription = stringResource(R.string.history_refresh)
     val moreDescription = stringResource(R.string.history_more_actions)
     val batchSelectLabel = stringResource(R.string.history_batch_select)
-    val clearAllLabel = stringResource(R.string.history_clear_all)
+    val clearAllLabel = stringResource(R.string.history_clear_current)
     val exportDescription = stringResource(R.string.history_export_selected)
     val deleteDescription = stringResource(R.string.history_delete_selected)
     val doneLabel = stringResource(R.string.history_select_done)
     val doneDescription = stringResource(R.string.history_select_done_desc)
-    val allSelected = filteredEntries.isNotEmpty() &&
-        filteredEntries.all { it.promptId in selectedIds }
+    val allSelected = selectableEntries.isNotEmpty() &&
+        selectableEntries.all { it.promptId in selectedIds }
     val selectAllDescription = stringResource(
         if (allSelected) R.string.history_deselect_all else R.string.history_select_all,
     )
@@ -272,6 +400,7 @@ fun HistoryScreen(
         selectionMode,
         selectedIds,
         filteredEntries,
+        selectableEntries,
         state.exporting,
         state.deletingPromptIds,
         state.showTempPreviews,
@@ -282,7 +411,7 @@ fun HistoryScreen(
     ) {
         val actions = buildList {
             if (selectionMode) {
-                // 多选操作全部收纳到顶栏右上角，底部不再有任何浮层
+                // 多选操作全部收纳到顶栏右上角，底部不再有任何浮层。
                 add(
                     NekoTopBarIconAction(
                         icon = if (allSelected) NekoIcons.Deselect else NekoIcons.SelectAll,
@@ -291,7 +420,7 @@ fun HistoryScreen(
                             selectedIds = if (allSelected) {
                                 emptySet()
                             } else {
-                                filteredEntries.map { it.promptId }.toSet()
+                                selectableEntries.map { it.promptId }.toSet()
                             }
                         },
                     ),
@@ -360,8 +489,8 @@ fun HistoryScreen(
                             add(
                                 NekoTopBarMenuItem(
                                     label = batchSelectLabel,
-                                    enabled = filteredEntries.isNotEmpty(),
-                                    icon = Icons.Outlined.CheckCircle,
+                                    enabled = selectableEntries.isNotEmpty(),
+                                    icon = Icons.Outlined.Check,
                                     onClick = {
                                         selectionMode = true
                                         selectedIds = emptySet()
@@ -392,8 +521,11 @@ fun HistoryScreen(
             // 极简画廊流：Sub-header 只保留一行通透的筛选胶囊
             HistorySubHeader(
                 filter = state.filter,
-                totalCount = state.entries.size,
+                totalCount = hostFilteredEntries.size,
                 selectedCount = if (selectionMode) selectedIds.size else null,
+                hosts = state.hosts,
+                selectedHostId = state.selectedHostId,
+                onHostChange = viewModel::setHostFilter,
                 onFilterChange = viewModel::setFilter,
             )
 
@@ -427,6 +559,19 @@ fun HistoryScreen(
                 }
             }
 
+            val selectedInactiveHost = selectedHost != null && !selectedHost.active
+            if (selectedInactiveHost) {
+                Text(
+                    text = stringResource(
+                        R.string.history_host_filter_readonly,
+                        activeHostName,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+
             if (filteredEntries.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -440,81 +585,68 @@ fun HistoryScreen(
                     )
                 }
             } else {
-                when (state.viewMode) {
-                    HistoryViewMode.TIMELINE -> {
-                        TimelineBatchView(
-                            entries = filteredEntries,
-                            tasksById = tasksById,
-                            showTempPreviews = state.showTempPreviews,
-                            selectionMode = selectionMode,
-                            selectedIds = selectedIds,
-                            onToggleSelect = { promptId ->
-                                selectedIds = if (promptId in selectedIds) selectedIds - promptId else selectedIds + promptId
-                            },
-                            onLongClick = enterSelection,
-                            onOpenSheet = { entry, imageIndex ->
-                                activeSheetEntry = entry to imageIndex
-                            },
-                            onOpenLightbox = openLightbox,
-                            onOpenDetail = onOpenDetail,
-                            onRefillWorkflow = { task ->
-                                viewModel.refillWorkflow(task) { result ->
-                                    result.fold(
-                                        onSuccess = { templateId ->
-                                            onOpenWorkflow(templateId)
-                                        },
-                                        onFailure = { err ->
-                                            scope.launch {
-                                                snackbarHostState.showSnackbar(
-                                                    String.format(refillFailedTemplate, err.message),
-                                                )
-                                            }
-                                        },
-                                    )
-                                }
-                            },
-                            hasMore = state.hasMoreHistory,
-                            loadingMore = state.loadingMoreHistory,
-                            onLoadMore = viewModel::loadMoreHistory,
-                        )
-                    }
+                key(state.selectedHostId, state.filter) {
+                    when (state.viewMode) {
+                        HistoryViewMode.TIMELINE -> {
+                            TimelineBatchView(
+                                entries = filteredEntries,
+                                tasksById = tasksById,
+                                hostNames = hostDisplayNames,
+                                activeServerIds = activeServerIds,
+                                showTempPreviews = state.showTempPreviews,
+                                selectionMode = selectionMode,
+                                selectedIds = selectedIds,
+                                onToggleSelect = toggleSelection,
+                                onLongClick = enterSelection,
+                                onOpenSheet = { entry, imageIndex ->
+                                    activeSheetEntry = entry to imageIndex
+                                },
+                                onOpenLightbox = openLightbox,
+                                onOpenDetail = openDetail,
+                                onRefillWorkflow = refillWorkflow,
+                                hasMore = state.hasMoreHistory && canLoadMore,
+                                loadingMore = state.loadingMoreHistory && canLoadMore,
+                                onLoadMore = viewModel::loadMoreHistory,
+                            )
+                        }
 
-                    HistoryViewMode.GRID -> {
-                        GalleryGridView(
-                            entries = filteredEntries,
-                            tasksById = tasksById,
-                            showTempPreviews = state.showTempPreviews,
-                            selectionMode = selectionMode,
-                            selectedIds = selectedIds,
-                            onToggleSelect = { promptId ->
-                                selectedIds = if (promptId in selectedIds) selectedIds - promptId else selectedIds + promptId
-                            },
-                            onLongClick = enterSelection,
-                            onOpenSheet = { entry, imageIndex ->
-                                activeSheetEntry = entry to imageIndex
-                            },
-                            onOpenLightbox = openLightbox,
-                            hasMore = state.hasMoreHistory,
-                            loadingMore = state.loadingMoreHistory,
-                            onLoadMore = viewModel::loadMoreHistory,
-                        )
-                    }
+                        HistoryViewMode.GRID -> {
+                            GalleryGridView(
+                                entries = filteredEntries,
+                                tasksById = tasksById,
+                                hostNames = hostDisplayNames,
+                                activeServerIds = activeServerIds,
+                                showTempPreviews = state.showTempPreviews,
+                                selectionMode = selectionMode,
+                                selectedIds = selectedIds,
+                                onToggleSelect = toggleSelection,
+                                onLongClick = enterSelection,
+                                onOpenSheet = { entry, imageIndex ->
+                                    activeSheetEntry = entry to imageIndex
+                                },
+                                onOpenLightbox = openLightbox,
+                                hasMore = state.hasMoreHistory && canLoadMore,
+                                loadingMore = state.loadingMoreHistory && canLoadMore,
+                                onLoadMore = viewModel::loadMoreHistory,
+                            )
+                        }
 
-                    HistoryViewMode.COMPACT -> {
-                        CompactAlbumView(
-                            entries = filteredEntries,
-                            showTempPreviews = state.showTempPreviews,
-                            selectionMode = selectionMode,
-                            selectedIds = selectedIds,
-                            onToggleSelect = { promptId ->
-                                selectedIds = if (promptId in selectedIds) selectedIds - promptId else selectedIds + promptId
-                            },
-                            onOpenLightbox = openLightbox,
-                            onLongClick = enterSelection,
-                            hasMore = state.hasMoreHistory,
-                            loadingMore = state.loadingMoreHistory,
-                            onLoadMore = viewModel::loadMoreHistory,
-                        )
+                        HistoryViewMode.COMPACT -> {
+                            CompactAlbumView(
+                                entries = filteredEntries,
+                                hostNames = hostDisplayNames,
+                                activeServerIds = activeServerIds,
+                                showTempPreviews = state.showTempPreviews,
+                                selectionMode = selectionMode,
+                                selectedIds = selectedIds,
+                                onToggleSelect = toggleSelection,
+                                onOpenLightbox = openLightbox,
+                                onLongClick = enterSelection,
+                                hasMore = state.hasMoreHistory && canLoadMore,
+                                loadingMore = state.loadingMoreHistory && canLoadMore,
+                                onLoadMore = viewModel::loadMoreHistory,
+                            )
+                        }
                     }
                 }
             }
@@ -530,7 +662,7 @@ fun HistoryScreen(
 
     // ModalBottomSheet Parameter Drawer
     activeSheetEntry?.let { (entry, imgIndex) ->
-        val task = state.tasks.firstOrNull { it.promptId == entry.promptId }
+        val task = tasksById[entry.promptId]
         val images = entry.visibleImages(state.showTempPreviews)
         val selectedImage = images.getOrNull(imgIndex) ?: images.firstOrNull()
 
@@ -544,6 +676,8 @@ fun HistoryScreen(
                 entry = entry,
                 task = task,
                 image = selectedImage,
+                hostName = hostDisplayName(entry.serverId),
+                isActiveHost = isOperable(entry.serverId),
                 onSaveImage = viewModel::saveImage,
                 onImageClick = { image ->
                     lightboxTarget = entry to image
@@ -553,24 +687,14 @@ fun HistoryScreen(
                 },
                 onRefillWorkflow = { t ->
                     activeSheetEntry = null
-                    viewModel.refillWorkflow(t) { result ->
-                        result.fold(
-                            onSuccess = { templateId ->
-                                onOpenWorkflow(templateId)
-                            },
-                            onFailure = { err ->
-                                scope.launch {
-                                    snackbarHostState.showSnackbar(
-                                        String.format(refillFailedTemplate, err.message),
-                                    )
-                                }
-                            },
-                        )
-                    }
+                    refillWorkflow(t)
                 },
                 onOpenFullDetail = {
                     activeSheetEntry = null
-                    onOpenDetail(entry.promptId)
+                    openDetail(entry)
+                },
+                onAskNekoI = {
+                    askNekoI(entry)
                 },
                 onCopyPrompt = { text ->
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -592,11 +716,12 @@ fun HistoryScreen(
     }
 
     actionTarget?.let { (entry, image) ->
-        val task = state.tasks.firstOrNull { it.promptId == entry.promptId }
+        val task = tasksById[entry.promptId]
         val promptText = HistoryMetadataExtractor.extract(task).prompt
             ?: HistoryMetadataExtractor.extractPrompt(task, null).orEmpty()
         HistoryImageActionSheet(
             onDismiss = { actionTarget = null },
+            canDelete = isOperable(entry.serverId),
             onSaveImage = {
                 actionTarget = null
                 viewModel.saveImage(image)
@@ -649,7 +774,9 @@ fun HistoryScreen(
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
             title = { Text(stringResource(R.string.history_clear_title)) },
-            text = { Text(stringResource(R.string.history_clear_message)) },
+            text = {
+                Text(stringResource(R.string.history_clear_message_host, activeHostName))
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -709,46 +836,170 @@ private fun HistorySubHeader(
     filter: HistoryFilter,
     totalCount: Int,
     selectedCount: Int?,
+    hosts: List<HistoryHost>,
+    selectedHostId: String?,
+    onHostChange: (String?) -> Unit,
     onFilterChange: (HistoryFilter) -> Unit,
 ) {
-    // 方案 A：不再放右侧视图切换胶囊，筛选本身就是唯一的视觉元素。
+    var hostMenuExpanded by remember { mutableStateOf(false) }
+    val selectedHost = hosts.firstOrNull { it.id == selectedHostId }
+    val hostButtonLabel = selectedHost?.let { host ->
+        if (host.aliasCount > 1) {
+            "${host.name} +${host.aliasCount - 1}"
+        } else {
+            host.name
+        }
+    } ?: stringResource(R.string.history_host_all)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selectedCount != null) {
-            Surface(
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                shape = CircleShape,
+        Box {
+            FilterChip(
+                selected = selectedHost != null,
+                onClick = { hostMenuExpanded = true },
+                label = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = hostButtonLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Icon(
+                            imageVector = NekoIcons.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(14.dp)
+                                .rotate(90f),
+                        )
+                    }
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = NekoIcons.ServerRack,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                    )
+                },
+                shape = RoundedCornerShape(50),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color.Transparent,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedHost != null,
+                    borderColor = MaterialTheme.colorScheme.outlineVariant,
+                    selectedBorderColor = Color.Transparent,
+                    borderWidth = 1.dp,
+                    selectedBorderWidth = 0.dp,
+                ),
+                modifier = Modifier.widthIn(max = 176.dp),
+            )
+
+            DropdownMenu(
+                expanded = hostMenuExpanded,
+                onDismissRequest = { hostMenuExpanded = false },
             ) {
-                Text(
-                    text = stringResource(R.string.history_selected_count, selectedCount),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.history_host_all)) },
+                    onClick = {
+                        hostMenuExpanded = false
+                        onHostChange(null)
+                    },
                 )
+                hosts.forEach { host ->
+                    DropdownMenuItem(
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = host.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (host.active) FontWeight.SemiBold
+                                        else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (host.active) {
+                                        Text(
+                                            text = stringResource(R.string.history_host_current),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                if (host.aliasCount > 1) {
+                                    Text(
+                                        text = host.aliasNames.joinToString(" / ") +
+                                            " · " + stringResource(R.string.history_host_same_address),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            hostMenuExpanded = false
+                            onHostChange(host.id)
+                        },
+                    )
+                }
             }
         }
-        HistoryFilterChip(
-            label = stringResource(R.string.history_filter_all_count, totalCount),
-            selected = filter == HistoryFilter.ALL,
-            onClick = { onFilterChange(HistoryFilter.ALL) },
-        )
-        HistoryFilterChip(
-            label = stringResource(R.string.history_filter_output_label),
-            selected = filter == HistoryFilter.OUTPUTS,
-            onClick = { onFilterChange(HistoryFilter.OUTPUTS) },
-        )
-        HistoryFilterChip(
-            label = stringResource(R.string.history_filter_temp_label),
-            selected = filter == HistoryFilter.TEMP,
-            onClick = { onFilterChange(HistoryFilter.TEMP) },
-        )
+
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selectedCount != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = CircleShape,
+                ) {
+                    Text(
+                        text = stringResource(R.string.history_selected_count, selectedCount),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                }
+            }
+            HistoryFilterChip(
+                label = stringResource(R.string.history_filter_all_count, totalCount),
+                selected = filter == HistoryFilter.ALL,
+                onClick = { onFilterChange(HistoryFilter.ALL) },
+            )
+            HistoryFilterChip(
+                label = stringResource(R.string.history_filter_output_label),
+                selected = filter == HistoryFilter.OUTPUTS,
+                onClick = { onFilterChange(HistoryFilter.OUTPUTS) },
+            )
+            HistoryFilterChip(
+                label = stringResource(R.string.history_filter_temp_label),
+                selected = filter == HistoryFilter.TEMP,
+                onClick = { onFilterChange(HistoryFilter.TEMP) },
+            )
+        }
     }
 }
 
@@ -791,6 +1042,7 @@ private fun HistoryFilterChip(
 @Composable
 private fun HistoryImageActionSheet(
     onDismiss: () -> Unit,
+    canDelete: Boolean = true,
     onSaveImage: () -> Unit,
     onShareImage: () -> Unit,
     onCopyPrompt: () -> Unit,
@@ -829,12 +1081,14 @@ private fun HistoryImageActionSheet(
                 label = stringResource(R.string.history_action_copy_prompt),
                 onClick = onCopyPrompt,
             )
-            HistoryActionRow(
-                icon = Icons.Outlined.Delete,
-                label = stringResource(R.string.history_action_delete),
-                danger = true,
-                onClick = onDelete,
-            )
+            if (canDelete) {
+                HistoryActionRow(
+                    icon = Icons.Outlined.Delete,
+                    label = stringResource(R.string.history_action_delete),
+                    danger = true,
+                    onClick = onDelete,
+                )
+            }
         }
     }
 }
@@ -965,14 +1219,16 @@ private fun HistoryLightboxDialog(
 private fun TimelineBatchView(
     entries: List<HistoryEntry>,
     tasksById: Map<String, TaskRecord>,
+    hostNames: Map<String, String>,
+    activeServerIds: Set<String>,
     showTempPreviews: Boolean,
     selectionMode: Boolean,
     selectedIds: Set<String>,
-    onToggleSelect: (String) -> Unit,
-    onLongClick: (String) -> Unit,
+    onToggleSelect: (HistoryEntry) -> Unit,
+    onLongClick: (HistoryEntry) -> Unit,
     onOpenSheet: (HistoryEntry, Int) -> Unit,
     onOpenLightbox: (HistoryEntry, Int) -> Unit,
-    onOpenDetail: (String) -> Unit,
+    onOpenDetail: (HistoryEntry) -> Unit,
     onRefillWorkflow: (TaskRecord) -> Unit,
     hasMore: Boolean,
     loadingMore: Boolean,
@@ -1004,30 +1260,33 @@ private fun TimelineBatchView(
                 )
             }
 
-            items(groupEntries, key = { it.promptId }) { entry ->
+            items(groupEntries, key = { "${it.serverId}_${it.promptId}" }) { entry ->
                 val task = tasksById[entry.promptId]
                 val selected = entry.promptId in selectedIds
                 val images = entry.visibleImages(showTempPreviews)
                 val metadata = HistoryMetadataExtractor.extract(task)
+                val isActiveHost = entry.serverId in activeServerIds
 
                 TimelineBatchCard(
                     entry = entry,
                     task = task,
                     images = images,
                     metadata = metadata,
+                    hostName = hostNames[entry.serverId] ?: entry.serverId.take(8),
+                    isActiveHost = isActiveHost,
                     selected = selected,
                     selectionMode = selectionMode,
                     onClick = {
                         if (selectionMode) {
-                            onToggleSelect(entry.promptId)
+                            onToggleSelect(entry)
                         } else {
                             onOpenSheet(entry, 0)
                         }
                     },
-                    onLongClick = { onLongClick(entry.promptId) },
+                    onLongClick = { onLongClick(entry) },
                     onImageClick = { index ->
                         if (selectionMode) {
-                            onToggleSelect(entry.promptId)
+                            onToggleSelect(entry)
                         } else {
                             onOpenLightbox(entry, index)
                         }
@@ -1077,6 +1336,8 @@ private fun TimelineBatchCard(
     task: TaskRecord?,
     images: List<HistoryImage>,
     metadata: ExtractedTaskMetadata,
+    hostName: String,
+    isActiveHost: Boolean,
     selected: Boolean,
     selectionMode: Boolean,
     onClick: () -> Unit,
@@ -1124,9 +1385,14 @@ private fun TimelineBatchCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        HostBadge(
+                            hostName = hostName,
+                            active = isActiveHost,
+                            modifier = Modifier.widthIn(max = 136.dp),
+                        )
                         entry.timestamp?.let { ts ->
                             Text(
                                 text = formatTimeShort(ts),
@@ -1266,7 +1532,7 @@ private fun TimelineBatchCard(
                 // Prominent refill button: [回填工作流]
                 FilledTonalButton(
                     onClick = onRefillWorkflow,
-                    enabled = task?.values?.isNotEmpty() == true,
+                    enabled = isActiveHost && task?.values?.isNotEmpty() == true,
                     shape = RoundedCornerShape(50),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     modifier = Modifier.height(34.dp),
@@ -1311,11 +1577,13 @@ private fun ParamPill(label: String, value: String) {
 private fun GalleryGridView(
     entries: List<HistoryEntry>,
     tasksById: Map<String, TaskRecord>,
+    hostNames: Map<String, String>,
+    activeServerIds: Set<String>,
     showTempPreviews: Boolean,
     selectionMode: Boolean,
     selectedIds: Set<String>,
-    onToggleSelect: (String) -> Unit,
-    onLongClick: (String) -> Unit,
+    onToggleSelect: (HistoryEntry) -> Unit,
+    onLongClick: (HistoryEntry) -> Unit,
     onOpenSheet: (HistoryEntry, Int) -> Unit,
     onOpenLightbox: (HistoryEntry, Int) -> Unit,
     hasMore: Boolean,
@@ -1329,7 +1597,7 @@ private fun GalleryGridView(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(entries, key = { it.promptId }) { entry ->
+        items(entries, key = { "${it.serverId}_${it.promptId}" }) { entry ->
             val task = tasksById[entry.promptId]
             val selected = entry.promptId in selectedIds
             val images = entry.visibleImages(showTempPreviews)
@@ -1341,19 +1609,21 @@ private fun GalleryGridView(
                 task = task,
                 image = firstImage,
                 metadata = metadata,
+                hostName = hostNames[entry.serverId] ?: entry.serverId.take(8),
+                isActiveHost = entry.serverId in activeServerIds,
                 selected = selected,
                 selectionMode = selectionMode,
                 onClick = {
                     if (selectionMode) {
-                        onToggleSelect(entry.promptId)
+                        onToggleSelect(entry)
                     } else {
                         onOpenSheet(entry, 0)
                     }
                 },
-                onLongClick = { onLongClick(entry.promptId) },
+                onLongClick = { onLongClick(entry) },
                 onImageClick = {
                     if (selectionMode) {
-                        onToggleSelect(entry.promptId)
+                        onToggleSelect(entry)
                     } else {
                         onOpenLightbox(entry, 0)
                     }
@@ -1399,6 +1669,8 @@ private fun GalleryGridCard(
     task: TaskRecord?,
     image: HistoryImage?,
     metadata: ExtractedTaskMetadata,
+    hostName: String,
+    isActiveHost: Boolean,
     selected: Boolean,
     selectionMode: Boolean,
     onClick: () -> Unit,
@@ -1442,6 +1714,17 @@ private fun GalleryGridCard(
                         )
                     }
                 }
+
+                // Top Left Host Badge
+                HostBadge(
+                    hostName = hostName,
+                    active = isActiveHost,
+                    overlay = true,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .widthIn(max = 124.dp),
+                )
 
                 // Top Right Selection Checkbox
                 if (selectionMode) {
@@ -1520,12 +1803,14 @@ private fun GalleryGridCard(
 @Composable
 private fun CompactAlbumView(
     entries: List<HistoryEntry>,
+    hostNames: Map<String, String>,
+    activeServerIds: Set<String>,
     showTempPreviews: Boolean,
     selectionMode: Boolean,
     selectedIds: Set<String>,
-    onToggleSelect: (String) -> Unit,
+    onToggleSelect: (HistoryEntry) -> Unit,
     onOpenLightbox: (HistoryEntry, Int) -> Unit,
-    onLongClick: (String) -> Unit,
+    onLongClick: (HistoryEntry) -> Unit,
     hasMore: Boolean,
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
@@ -1546,7 +1831,7 @@ private fun CompactAlbumView(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(flatImages, key = { "${it.first.promptId}_${it.second.filename}" }) { (entry, image, index) ->
+        items(flatImages, key = { "${it.first.serverId}_${it.first.promptId}_${it.second.filename}" }) { (entry, image, index) ->
             val selected = entry.promptId in selectedIds
 
             Box(
@@ -1557,12 +1842,12 @@ private fun CompactAlbumView(
                     .combinedClickable(
                         onClick = {
                             if (selectionMode) {
-                                onToggleSelect(entry.promptId)
+                                onToggleSelect(entry)
                             } else {
                                 onOpenLightbox(entry, index)
                             }
                         },
-                        onLongClick = { onLongClick(entry.promptId) },
+                        onLongClick = { onLongClick(entry) },
                     ),
             ) {
                 HistorySubcomposeImage(
@@ -1570,10 +1855,20 @@ private fun CompactAlbumView(
                     modifier = Modifier.fillMaxSize(),
                 )
 
+                HostBadge(
+                    hostName = hostNames[entry.serverId] ?: entry.serverId.take(8),
+                    active = entry.serverId in activeServerIds,
+                    overlay = true,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(3.dp)
+                        .widthIn(max = 94.dp),
+                )
+
                 if (selectionMode) {
                     Checkbox(
                         checked = selected,
-                        onCheckedChange = { onToggleSelect(entry.promptId) },
+                        onCheckedChange = { onToggleSelect(entry) },
                         colors = CheckboxDefaults.colors(
                             checkedColor = MaterialTheme.colorScheme.primary,
                             uncheckedColor = Color.White,
@@ -1691,11 +1986,14 @@ private fun HistoryDetailDrawerContent(
     entry: HistoryEntry,
     task: TaskRecord?,
     image: HistoryImage?,
+    hostName: String,
+    isActiveHost: Boolean,
     onSaveImage: (HistoryImage) -> Unit,
     onImageClick: (HistoryImage) -> Unit,
     onImageLongPress: (HistoryImage) -> Unit,
     onRefillWorkflow: (TaskRecord) -> Unit,
     onOpenFullDetail: () -> Unit,
+    onAskNekoI: () -> Unit,
     onCopyPrompt: (String) -> Unit,
 ) {
     val metadata = HistoryMetadataExtractor.extract(task)
@@ -1726,14 +2024,27 @@ private fun HistoryDetailDrawerContent(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
-                Text(
-                    text = task?.templateName ?: shortId(entry.promptId),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HostBadge(
+                        hostName = hostName,
+                        active = isActiveHost,
+                        modifier = Modifier.widthIn(max = 136.dp),
+                    )
+                    Text(
+                        text = task?.templateName ?: shortId(entry.promptId),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             TextButton(
                 onClick = onOpenFullDetail,
+                enabled = isActiveHost,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
             ) {
                 Text(
@@ -1742,6 +2053,14 @@ private fun HistoryDetailDrawerContent(
                 )
             }
             StatusBadge(status = entry.status)
+        }
+
+        if (!isActiveHost) {
+            Text(
+                text = stringResource(R.string.history_host_readonly_hint, hostName),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         }
 
         // Image Preview Box
@@ -1877,6 +2196,28 @@ private fun HistoryDetailDrawerContent(
             }
         }
 
+        // 从抽屉直接带着任务上下文进入 Neko I
+        OutlinedButton(
+            onClick = onAskNekoI,
+            enabled = isActiveHost,
+            shape = RoundedCornerShape(50),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+        ) {
+            Icon(
+                imageVector = NekoIcons.Sparkles,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = stringResource(R.string.history_ask_neko_i),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+
         // Fixed Action Buttons
         Row(
             modifier = Modifier
@@ -1907,7 +2248,7 @@ private fun HistoryDetailDrawerContent(
 
             Button(
                 onClick = { task?.let(onRefillWorkflow) },
-                enabled = task?.values?.isNotEmpty() == true,
+                enabled = isActiveHost && task?.values?.isNotEmpty() == true,
                 shape = RoundedCornerShape(50),
                 modifier = Modifier.weight(1.3f),
             ) {
@@ -1984,6 +2325,55 @@ private fun EmptyHistory(
                     Text(stringResource(R.string.history_demo_records))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HostBadge(
+    hostName: String,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+    overlay: Boolean = false,
+) {
+    val containerColor = when {
+        overlay -> Color.Black.copy(alpha = 0.62f)
+        active -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val contentColor = when {
+        overlay -> Color.White
+        active -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (active) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (overlay) Color.White else MaterialTheme.colorScheme.primary,
+                        ),
+                )
+            }
+            Text(
+                text = hostName,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

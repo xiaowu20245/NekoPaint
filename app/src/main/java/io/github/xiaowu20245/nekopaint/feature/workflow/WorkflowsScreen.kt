@@ -250,7 +250,7 @@ fun WorkflowsScreen(
             }
         }
 
-        if (state.importing) {
+        if (state.importing || state.refreshingCompatibility) {
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -259,23 +259,27 @@ fun WorkflowsScreen(
         }
 
         if (!state.importing && state.templates.isNotEmpty()) {
-            ExtendedFloatingActionButton(
-                onClick = { filePicker.launch(JSON_MIME_TYPES) },
-                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                text = { Text(stringResource(R.string.workflow_import)) },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+            AnimatedVisibility(
+                visible = snackbarHostState.currentSnackbarData == null,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(20.dp),
-            )
+            ) {
+                ExtendedFloatingActionButton(
+                    onClick = { filePicker.launch(JSON_MIME_TYPES) },
+                    icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                    text = { Text(stringResource(R.string.workflow_import)) },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                )
+            }
         }
 
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 88.dp),
+                .padding(horizontal = 16.dp, vertical = 16.dp),
         )
     }
 

@@ -557,6 +557,26 @@ object NekoIcons {
         lineTo(7f, 21f)
     }
 
+    val Toolbox: ImageVector = strokeIcon("Toolbox") {
+        moveTo(8f, 6f)
+        lineTo(8f, 3f)
+        lineTo(16f, 3f)
+        lineTo(16f, 6f)
+        moveTo(3f, 8f)
+        lineTo(21f, 8f)
+        lineTo(21f, 20f)
+        lineTo(3f, 20f)
+        close()
+        moveTo(3f, 13f)
+        lineTo(21f, 13f)
+        moveTo(10f, 8f)
+        lineTo(10f, 12f)
+        lineTo(14f, 12f)
+        lineTo(14f, 8f)
+        moveTo(6f, 16.5f)
+        lineTo(9f, 16.5f)
+    }
+
     val Send: ImageVector = strokeIcon("Send") {
         moveTo(3f, 4f)
         lineTo(21f, 12f)

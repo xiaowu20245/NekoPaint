@@ -1,10 +1,11 @@
 package io.github.xiaowu20245.nekopaint.core.ui.navigation
 
+import android.net.Uri
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -38,33 +39,25 @@ fun NekoPaintNavHost(
         navController = navController,
         startDestination = NekoPaintDestination.Server.route,
         modifier = modifier,
-        enterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { it },
-                animationSpec = tween(260),
-            ) + fadeIn(tween(120))
-        },
-        exitTransition = {
-            slideOutHorizontally(
-                targetOffsetX = { -it },
-                animationSpec = tween(260),
-            ) + fadeOut(tween(120))
-        },
-        popEnterTransition = {
-            slideInHorizontally(
-                initialOffsetX = { -it },
-                animationSpec = tween(260),
-            ) + fadeIn(tween(120))
-        },
-        popExitTransition = {
-            slideOutHorizontally(
-                targetOffsetX = { it },
-                animationSpec = tween(260),
-            ) + fadeOut(tween(120))
-        },
+        enterTransition = { fadeIn(tween(120)) },
+        exitTransition = { fadeOut(tween(90)) },
+        popEnterTransition = { fadeIn(tween(120)) },
+        popExitTransition = { fadeOut(tween(90)) },
     ) {
-        composable(NekoPaintDestination.Server.route) { ServerScreen() }
-        composable(NekoPaintDestination.Workflows.route) {
+        composable(
+            route = NekoPaintDestination.Server.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) { ServerScreen() }
+        composable(
+            route = NekoPaintDestination.Workflows.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             WorkflowsScreen(
                 onOpenTemplate = { templateId ->
                     navController.navigate("workflow/$templateId")
@@ -88,7 +81,13 @@ fun NekoPaintNavHost(
             )
         }
         composable(NekoPaintDestination.Generate.route) { GenerateScreen() }
-        composable(NekoPaintDestination.Queue.route) {
+        composable(
+            route = NekoPaintDestination.Queue.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             QueueScreen(
                 onOpenHistory = {
                     navController.navigate(NekoPaintDestination.History.route)
@@ -103,15 +102,28 @@ fun NekoPaintNavHost(
                 onOpenWorkflow = { templateId ->
                     navController.navigate("workflow/$templateId")
                 },
+                onAskNekoI = { promptId ->
+                    navController.navigate(chatRoute(promptId))
+                },
                 onTopBarIconActionsChange = onTopBarIconActionsChange,
             )
         }
-        composable(NekoPaintDestination.Chat.route) {
+        composable(
+            route = "${NekoPaintDestination.Chat.route}?promptId={promptId}",
+            arguments = listOf(
+                navArgument("promptId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { entry ->
             ChatScreen(
                 onOpenAiSettings = {
                     navController.navigate(NekoPaintDestination.AiAssistant.route)
                 },
                 onTopBarIconActionsChange = onTopBarIconActionsChange,
+                promptId = entry.arguments?.getString("promptId"),
             )
         }
         composable(
@@ -126,9 +138,18 @@ fun NekoPaintNavHost(
                 onOpenWorkflow = { templateId ->
                     navController.navigate("workflow/$templateId")
                 },
+                onAskNekoI = { promptId ->
+                    navController.navigate(chatRoute(promptId))
+                },
             )
         }
-        composable(NekoPaintDestination.Settings.route) {
+        composable(
+            route = NekoPaintDestination.Settings.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             SettingsScreen(
                 onOpenLexicon = {
                     navController.navigate(NekoPaintDestination.PromptLexicon.route)
@@ -146,3 +167,6 @@ fun NekoPaintNavHost(
         }
     }
 }
+
+private fun chatRoute(promptId: String): String =
+    "${NekoPaintDestination.Chat.route}?promptId=${Uri.encode(promptId)}"

@@ -21,6 +21,8 @@ data class AiAssistantFormState(
     val apiKey: String = "",
     val textModel: String = "",
     val visionModel: String = "",
+    val persona: String = "",
+    val preInstruction: String = "",
     val keyVisible: Boolean = false,
     val testing: Boolean = false,
     val saving: Boolean = false,
@@ -39,6 +41,8 @@ data class AiAssistantFormState(
         apiKey = apiKey.trim(),
         textModel = textModel.trim(),
         visionModel = visionModel.trim(),
+        persona = persona.trim(),
+        preInstruction = preInstruction.trim(),
     )
 }
 
@@ -62,6 +66,8 @@ class AiAssistantSettingsViewModel(
                     apiKey = config.apiKey,
                     textModel = config.textModel,
                     visionModel = config.visionModel,
+                    persona = config.persona,
+                    preInstruction = config.preInstruction,
                     loaded = true,
                 )
             }
@@ -111,6 +117,24 @@ class AiAssistantSettingsViewModel(
                 providerId = AiAssistantConfig.PROVIDER_CUSTOM,
                 testLatencyMs = null,
                 testError = null,
+                saved = false,
+            )
+        }
+    }
+
+    fun onPersonaChange(value: String) {
+        _uiState.update {
+            it.copy(
+                persona = value,
+                saved = false,
+            )
+        }
+    }
+
+    fun onPreInstructionChange(value: String) {
+        _uiState.update {
+            it.copy(
+                preInstruction = value,
                 saved = false,
             )
         }

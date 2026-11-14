@@ -14,13 +14,20 @@ class ComfyApiFactory(
 
     fun create(config: ServerConfig): ComfyApi = create(config.baseUrl)
 
-    fun create(baseUrl: String): ComfyApi {
+    fun create(baseUrl: String): ComfyApi = retrofit(baseUrl).create(ComfyApi::class.java)
+
+    fun createManager(config: ServerConfig): ComfyManagerApi =
+        createManager(config.baseUrl)
+
+    fun createManager(baseUrl: String): ComfyManagerApi =
+        retrofit(baseUrl).create(ComfyManagerApi::class.java)
+
+    private fun retrofit(baseUrl: String): Retrofit {
         require(baseUrl.endsWith("/")) { "baseUrl must end with '/'" }
         return Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(okHttpClient)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-            .create(ComfyApi::class.java)
     }
 }

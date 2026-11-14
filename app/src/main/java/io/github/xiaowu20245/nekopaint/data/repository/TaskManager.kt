@@ -29,6 +29,7 @@ class TaskManager(
     private val webSocketManager: ComfyWebSocketManager,
     private val clientIdStore: ClientIdStore,
     private val serverConfigStore: ServerConfigStore,
+    private val historyAutoSaver: HistoryAutoSaver,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -145,17 +146,21 @@ class TaskManager(
             queueRepository.history(historyLimit + 1)
                 .onSuccess { fetched ->
                     val hasMore = fetched.size > historyLimit
-                    val entries = if (hasMore) fetched.take(historyLimit) else fetched
+                    val entries = (if (hasMore) fetched.take(historyLimit) else fetched)
+                        .map { entry -> entry.copy(serverId = serverId) }
                     val previous = _history.value
+                    val merged = mergeHistory(previous, entries)
                     historyFetched = true
-                    _history.value = entries
+                    _history.value = merged
                     _hasMoreHistory.value = hasMore
                     _historyError.value = null
                     syncTasksWithHistory(entries)
                     // 只有内容变化时才写盘，避免每 5 秒轮询都重复写。
-                    if (previous != entries) {
-                        historyStore.save(serverId, entries)
+                    if (previous != merged) {
+                        historyStore.save(serverId, merged)
                     }
+                    // 自动保存设置开启时，补齐历史中尚未保存到相册的 output 图片。
+                    scope.launch { historyAutoSaver.saveNew(serverId, merged) }
                 }
                 .onFailure { throwable ->
                     _historyError.value = throwable.message ?: "无法刷新历史"
@@ -201,13 +206,16 @@ class TaskManager(
             queueRepository.history(newLimit + 1)
                 .onSuccess { fetched ->
                     val hasMore = fetched.size > newLimit
-                    val entries = if (hasMore) fetched.take(newLimit) else fetched
+                    val entries = (if (hasMore) fetched.take(newLimit) else fetched)
+                        .map { entry -> entry.copy(serverId = serverId) }
                     historyLimit = newLimit
-                    _history.value = entries
+                    val merged = mergeHistory(_history.value, entries)
+                    _history.value = merged
                     _hasMoreHistory.value = hasMore
                     _historyError.value = null
                     syncTasksWithHistory(entries)
-                    historyStore.save(serverId, entries)
+                    historyStore.save(serverId, merged)
+                    scope.launch { historyAutoSaver.saveNew(serverId, merged) }
                 }
                 .onFailure { throwable ->
                     _historyError.value = throwable.message ?: "无法加载更多历史"

@@ -1,7 +1,10 @@
 package io.github.xiaowu20245.nekopaint.core.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.MoreVert
@@ -15,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -23,8 +27,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -50,10 +57,29 @@ fun NekoPaintApp() {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = stringResource(currentDestination.labelRes),
-                        style = MaterialTheme.typography.titleLarge,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = stringResource(currentDestination.labelRes),
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                        if (currentDestination == NekoPaintDestination.Chat) {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.chat_beta),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                    }
                 },
                 navigationIcon = {
                     if (!isMainDestination) {
@@ -176,10 +202,10 @@ private fun NekoTopBarOverflowAction(action: NekoTopBarIconAction) {
             onDismissRequest = { expanded = false },
         ) {
             action.menuItems.forEach { item ->
-                val itemColor = if (item.destructive) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    LocalContentColor.current
+                val itemColor = when {
+                    !item.enabled -> LocalContentColor.current.copy(alpha = 0.38f)
+                    item.destructive -> MaterialTheme.colorScheme.error
+                    else -> LocalContentColor.current
                 }
                 DropdownMenuItem(
                     text = {

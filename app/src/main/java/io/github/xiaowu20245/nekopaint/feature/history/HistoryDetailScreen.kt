@@ -35,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import androidx.compose.material3.SnackbarDuration
@@ -72,6 +73,7 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -80,6 +82,7 @@ fun HistoryDetailScreen(
     promptId: String,
     onBack: () -> Unit,
     onOpenWorkflow: (String) -> Unit = {},
+    onAskNekoI: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as NekoPaintApplication
@@ -138,6 +141,7 @@ fun HistoryDetailScreen(
 
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            delay(250)
             viewModel.refresh()
             // 页面可见期间保持刷新，直到找到记录或用户离开。
             while (isActive) {
@@ -261,9 +265,19 @@ fun HistoryDetailScreen(
         }
     }
 
-    val entry = state.entries.firstOrNull { it.promptId == promptId }
-    val task = state.tasks.firstOrNull { it.promptId == promptId }
+    val activeServerIds = state.hosts.firstOrNull { it.active }?.serverIds.orEmpty()
+    val entry = state.entries.firstOrNull {
+        it.promptId == promptId && it.serverId in activeServerIds
+    } ?: state.entries.firstOrNull { it.promptId == promptId }
+    val task = state.tasks.firstOrNull {
+        it.promptId == promptId && it.serverId == entry?.serverId
+    } ?: state.tasks.firstOrNull { it.promptId == promptId }
     val images = entry?.visibleImages(state.showTempPreviews).orEmpty()
+    val isReadOnly = entry != null && entry.serverId !in activeServerIds
+    val hostName = entry?.let { current ->
+        state.hosts.firstOrNull { current.serverId in it.serverIds }?.name
+            ?: current.serverId.take(8)
+    }.orEmpty()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (entry == null) {
@@ -307,6 +321,8 @@ fun HistoryDetailScreen(
                 images = images,
                 resubmitting = state.resubmitting,
                 deleting = promptId in state.deletingPromptIds,
+                readOnly = isReadOnly,
+                readOnlyHostName = hostName,
                 savingImageUrl = state.savingImageUrl,
                 sharingImageUrl = state.sharingImageUrl,
                 onResubmit = { task?.let(viewModel::resubmit) },
@@ -330,6 +346,7 @@ fun HistoryDetailScreen(
                 onOpenImage = { viewerIndex = it },
                 onSaveImage = requestSaveImage,
                 onShareImage = viewModel::shareImage,
+                onAskNekoI = { onAskNekoI(promptId) },
             )
         }
 
@@ -380,6 +397,8 @@ private fun HistoryDetailContent(
     images: List<HistoryImage>,
     resubmitting: Boolean,
     deleting: Boolean,
+    readOnly: Boolean,
+    readOnlyHostName: String,
     savingImageUrl: String?,
     sharingImageUrl: String?,
     onResubmit: () -> Unit,
@@ -388,6 +407,7 @@ private fun HistoryDetailContent(
     onOpenImage: (Int) -> Unit,
     onSaveImage: (HistoryImage) -> Unit,
     onShareImage: (HistoryImage) -> Unit,
+    onAskNekoI: () -> Unit,
 ) {
     val metadata = HistoryMetadataExtractor.extract(task)
     LazyColumn(
@@ -395,15 +415,36 @@ private fun HistoryDetailContent(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 80.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (readOnly) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.history_host_readonly_detail,
+                            readOnlyHostName,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                }
+            }
+        }
+
         item {
             DetailHeaderCard(
                 entry = entry,
                 task = task,
                 resubmitting = resubmitting,
                 deleting = deleting,
+                readOnly = readOnly,
                 onResubmit = onResubmit,
                 onRefillWorkflow = onRefillWorkflow,
                 onDelete = onDelete,
+                onAskNekoI = onAskNekoI,
             )
         }
 
@@ -445,9 +486,11 @@ private fun DetailHeaderCard(
     task: TaskRecord?,
     resubmitting: Boolean,
     deleting: Boolean,
+    readOnly: Boolean,
     onResubmit: () -> Unit,
     onRefillWorkflow: () -> Unit,
     onDelete: () -> Unit,
+    onAskNekoI: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -507,7 +550,7 @@ private fun DetailHeaderCard(
             ) {
                 FilledTonalButton(
                     onClick = onResubmit,
-                    enabled = !resubmitting && !task?.values.isNullOrEmpty(),
+                    enabled = !readOnly && !resubmitting && !task?.values.isNullOrEmpty(),
                     shape = RoundedCornerShape(50),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                     modifier = Modifier
@@ -529,7 +572,7 @@ private fun DetailHeaderCard(
 
                 Button(
                     onClick = onRefillWorkflow,
-                    enabled = task?.values?.isNotEmpty() == true,
+                    enabled = !readOnly && task?.values?.isNotEmpty() == true,
                     shape = RoundedCornerShape(50),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     modifier = Modifier
@@ -549,6 +592,29 @@ private fun DetailHeaderCard(
                         maxLines = 1,
                     )
                 }
+            }
+
+            OutlinedButton(
+                onClick = onAskNekoI,
+                enabled = !readOnly,
+                shape = RoundedCornerShape(50),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp),
+            ) {
+                Icon(
+                    imageVector = NekoIcons.Sparkles,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.history_ask_neko_i),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
             }
 
             if (task?.values.isNullOrEmpty()) {
@@ -572,7 +638,7 @@ private fun DetailHeaderCard(
                 Spacer(Modifier.weight(1f))
                 TextButton(
                     onClick = onDelete,
-                    enabled = !deleting,
+                    enabled = !readOnly && !deleting,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                 ) {
                     if (deleting) {

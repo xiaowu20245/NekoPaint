@@ -11,16 +11,22 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
-import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowImportResult
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class WorkflowsUiState(
@@ -28,6 +34,7 @@ data class WorkflowsUiState(
     val templates: List<WorkflowTemplate> = emptyList(),
     val modeFilter: WorkflowMode? = null,
     val importing: Boolean = false,
+    val refreshingCompatibility: Boolean = false,
     val busyTemplateId: String? = null,
     val runningTemplateId: String? = null,
     val actionNotice: WorkflowActionNotice? = null,
@@ -52,21 +59,36 @@ sealed interface WorkflowActionNotice {
 
 class WorkflowsViewModel(
     private val repository: WorkflowRepository,
+    private val activeServerId: Flow<String?>,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowsUiState())
     val uiState: StateFlow<WorkflowsUiState> = _uiState.asStateFlow()
 
+    private var compatibilityRefreshPending = false
+    private var refreshJob: Job? = null
+
     init {
         viewModelScope.launch {
             val templates = runCatching { repository.listTemplates() }.getOrDefault(emptyList())
             _uiState.update { it.copy(loading = false, templates = templates) }
-            ensureTemplatesCompatibility(templates)
+            // 让列表先完成首帧绘制，再开始兼容性检查，避免和页面切换动画抢帧。
+            delay(INITIAL_SETTLE_DELAY_MS)
+            refreshCompatibilitySnapshot()
+        }
+        viewModelScope.launch {
+            // 首次值由上面的初始化刷新处理；之后每次切换服务器都重新检查节点。
+            activeServerId.distinctUntilChanged().drop(1).collect {
+                refreshCompatibilitySnapshot()
+            }
         }
     }
 
     fun refreshList() {
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            // ON_RESUME 会频繁触发；延迟到页面切换稳定后再读盘，避免和转场抢帧。
+            delay(INITIAL_SETTLE_DELAY_MS)
             val templates = runCatching { repository.listTemplates() }
                 .getOrDefault(_uiState.value.templates)
             _uiState.update { it.copy(templates = templates) }
@@ -165,29 +187,22 @@ class WorkflowsViewModel(
         }
     }
 
-    private fun ensureTemplatesCompatibility(templates: List<WorkflowTemplate>) {
-        viewModelScope.launch {
-            var changed = false
-            val updated = templates.map { template ->
-                if (
-                    template.compatibility == null ||
-                    template.compatibility.analyzerVersion != WorkflowCompatibilityAnalyzer.CURRENT_VERSION
-                ) {
-                    val analyzed = repository.analyzeCompatibility(template)
-                    if (analyzed != null) {
-                        changed = true
-                        runCatching { repository.updateTemplate(analyzed) }
-                        analyzed
-                    } else {
-                        template
-                    }
-                } else {
-                    template
+    private suspend fun refreshCompatibilitySnapshot() {
+        if (_uiState.value.refreshingCompatibility) {
+            compatibilityRefreshPending = true
+            return
+        }
+        _uiState.update { it.copy(refreshingCompatibility = true) }
+        try {
+            do {
+                compatibilityRefreshPending = false
+                val updated = repository.refreshAllCompatibility()
+                if (updated != null) {
+                    _uiState.update { it.copy(templates = updated) }
                 }
-            }
-            if (changed) {
-                _uiState.update { it.copy(templates = updated) }
-            }
+            } while (compatibilityRefreshPending)
+        } finally {
+            _uiState.update { it.copy(refreshingCompatibility = false) }
         }
     }
 
@@ -347,8 +362,15 @@ class WorkflowsViewModel(
     }
 
     companion object {
+        private const val INITIAL_SETTLE_DELAY_MS = 250L
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { WorkflowsViewModel(container.workflowRepository) }
+            initializer {
+                WorkflowsViewModel(
+                    repository = container.workflowRepository,
+                    activeServerId = container.serverConfigStore.activeServerId,
+                )
+            }
         }
     }
 }

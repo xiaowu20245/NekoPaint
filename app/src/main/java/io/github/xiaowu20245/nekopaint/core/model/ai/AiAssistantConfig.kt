@@ -11,6 +11,8 @@ data class AiAssistantConfig(
     val apiKey: String = "",
     val textModel: String = "",
     val visionModel: String = "",
+    val persona: String = "",
+    val preInstruction: String = "",
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && textModel.isNotBlank()

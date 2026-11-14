@@ -76,6 +76,9 @@ class WorkflowRepository(
     private val appContext = context.applicationContext
     private val rootDir = File(appContext.filesDir, "workflows")
 
+    private var lastCompatibilityServerId: String? = null
+    private var lastCompatibilityRefreshAt = 0L
+
     suspend fun listTemplates(): List<WorkflowTemplate> = withContext(Dispatchers.IO) {
         ensureRoot()
         rootDir.listFiles()
@@ -280,6 +283,98 @@ class WorkflowRepository(
                 catalogChecked = detection.catalogChecked,
                 compatibility = compatibility,
             )
+        }
+
+    /**
+     * 只回写兼容性字段，不改动参数值或预设。
+     */
+    suspend fun saveCompatibility(
+        templateId: String,
+        analyzed: WorkflowTemplate,
+    ): WorkflowTemplate? = withContext(Dispatchers.IO) {
+        val dir = File(rootDir, templateId)
+        val stored = readProfile(dir) ?: return@withContext null
+        val updated = stored.copy(
+            missingNodeTypes = analyzed.missingNodeTypes,
+            catalogChecked = analyzed.catalogChecked,
+            compatibility = analyzed.compatibility,
+        )
+        if (updated != stored) writeProfile(dir, updated)
+        updated
+    }
+
+    /**
+     * 节点安装/重启后重新拉取 object_info 并保存缺失节点结果。
+     *
+     * 服务器尚未恢复或工作流文件不可读时返回 null，避免把“无法检查”误存成“没有缺失”。
+     */
+    suspend fun reanalyzeAndSave(templateId: String): WorkflowTemplate? =
+        withContext(Dispatchers.IO) {
+            val dir = File(rootDir, templateId)
+            val template = readProfile(dir) ?: return@withContext null
+            val raw = readApiJson(templateId) ?: return@withContext null
+            val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
+                ?: return@withContext null
+            val catalog = loadCatalog() ?: return@withContext null
+            val detection = ParameterDetector.detect(parsed.graph, catalog)
+            val compatibility = WorkflowCompatibilityAnalyzer.analyze(
+                graph = parsed.graph,
+                catalog = catalog,
+                missingNodeTypes = detection.missingNodeTypes,
+            )
+            val updated = template.copy(
+                missingNodeTypes = detection.missingNodeTypes,
+                catalogChecked = detection.catalogChecked,
+                compatibility = compatibility,
+            )
+            writeProfile(dir, updated)
+            updated
+        }
+
+    /**
+     * 切换服务器后批量刷新所有模板的兼容性。
+     *
+     * object_info 只拉取一次；只回写缺失节点和兼容性字段，不改参数值与预设。
+     * 服务器离线时返回 null，保留现有状态。
+     */
+    suspend fun refreshAllCompatibility(): List<WorkflowTemplate>? =
+        withContext(Dispatchers.IO) {
+            val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+            val now = System.currentTimeMillis()
+            if (serverId != null &&
+                serverId == lastCompatibilityServerId &&
+                now - lastCompatibilityRefreshAt < COMPATIBILITY_REFRESH_GUARD_MS
+            ) {
+                return@withContext listTemplates()
+            }
+            val catalog = loadCatalog() ?: return@withContext null
+            ensureRoot()
+            val refreshed = rootDir.listFiles()
+                .orEmpty()
+                .filter { it.isDirectory }
+                .mapNotNull { dir ->
+                    val template = readProfile(dir) ?: return@mapNotNull null
+                    val raw = readApiJson(template.id) ?: return@mapNotNull template
+                    val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
+                        ?: return@mapNotNull template
+                    val detection = ParameterDetector.detect(parsed.graph, catalog)
+                    val compatibility = WorkflowCompatibilityAnalyzer.analyze(
+                        graph = parsed.graph,
+                        catalog = catalog,
+                        missingNodeTypes = detection.missingNodeTypes,
+                    )
+                    val updated = template.copy(
+                        missingNodeTypes = detection.missingNodeTypes,
+                        catalogChecked = detection.catalogChecked,
+                        compatibility = compatibility,
+                    )
+                    if (updated != template) writeProfile(dir, updated)
+                    updated
+                }
+                .sortedByDescending { it.importedAt }
+            lastCompatibilityServerId = serverId
+            lastCompatibilityRefreshAt = now
+            refreshed
         }
 
     suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
@@ -532,6 +627,7 @@ class WorkflowRepository(
     private companion object {
         const val MAX_FILE_BYTES = 10 * 1024 * 1024
         const val MAX_UPLOAD_BYTES = 50L * 1024 * 1024
+        const val COMPATIBILITY_REFRESH_GUARD_MS = 30_000L
         val TEXT_PLAIN = "text/plain".toMediaTypeOrNull()
     }
 }

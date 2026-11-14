@@ -117,6 +117,31 @@ fun AiAssistantSettingsScreen() {
 
             item {
                 SettingsGroupCard(
+                    title = stringResource(R.string.ai_assistant_neko_title),
+                ) {
+                    Text(
+                        text = stringResource(R.string.ai_assistant_neko_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                    LabeledMultilineInput(
+                        label = stringResource(R.string.ai_assistant_persona),
+                        value = state.persona,
+                        onValueChange = viewModel::onPersonaChange,
+                        placeholder = stringResource(R.string.ai_assistant_persona_hint),
+                    )
+                    LabeledMultilineInput(
+                        label = stringResource(R.string.ai_assistant_pre_instruction),
+                        value = state.preInstruction,
+                        onValueChange = viewModel::onPreInstructionChange,
+                        placeholder = stringResource(R.string.ai_assistant_pre_instruction_hint),
+                    )
+                }
+            }
+
+            item {
+                SettingsGroupCard(
                     title = stringResource(R.string.ai_assistant_params_title),
                 ) {
                     LabeledInput(
@@ -371,6 +396,52 @@ private fun LabeledInput(
                     )
                 }
                 trailing?.invoke()
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabeledMultilineInput(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Box(modifier = Modifier.fillMaxWidth()) {
+                if (value.isBlank()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    minLines = 3,
+                    maxLines = 6,
+                )
             }
         }
     }

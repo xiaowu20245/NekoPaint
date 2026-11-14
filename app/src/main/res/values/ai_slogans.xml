@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string-array name="ai_slogan_general">
+        <item tools:ignore="TypographyEllipsis">喵...喵喵喵？！</item>
+        <item>需要帮忙嘛</item>
+        <item>让我看看</item>
+        <item>在忙什么？</item>
+        <item>Ciallo~! (∠・ω&lt; )⌒☆</item>
+    </string-array>
+
+    <string-array name="ai_slogan_late_night">
+        <item>还在忙嘛</item>
+        <item>夜深了喵~</item>
+        <item>今天也辛苦了你啦</item>
+    </string-array>
+
+    <string name="ai_slogan_morning">早上好喵~</string>
+    <string name="ai_slogan_evening">晚上好，喵~</string>
+    <string name="ai_slogan_sleep" tools:ignore="TypographyEllipsis">zzZ...</string>
+
+    <string-array name="ai_kaomoji_general">
+        <item>(✧ω✧)ₚ!</item>
+        <item>(・ω・)ノ</item>
+        <item>(⁄ ⁄•⁄ω⁄•⁄ ⁄)</item>
+        <item>(´・ω・`)</item>
+        <item>(･ω･ฅ)</item>
+    </string-array>
+
+    <string-array name="ai_kaomoji_sleep">
+        <item>(^-ω-^)</item>
+        <item>(-ω-｡)</item>
+        <item>(。-ω-)</item>
+        <item>(´- ω -`)</item>
+        <item>(つω-｀)｡oO</item>
+    </string-array>
+</resources>

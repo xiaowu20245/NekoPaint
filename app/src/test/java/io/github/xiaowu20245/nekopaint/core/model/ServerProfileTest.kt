@@ -4,6 +4,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class ServerProfileTest {
@@ -40,5 +41,29 @@ class ServerProfileTest {
         )
 
         assertEquals(profile, restored)
+    }
+
+    @Test
+    fun aliasesWithSameAddressShareEndpointKey() {
+        val first = ServerProfile(
+            id = "server-1",
+            name = "ComfyUI",
+            scheme = "HTTP",
+            host = " 127.0.0.1 ",
+            port = 8188,
+        )
+        val second = ServerProfile(
+            id = "server-2",
+            name = "我的 ComfyUI",
+            scheme = "http",
+            host = "127.0.0.1",
+            port = 8188,
+        )
+        val otherPort = second.copy(port = 8189)
+        val loopback = second.copy(host = "localhost")
+
+        assertEquals(first.endpointKey, second.endpointKey)
+        assertEquals(first.endpointKey, loopback.endpointKey)
+        assertNotEquals(first.endpointKey, otherPort.endpointKey)
     }
 }

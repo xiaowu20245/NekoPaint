@@ -25,10 +25,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -75,17 +77,33 @@ import kotlinx.coroutines.launch
 /**
  * 简单模式下的简略提示词卡：两行预览 + 标签组/词条统计，点击进入智能编辑器。
  */
+private data class PromptSummaryStats(
+    val referencedGroups: List<PromptTagGroup>,
+    val partCount: Int,
+    val tokenCount: Int,
+)
+
 @Composable
 internal fun PromptSummaryCard(
     candidate: ParameterCandidate,
     groups: List<PromptTagGroup>,
+    isPrimary: Boolean = false,
+    canSetPrimary: Boolean = true,
+    onTogglePrimary: () -> Unit = {},
     onOpen: () -> Unit,
 ) {
-    val referencedGroups = PromptTagExpander.referencedGroups(candidate.value, groups)
-    val expandedValue = PromptTagExpander.expand(candidate.value, groups)
-    val partCount = PromptTagExpander.promptPartCount(expandedValue)
-    val tokenCount = PromptTagExpander.estimateTokenCount(expandedValue)
+    val promptStats = remember(candidate.value, groups) {
+        val expandedValue = PromptTagExpander.expand(candidate.value, groups)
+        PromptSummaryStats(
+            referencedGroups = PromptTagExpander.referencedGroups(candidate.value, groups),
+            partCount = PromptTagExpander.promptPartCount(expandedValue),
+            tokenCount = PromptTagExpander.estimateTokenCount(expandedValue),
+        )
+    }
     val isNegative = candidate.label.contains("负")
+    val referencedGroups = promptStats.referencedGroups
+    val partCount = promptStats.partCount
+    val tokenCount = promptStats.tokenCount
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -113,6 +131,42 @@ internal fun PromptSummaryCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                if (isPrimary) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.workflow_primary_prompt),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                if (canSetPrimary) {
+                    IconButton(
+                        onClick = onTogglePrimary,
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Star,
+                            contentDescription = stringResource(
+                                if (isPrimary) {
+                                    R.string.workflow_unset_primary_prompt
+                                } else {
+                                    R.string.workflow_set_primary_prompt
+                                },
+                            ),
+                            tint = if (isPrimary) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
                 Text(
                     text = "#${candidate.nodeId}",
                     style = NekoMonoSmall.copy(fontSize = 11.sp),

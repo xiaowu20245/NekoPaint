@@ -36,6 +36,7 @@ data class SettingsUiState(
     val cacheCleared: Boolean = false,
     val error: String? = null,
     val showTempPreviews: Boolean = false,
+    val autoSaveHistoryImages: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val builtInWords: Int = 0,
     val externalWords: Int = 0,
@@ -61,6 +62,11 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsStore.showTempPreviews.collect { showTempPreviews ->
                 _uiState.update { it.copy(showTempPreviews = showTempPreviews) }
+            }
+        }
+        viewModelScope.launch {
+            settingsStore.autoSaveHistoryImages.collect { autoSave ->
+                _uiState.update { it.copy(autoSaveHistoryImages = autoSave) }
             }
         }
         viewModelScope.launch {
@@ -92,6 +98,13 @@ class SettingsViewModel(
         }
     }
 
+    fun setAutoSaveHistoryImages(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setAutoSaveHistoryImages(value)
+            if (value) taskManager.refresh()
+        }
+    }
+
     fun setThemeMode(value: ThemeMode) {
         viewModelScope.launch {
             settingsStore.setThemeMode(value)
@@ -114,6 +127,8 @@ class SettingsViewModel(
         val theme = runCatching { settingsStore.themeMode.first() }
             .getOrDefault(ThemeMode.SYSTEM)
         val showTemp = runCatching { settingsStore.showTempPreviews.first() }
+            .getOrDefault(false)
+        val autoSave = runCatching { settingsStore.autoSaveHistoryImages.first() }
             .getOrDefault(false)
         val aiConfig = runCatching { aiAssistantStore.current() }
             .getOrDefault(AiAssistantConfig())
@@ -141,6 +156,7 @@ class SettingsViewModel(
             appendLine("图片缓存：${cacheBytes / 1024 / 1024} MB")
             appendLine("主题：${theme.name}")
             appendLine("显示临时预览图：$showTemp")
+            appendLine("自动保存历史图片：$autoSave")
             appendLine("外部词库：$externalWords 词")
             appendLine(
                 "AI 助手：${

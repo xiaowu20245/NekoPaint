@@ -41,6 +41,7 @@ enum class NekoPaintDestination(
         )
 
         fun fromRoute(route: String?): NekoPaintDestination = when {
+            route == Chat.route || route?.startsWith("${Chat.route}?") == true -> Chat
             route?.startsWith("workflow/") == true -> Workflows
             route?.startsWith("history/") == true -> History
             else -> entries.firstOrNull { it.route == route } ?: Server

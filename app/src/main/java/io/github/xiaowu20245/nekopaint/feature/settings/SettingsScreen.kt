@@ -1,6 +1,13 @@
 package io.github.xiaowu20245.nekopaint.feature.settings
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +29,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,6 +51,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,6 +89,48 @@ fun SettingsScreen(
     val diagnosticsSubject = stringResource(R.string.settings_diagnostics_subject)
     val diagnosticsChooser = stringResource(R.string.settings_diagnostics_chooser)
     val diagnosticsFailed = stringResource(R.string.settings_diagnostics_failed)
+    val permissionDeniedMessage = stringResource(R.string.image_save_permission_denied)
+    val openSettingsLabel = stringResource(R.string.image_save_open_settings)
+
+    val autoSavePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            viewModel.setAutoSaveHistoryImages(true)
+        } else {
+            scope.launch {
+                val result = snackbarHostState.showSnackbar(
+                    message = permissionDeniedMessage,
+                    actionLabel = openSettingsLabel,
+                    duration = SnackbarDuration.Long,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = "package:${context.packageName}".toUri()
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    val requestAutoSaveToggle: (Boolean) -> Unit = { enabled ->
+        if (!enabled) {
+            viewModel.setAutoSaveHistoryImages(false)
+        } else {
+            val needsPermission = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ) != PackageManager.PERMISSION_GRANTED
+            if (needsPermission) {
+                autoSavePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            } else {
+                viewModel.setAutoSaveHistoryImages(true)
+            }
+        }
+    }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         // 返回设置页时静默刷新，避免缓存卡片在“读取中”和数值之间闪烁。
@@ -234,6 +287,33 @@ fun SettingsScreen(
                             Switch(
                                 checked = state.showTempPreviews,
                                 onCheckedChange = viewModel::setShowTempPreviews,
+                            )
+                        }
+                    }
+                    InnerCard {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.settings_auto_save_title),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.Medium,
+                                    ),
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_auto_save_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = state.autoSaveHistoryImages,
+                                onCheckedChange = requestAutoSaveToggle,
                             )
                         }
                     }

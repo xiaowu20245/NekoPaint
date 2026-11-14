@@ -6,23 +6,35 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
+import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
 import io.github.xiaowu20245.nekopaint.data.repository.PendingWorkflowRefillStore
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
+import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
+import io.github.xiaowu20245.nekopaint.data.repository.dedupeHistoryByPrompt
+import io.github.xiaowu20245.nekopaint.data.repository.dedupeTasksByPrompt
+import io.github.xiaowu20245.nekopaint.data.repository.mergeHistoryArchives
+import io.github.xiaowu20245.nekopaint.data.repository.mergeTaskArchives
+import io.github.xiaowu20245.nekopaint.data.repository.sameEndpointServerIds
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 sealed interface HistoryNotice {
@@ -59,9 +71,21 @@ enum class HistoryFilter {
     TEMP,
 }
 
+data class HistoryHost(
+    val id: String,
+    val name: String,
+    val active: Boolean,
+    val serverIds: Set<String> = emptySet(),
+    val aliasNames: List<String> = listOf(name),
+    val aliasCount: Int = 1,
+)
+
 data class HistoryUiState(
     val entries: List<HistoryEntry> = emptyList(),
     val tasks: List<TaskRecord> = emptyList(),
+    val hosts: List<HistoryHost> = emptyList(),
+    val activeServerId: String = ServerConfigStore.DEFAULT_SERVER_ID,
+    val selectedHostId: String? = null,
     val connection: ComfyConnectionState = ComfyConnectionState.Disconnected,
     val error: String? = null,
     val refreshing: Boolean = false,
@@ -86,6 +110,9 @@ data class HistoryUiState(
 
 class HistoryViewModel(
     private val taskManager: TaskManager,
+    private val taskStore: TaskStore,
+    private val historyStore: HistoryStore,
+    private val serverConfigStore: ServerConfigStore,
     private val workflowRepository: WorkflowRepository,
     private val pendingRefillStore: PendingWorkflowRefillStore,
     private val imageSaver: ImageSaver,
@@ -95,17 +122,56 @@ class HistoryViewModel(
 
     private val demoEntries = MutableStateFlow<List<HistoryEntry>>(emptyList())
     private val demoTasks = MutableStateFlow<List<TaskRecord>>(emptyList())
+    private val archivedEntries = MutableStateFlow<List<HistoryEntry>>(emptyList())
+    private val archivedTasks = MutableStateFlow<List<TaskRecord>>(emptyList())
 
-    private val base = combine(
+    private val liveState = combine(
         taskManager.history,
         taskManager.tasks,
         taskManager.connection,
-        demoEntries,
-        demoTasks,
-    ) { entries, tasks, connection, dEntries, dTasks ->
-        val effectiveEntries = if (dEntries.isNotEmpty()) dEntries + entries else entries
-        val effectiveTasks = if (dTasks.isNotEmpty()) dTasks + tasks else tasks
-        HistoryUiState(entries = effectiveEntries, tasks = effectiveTasks, connection = connection)
+    ) { entries, tasks, connection ->
+        Triple(entries, tasks, connection)
+    }
+
+    private val archiveState = combine(archivedEntries, archivedTasks) { entries, tasks ->
+        entries to tasks
+    }
+
+    private val demoState = combine(demoEntries, demoTasks) { entries, tasks ->
+        entries to tasks
+    }
+
+    private val serverState = combine(
+        serverConfigStore.servers,
+        serverConfigStore.activeServerId,
+    ) { servers, activeId ->
+        ServerState(
+            servers = servers,
+            activeId = activeId
+                ?: servers.firstOrNull()?.id
+                ?: ServerConfigStore.DEFAULT_SERVER_ID,
+        )
+    }
+
+    private val base = combine(liveState, archiveState, demoState, serverState) { live, archive, demo, servers ->
+        val (liveEntries, liveTasks, connection) = live
+        val mergedEntries = mergeHistoryArchives(
+            archived = archive.first,
+            live = liveEntries,
+        ).let { entries ->
+            if (demo.first.isEmpty()) entries else mergeHistoryArchives(entries, demo.first)
+        }.map { it.withHostId() }
+        val mergedTasks = mergeTaskArchives(
+            archived = archive.second,
+            live = liveTasks,
+        ).let { tasks ->
+            if (demo.second.isEmpty()) tasks else mergeTaskArchives(tasks, demo.second)
+        }.map { it.withHostId() }
+        HistoryUiState(
+            entries = dedupeHistoryByPrompt(mergedEntries, servers.activeId),
+            tasks = dedupeTasksByPrompt(mergedTasks, servers.activeId),
+            connection = connection,
+        )
     }
 
     private val resubmitState = MutableStateFlow(ResubmitState())
@@ -141,14 +207,39 @@ class HistoryViewModel(
         edit to custom
     }
 
-    val uiState: StateFlow<HistoryUiState> = combine(
-        base,
+    private val controlsState = combine(
         runtimeState,
         operationState,
         combinedEditState,
+    ) { runtime, operation, editAndCustom ->
+        ControlsState(
+            runtime = runtime,
+            operation = operation,
+            edit = editAndCustom.first,
+            custom = editAndCustom.second,
+        )
+    }
+
+    val uiState: StateFlow<HistoryUiState> = combine(
+        base,
+        controlsState,
         settingsStore.showTempPreviews,
-    ) { state, runtime, operation, (edit, custom), showTempPreviews ->
+        serverState,
+    ) { state, controls, showTempPreviews, servers ->
+        val runtime = controls.runtime
+        val operation = controls.operation
+        val edit = controls.edit
+        val custom = controls.custom
+        val hosts = buildHosts(
+            servers = servers,
+            entries = state.entries,
+            tasks = state.tasks,
+        )
         state.copy(
+            hosts = hosts,
+            activeServerId = servers.activeId,
+            selectedHostId = custom.selectedHostId
+                ?.takeIf { id -> hosts.any { it.id == id } },
             error = runtime.error,
             refreshing = runtime.refreshing,
             resubmitting = operation.resubmit.submitting,
@@ -177,7 +268,90 @@ class HistoryViewModel(
 
     init {
         taskManager.refresh()
+        refreshArchive()
+        viewModelScope.launch {
+            serverConfigStore.activeServerId
+                .distinctUntilChanged()
+                .collect { refreshArchive() }
+        }
     }
+
+    fun setHostFilter(hostId: String?) {
+        customViewState.value = customViewState.value.copy(selectedHostId = hostId)
+    }
+
+    private fun refreshArchive() {
+        viewModelScope.launch {
+            archivedEntries.value = runCatching { historyStore.loadAll() }
+                .getOrDefault(emptyList())
+            archivedTasks.value = runCatching { taskStore.listAll() }
+                .getOrDefault(emptyList())
+        }
+    }
+
+    private fun buildHosts(
+        servers: ServerState,
+        entries: List<HistoryEntry>,
+        tasks: List<TaskRecord>,
+    ): List<HistoryHost> {
+        val profiles = servers.servers
+        val activeProfile = profiles.firstOrNull { it.id == servers.activeId }
+        val activeEndpoint = activeProfile?.endpointKey
+
+        // 同一地址的多个配置归为一个主机组，避免同一台电脑重复出现在筛选里。
+        val groups = LinkedHashMap<String, MutableList<ServerProfile>>()
+        profiles.forEach { profile ->
+            groups.getOrPut(profile.endpointKey) { mutableListOf() } += profile
+        }
+
+        val hosts = groups.map { (endpoint, members) ->
+            val active = endpoint == activeEndpoint
+            val primary = if (active) {
+                members.firstOrNull { it.id == servers.activeId } ?: members.first()
+            } else {
+                members.first()
+            }
+            HistoryHost(
+                id = endpoint,
+                name = primary.name,
+                active = active,
+                serverIds = members.map { it.id }.toSet(),
+                aliasNames = members.map { it.name },
+                aliasCount = members.size,
+            )
+        }.toMutableList()
+
+        val knownIds = profiles.map { it.id }.toSet()
+        val unknownIds = LinkedHashSet<String>()
+        entries.mapTo(unknownIds) { it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } }
+        tasks.mapTo(unknownIds) { it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } }
+        unknownIds.removeAll(knownIds)
+        unknownIds.forEach { id ->
+            val fallbackName = if (id == ServerConfigStore.DEFAULT_SERVER_ID) {
+                DEFAULT_HOST_NAME
+            } else {
+                id.take(8)
+            }
+            hosts += HistoryHost(
+                id = "server:$id",
+                name = fallbackName,
+                active = id == servers.activeId,
+                serverIds = setOf(id),
+                aliasNames = listOf(fallbackName),
+            )
+        }
+
+        return hosts.sortedWith(
+            compareByDescending<HistoryHost> { it.active }
+                .thenBy { it.name.lowercase() },
+        )
+    }
+
+    private fun HistoryEntry.withHostId(): HistoryEntry =
+        if (serverId.isBlank()) copy(serverId = ServerConfigStore.DEFAULT_SERVER_ID) else this
+
+    private fun TaskRecord.withHostId(): TaskRecord =
+        if (serverId.isBlank()) copy(serverId = ServerConfigStore.DEFAULT_SERVER_ID) else this
 
     fun loadDemoHistory() {
         val now = System.currentTimeMillis()
@@ -414,13 +588,50 @@ class HistoryViewModel(
 
     fun deleteHistory(promptIds: Set<String>) {
         if (promptIds.isEmpty() || editState.value.deletingPromptIds.isNotEmpty()) return
-        editState.value = editState.value.copy(deletingPromptIds = promptIds)
         viewModelScope.launch {
-            val result = taskManager.deleteHistory(promptIds)
+            val activeServerIds = activeHostServerIds()
+            val activeServerId = serverConfigStore.activeServerId.first()
+                ?: ServerConfigStore.DEFAULT_SERVER_ID
+            // 同一地址的多个配置共享同一个远端历史；允许删除其中任一配置归档过的记录。
+            val targetPromptIds = buildSet {
+                taskManager.history.value.mapTo(this) { it.promptId }
+                archivedEntries.value
+                    .filter { it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } in activeServerIds }
+                    .mapTo(this) { it.promptId }
+            }
+            val deletable = promptIds intersect targetPromptIds
+            if (deletable.isEmpty()) {
+                editState.value = editState.value.copy(
+                    notice = HistoryEditNotice.Error("只能删除当前主机的历史"),
+                )
+                return@launch
+            }
+            editState.value = editState.value.copy(deletingPromptIds = deletable)
+            val result = taskManager.deleteHistory(deletable)
             editState.value = editState.value.copy(
                 deletingPromptIds = emptySet(),
                 notice = result.fold(
-                    onSuccess = { HistoryEditNotice.Deleted },
+                    onSuccess = {
+                        val archivedSnapshot = archivedEntries.value
+                        archivedEntries.update { entries ->
+                            entries.filterNot {
+                                it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } in
+                                    activeServerIds && it.promptId in deletable
+                            }
+                        }
+                        // 活跃主机由 TaskManager 写盘；其他同地址别名同步清理本地归档。
+                        activeServerIds
+                            .filter { it != activeServerId }
+                            .forEach { serverId ->
+                                val remaining = archivedSnapshot.filter {
+                                    it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } ==
+                                        serverId && it.promptId !in deletable
+                                }
+                                runCatching { historyStore.save(serverId, remaining) }
+                            }
+                        refreshArchive()
+                        HistoryEditNotice.Deleted
+                    },
                     onFailure = {
                         HistoryEditNotice.Error(it.message ?: "删除历史失败")
                     },
@@ -433,17 +644,41 @@ class HistoryViewModel(
         if (editState.value.clearing) return
         editState.value = editState.value.copy(clearing = true)
         viewModelScope.launch {
+            val activeServerIds = activeHostServerIds()
             val result = taskManager.clearHistory()
             editState.value = editState.value.copy(
                 clearing = false,
                 notice = result.fold(
-                    onSuccess = { HistoryEditNotice.Cleared },
+                    onSuccess = {
+                        archivedEntries.update { entries ->
+                            entries.filterNot {
+                                it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } in
+                                    activeServerIds
+                            }
+                        }
+                        // 同一地址的别名配置也清空本地归档，避免清空后旧卡片重新出现。
+                        activeServerIds.forEach { serverId ->
+                            runCatching { historyStore.save(serverId, emptyList()) }
+                        }
+                        refreshArchive()
+                        HistoryEditNotice.Cleared
+                    },
                     onFailure = {
                         HistoryEditNotice.Error(it.message ?: "清空历史失败")
                     },
                 ),
             )
         }
+    }
+
+    private suspend fun activeHostServerIds(): Set<String> {
+        val servers = runCatching { serverConfigStore.servers.first() }.getOrDefault(emptyList())
+        val activeId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+            ?: servers.firstOrNull()?.id
+            ?: ServerConfigStore.DEFAULT_SERVER_ID
+        val activeProfile = servers.firstOrNull { it.id == activeId }
+        if (activeProfile == null) return setOf(activeId)
+        return sameEndpointServerIds(servers, activeProfile.id)
     }
 
     fun consumeEditNotice() {
@@ -502,9 +737,22 @@ class HistoryViewModel(
     private data class CustomViewState(
         val viewMode: HistoryViewMode = HistoryViewMode.TIMELINE,
         val filter: HistoryFilter = HistoryFilter.ALL,
+        val selectedHostId: String? = null,
         val exporting: Boolean = false,
         val exportNotice: String? = null,
         val refillNotice: String? = null,
+    )
+
+    private data class ServerState(
+        val servers: List<ServerProfile>,
+        val activeId: String,
+    )
+
+    private data class ControlsState(
+        val runtime: RuntimeState,
+        val operation: OperationState,
+        val edit: EditState,
+        val custom: CustomViewState,
     )
 
     private data class ResubmitState(
@@ -542,10 +790,15 @@ class HistoryViewModel(
     )
 
     companion object {
+        private const val DEFAULT_HOST_NAME = "本机 ComfyUI"
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 HistoryViewModel(
                     taskManager = container.taskManager,
+                    taskStore = container.taskStore,
+                    historyStore = container.historyStore,
+                    serverConfigStore = container.serverConfigStore,
                     workflowRepository = container.workflowRepository,
                     pendingRefillStore = container.pendingWorkflowRefillStore,
                     imageSaver = container.imageSaver,
