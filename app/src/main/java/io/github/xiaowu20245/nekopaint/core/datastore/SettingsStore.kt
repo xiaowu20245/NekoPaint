@@ -20,7 +20,7 @@ enum class ThemeMode {
     DARK,
 }
 
-class SettingsStore(context: Context) {
+class SettingsStore(context: Context) : NekoSettingsPreferences {
 
     private val dataStore = context.appSettingsDataStore
 
@@ -45,7 +45,7 @@ class SettingsStore(context: Context) {
         preferences[ReduceMotion] ?: false
     }
 
-    val agentModeByDefault: Flow<Boolean> = dataStore.data.map { preferences ->
+    override val agentModeByDefault: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[AgentModeByDefault] ?: false
     }
 
@@ -69,7 +69,7 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[ReduceMotion] = value }
     }
 
-    suspend fun setAgentModeByDefault(value: Boolean) {
+    override suspend fun setAgentModeByDefault(value: Boolean) {
         dataStore.edit { it[AgentModeByDefault] = value }
     }
 

@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.core.network
 
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
+import io.github.xiaowu20245.nekopaint.core.privacy.SensitiveHostProvider
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -27,7 +28,33 @@ class AiAssistantClientPolicyTest {
                 chain.proceed(chain.request())
             }
             .build()
-        return AiAssistantClient(client = http, json = json)
+        return AiAssistantClient(
+            client = http,
+            json = json,
+            privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
+        )
+    }
+
+    @Test
+    fun defaultDisclosureProviderFailsClosed() = runTest {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("""{"choices":[{"message":{"content":"ok"}}]}"""),
+            )
+            val result = client(intArrayOf(0)).chat(
+                config = AiAssistantConfig(
+                    baseUrl = server.url("/v1").toString(),
+                    textModel = "model",
+                ),
+                messages = listOf(AiChatMessage("user", "hi")),
+            )
+
+            assertFalse(result.isSuccess)
+            assertEquals(0, server.requestCount)
+        }
     }
 
     @Test
@@ -74,6 +101,36 @@ class AiAssistantClientPolicyTest {
     }
 
     @Test
+    fun unacknowledgedDisclosureIsRejectedBeforeTransport() = runTest {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("""{"choices":[{"message":{"content":"ok"}}]}"""),
+            )
+            val baseUrl = server.url("/v1").toString()
+            val client = AiAssistantClient(
+                client = OkHttpClient(),
+                json = json,
+                disclosureProvider = { false },
+                privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
+            )
+
+            val result = client.chat(
+                config = AiAssistantConfig(
+                    baseUrl = baseUrl,
+                    textModel = "model",
+                ),
+                messages = listOf(AiChatMessage("user", "hi")),
+            )
+
+            assertFalse(result.isSuccess)
+            assertEquals(0, server.requestCount)
+        }
+    }
+
+    @Test
     fun approvedHttpKeyCanReachTransport() = runTest {
         MockWebServer().use { server ->
             server.enqueue(
@@ -88,6 +145,8 @@ class AiAssistantClientPolicyTest {
                 client = OkHttpClient(),
                 json = json,
                 consentProvider = { AiHttpConsent(keyApprovedOrigins = setOf(origin)) },
+                disclosureProvider = { true },
+                privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
             )
 
             val result = client.chat(

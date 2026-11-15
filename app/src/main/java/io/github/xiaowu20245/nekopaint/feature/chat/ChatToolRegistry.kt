@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.chat
 
+import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.AiToolCall
 import io.github.xiaowu20245.nekopaint.core.network.AiToolDefinition
 import kotlinx.serialization.json.Json
@@ -26,6 +27,7 @@ class ChatToolRegistry(
     private val contextBuilder: ChatContextBuilder,
     private val actionHandler: ChatTaskActionHandler,
     private val visionAnalyzer: VisionAnalyzer? = null,
+    private val privacySanitizer: AiPrivacySanitizer,
 ) {
 
     private val imageAnalysisTool = ImageAnalysisTool(visionAnalyzer)
@@ -437,7 +439,7 @@ class ChatToolRegistry(
             }
         }.getOrElse { error ->
             "工具执行失败：${error.message ?: "未知错误"}"
-        }.take(MAX_RESULT_CHARS)
+        }.take(MAX_RESULT_CHARS).let(privacySanitizer::sanitize)
 
         return ChatToolExecution(
             content = content,

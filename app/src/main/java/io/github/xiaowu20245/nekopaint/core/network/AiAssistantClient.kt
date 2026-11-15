@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.core.network
 import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -40,6 +41,8 @@ class AiAssistantClient(
     private val json: Json,
     private val sessionIdProvider: suspend () -> String = { "" },
     private val consentProvider: suspend () -> AiHttpConsent = { AiHttpConsent() },
+    private val disclosureProvider: suspend (String) -> Boolean = { false },
+    private val privacySanitizer: AiPrivacySanitizer,
 ) : AiAssistantSettingsClient {
 
     /**
@@ -256,6 +259,26 @@ class AiAssistantClient(
                 IllegalStateException(policy.message ?: "AI 地址未通过安全校验"),
             )
         }
+        val disclosureAccepted = runCatching {
+            disclosureProvider(endpoint.origin)
+        }.getOrDefault(false)
+        if (!disclosureAccepted) {
+            return@withContext Result.failure(
+                IllegalStateException("请先在 AI 服务设置中确认第三方数据披露"),
+            )
+        }
+        val sanitizerReady = try {
+            privacySanitizer.awaitReady()
+        } catch (cause: CancellationException) {
+            throw cause
+        } catch (cause: Throwable) {
+            false
+        }
+        if (!sanitizerReady) {
+            return@withContext Result.failure(
+                IllegalStateException("服务器隐私配置尚未就绪，请稍后重试"),
+            )
+        }
         val body = buildJsonObject {
             put("model", model.trim())
             putJsonArray("messages") {
@@ -264,12 +287,12 @@ class AiAssistantClient(
                         when {
                             message.role == "tool" -> {
                                 put("role", "tool")
-                                put("content", message.content.orEmpty())
+                                put("content", message.outboundContent())
                                 put("tool_call_id", message.toolCallId.orEmpty())
                             }
                             message.toolCalls.isNotEmpty() -> {
                                 put("role", message.role)
-                                put("content", message.content.orEmpty())
+                                put("content", message.outboundContent())
                                 putJsonArray("tool_calls") {
                                     message.toolCalls.forEach { call ->
                                         addJsonObject {
@@ -277,7 +300,10 @@ class AiAssistantClient(
                                             put("type", "function")
                                             putJsonObject("function") {
                                                 put("name", call.name)
-                                                put("arguments", call.arguments)
+                                                put(
+                                                    "arguments",
+                                                    privacySanitizer.sanitize(call.arguments),
+                                                )
                                             }
                                         }
                                     }
@@ -287,12 +313,12 @@ class AiAssistantClient(
                                 put("role", message.role)
                                 val image = message.imageDataUrl
                                 if (image.isNullOrBlank()) {
-                                    put("content", message.content.orEmpty())
+                                    put("content", message.outboundContent())
                                 } else {
                                     putJsonArray("content") {
                                         addJsonObject {
                                             put("type", "text")
-                                            put("text", message.content.orEmpty())
+                                            put("text", message.outboundContent())
                                         }
                                         addJsonObject {
                                             put("type", "image_url")
@@ -377,6 +403,15 @@ class AiAssistantClient(
             Result.failure(
                 IllegalStateException("Base URL 格式无效，请检查地址（${invalid.message ?: "非法地址"}）"),
             )
+        }
+    }
+
+    private fun AiChatMessage.outboundContent(): String {
+        val value = content.orEmpty()
+        return if (role == "system" || role == "tool" || role == "assistant") {
+            privacySanitizer.sanitize(value)
+        } else {
+            value
         }
     }
 

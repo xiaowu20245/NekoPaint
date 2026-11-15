@@ -191,3 +191,155 @@ Baseline：审查前的 252 tests / 0 failures；本批后为 297 tests / 0 fail
 ```
 
 第 1 批提交范围：本日志、AI 相关生产代码和测试；不包含 `docs/CODE_REVIEW.md`、`docs/FIX_PLAN.md`、`docs/FIX_REVIEW.md`。
+
+---
+
+## 第 2 批：CR-003 AI 第三方数据披露、脱敏与隐私文案
+
+> 修复日期：2026-11-15
+> 分支：`fix/security-data-correctness`
+> 基于：第 1 批提交 `b86fde6`
+> 状态：已实现并完成 B5/B6 复审修复与自动验证；独立复审 **APPROVED**（`docs/FIX_REVIEW.md` 第 19 节，审核报告未纳入本批提交）；真实服务未连接。第 2 批 commit 已提交。
+
+### 9. 范围与修改
+
+本轮处理：
+
+- AI 第三方数据披露与 origin 级确认
+- 未确认时阻止测试/实际请求
+- AI 客户端最终披露校验
+- 系统/工具上下文脱敏
+- AI 服务字段与 Neko 人设字段拆分保存
+- “AI 未启用/本地兜底”状态与清除配置入口
+- 关于页、README、PRODUCT、REQUIREMENTS、DECISIONS 隐私说明
+
+新增生产文件：
+
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/core/model/ai/AiDisclosurePolicy.kt`
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/core/network/AiPrivacySanitizer.kt`
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/core/privacy/SensitiveHostProvider.kt`
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/data/repository/ServerSensitiveHostProvider.kt`
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/core/datastore/NekoSettingsPreferences.kt`
+
+修改生产文件：
+
+- `core/datastore/AiAssistantStore.kt`
+- `core/datastore/AiAssistantSettingsStore.kt`
+- `core/datastore/SettingsStore.kt`
+- `core/network/AiAssistantClient.kt`
+- `di/AppContainer.kt`
+- `feature/settings/AiAssistantSettingsViewModel.kt`
+- `feature/settings/AiAssistantSettingsScreen.kt`
+- `feature/settings/NekoSettingsViewModel.kt`
+- `feature/chat/ChatContextBuilder.kt`
+- `feature/chat/ChatToolRegistry.kt`
+- `feature/chat/ChatViewModel.kt`
+- `res/values/strings.xml`
+- `REQUIREMENTS.md`
+- `PRODUCT.md`
+- `README.md`
+- `DECISIONS.md`
+
+新增测试：
+
+- `core/model/ai/AiDisclosurePolicyTest.kt`
+- `core/network/AiPrivacySanitizerTest.kt`
+- `data/repository/ServerSensitiveHostProviderTest.kt`
+- `feature/settings/CrossSettingsSaveTest.kt`
+- `AiAssistantClientPolicyTest`（补充未确认披露请求数为 0）
+- `AiAssistantSettingsViewModelTest`（补充披露确认流程、清除配置）
+
+### 10. 实现说明
+
+- `AiDisclosurePolicy` 使用 `origin + 披露版本` 记录确认；origin 变化或版本升级需要重新确认。
+- `AiAssistantStore` 新增 `currentDisclosureAcknowledgements()`、`acknowledgeDisclosure()`；清除 AI 配置时一并清理。
+- 设置页增加第三方数据披露卡片和“我已知晓并继续”；未配置时显示本地兜底状态。
+- 测试连接在未确认披露时先弹出确认框；保存本地配置仍允许，但实际 AI 请求由客户端最终阻止。
+- `AiAssistantClient` 在 URL、凭据、HTTP 策略校验后检查披露状态，未确认时请求数为 0。
+- `AiPrivacySanitizer` 脱敏 Windows/UNC/Unix home 路径、URL、IPv4/IPv6 和当前服务器 host；短 host 不参与裸文本替换。
+- `SensitiveHostProvider` 第 2 批只提供当前 `servers`；归档主机 provider 扩展留到 CR-006 第 4 批。
+- `ChatContextBuilder` 和 `ChatToolRegistry` 的输出统一脱敏；用户主动输入的提示词正文不经过路径规则改写。
+- `AiAssistantStore.updateServiceConfig` / `updatePersonaInstruction` 拆分保存；AI 设置页保存不再覆盖 Neko 人设，Neko 设置也不再覆盖 AI 服务字段。
+- 设置页增加“清除 AI 配置”，同时清理 Key、origin、HTTP 信任和披露确认。
+
+### 10.1 第 2 批复审修复（B4-01～B4-05）
+
+- **B4-01**：`AiAssistantClient.disclosureProvider` 默认改为 `{ false }`；相关客户端测试显式传入 `{ true }`，新增默认拒绝测试。
+- **B4-02**：Windows/UNC 路径规则改为在逗号、中文标点、分号或参数起始处截断；增加路径后跟 `seed/steps/cfg` 的测试。
+- **B4-03**：新增裸 IPv6 匹配；Unix 路径规则覆盖 `/data/`、`/storage/`、`/sdcard/`、`/mnt/`；增加测试。
+- **B4-04**：新增 `requestClearConfig` 的确认、取消、成功和失败 ViewModel 测试；修正本日志关于清除配置测试覆盖的描述。
+- **B4-05**：增加披露写入失败、清除配置失败、路径+参数、裸 IPv6、Android 路径等测试；新增 `AiAssistantClientPrivacyTest`，直接检查实际 MockWebServer 请求体中的系统/工具内容已脱敏。
+- **B4-07**：披露确认写入成功后直接更新本地确认集合，不再依赖写后读回；读回失败不会再次弹确认。
+- B4-06/B4-08 仍作为低优先级残余项记录。
+
+### 10.2 第 2 批复审修复（B5-01～B5-04）
+
+- **B5-01**：`ServerSensitiveHostProvider` 改为可注入 `Flow<List<ServerProfile>>`，保留 `ServerConfigStore` 便捷构造；新增 `awaitReady()`，在首个 emission 前挂起。`AiPrivacySanitizer.awaitReady()` 转发该等待，`ChatViewModel.send()` 在组装请求前等待，关闭首条请求的空 host 窗口。新增 `ServerSensitiveHostProviderTest`，覆盖首轮 host、多服务器、更新后替换和空配置。
+- **B5-02**：抽取 `NekoSettingsPreferences` seam，`NekoSettingsViewModel` 改用 `AiAssistantSettingsStore` / `NekoSettingsPreferences` 接口。新增 `CrossSettingsSaveTest`，用共享 fake store 覆盖两个顺序：先保存人设再保存 AI 服务字段、先保存 AI 服务字段再保存人设；断言互不覆盖。
+- **B5-03**：发送历史消息时 `ChatViewModel` 对 `assistant` 内容调用 sanitizer；`AiAssistantClient.outboundContent()` 同时覆盖 `system` / `tool` / `assistant`，用户消息仍保留原文。`AiAssistantClientPrivacyTest` 增加 assistant 历史路径断言。
+- **B5-04**：`AiAssistantClient.privacySanitizer` 改为无默认值的显式必传参数；生产 `AppContainer`、`ChatViewModel` 工厂和全部客户端测试显式注入。避免未注入调用方在 host 集合为空时静默不脱敏。
+- **B5-05（未解决，低优先级）**：部分 ViewModel 错误/确认文案仍硬编码，沿用 B1-06/B2-04 记录，不阻塞本批。
+
+### 10.3 第 2 批 B6 复审修复（B6-01～B6-09）
+
+- **B6-01**：`ServerSensitiveHostProvider` 的 flow 失败、未发射即完成或超时都会让 `awaitReady()` 返回 `false`，不再永久挂起；失败不再逃逸到 `appScope`。`ChatViewModel.send()` 在等待失败时调用新的 `failUserMessage()`，清除 `sending`、标记用户消息错误并追加受控错误提示。
+- **B6-02**：路径正则把双引号纳入边界，避免 JSON 工具参数被整段吞掉；`redactPath()` 在文件扩展名后保留中文诊断文本（如 `<本地路径> 处理失败`），但不保留无扩展名目录中的空格片段。
+- **B6-03**：`AiAssistantClient` 的 `tool_calls[].function.arguments` 也经过 sanitizer；实际请求体测试解析嵌套 JSON，断言路径/host 已脱敏且 `cfg` 字段结构保留。
+- **B6-04**：明确 `ServerConfigStore` 首次 emission 是完整 DataStore 快照，空列表即“当前无服务器”；新增“首个空快照放行、后续 host 更新”时序测试，避免把正常空配置误判为永久等待。
+- **B6-05**：`AiAssistantClient.executeChat()` 在构建请求体前统一等待 `privacySanitizer.awaitReady()`；失败时返回 `Result.failure`，不产生网络请求。新增“等待期间请求数为 0、放行后 host 被脱敏”和“provider 不可用时请求数为 0”两个实际客户端测试，覆盖 `testConnection`、翻译/润色和工具调用的共同入口。
+- **B6-06**：`ServerSensitiveHostProviderTest` 增至 7 个测试，覆盖首个 emission 前挂起、flow 抛异常、流结束无 emission、永不发射超时、首个空快照后更新、多服务器和更新替换。`ChatViewModel.send()` 失败收口因依赖具体 Android 类未新增直接单测，由代码路径和 provider 测试共同覆盖。
+- **B6-07**：移除 `AiPrivacySanitizer`、`ChatViewModel`、`ChatContextBuilder`、`ChatToolRegistry` 的空 host 默认构造；所有调用方（含测试）显式传入 sanitizer，测试用 `SensitiveHostProvider { emptySet() }` 明确表达“无 host”。
+- **B6-08（低，未解决）**：`CrossSettingsSaveTest` 仍使用共享 fake store；真实 `AiAssistantStore` 需要 Android Context/DataStore，本轮未新增真实存储回归，已记录为残余。
+- **B6-09**：删除 AI 设置页不再保存的 `onPersonaChange` / `onPreInstructionChange` 和 `AiAssistantFormState` 中的 persona/preInstruction 字段，避免未来复用入口时静默不保存。
+
+### 11. 测试与构建结果
+
+实际执行：
+
+```text
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:lintDebug
+.\gradlew.bat :app:assembleDebug
+git diff --check
+```
+
+结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `:app:testDebugUnitTest --rerun-tasks` | **通过**：66 个测试套件，330 tests，0 failures，0 errors |
+| `:app:lintDebug --no-daemon` | **通过**：0 errors / 9 warnings / 3 hints |
+| `:app:assembleDebug` | **成功** |
+| `git diff --check` | **通过**（仅 LF/CRLF 提示，无空白错误） |
+
+新增测试数：33（第 2 批新增；B4 阶段 18，B5 阶段 4，B6 阶段 11）。
+
+### 12. 手工验收状态
+
+已在模拟器 `emulator-5554`（Medium_Phone_API_37.0）打开 AI 服务页：
+
+- 页面显示“第三方 AI 数据披露”卡片和“我已知晓并继续”按钮。
+- 点击确认后卡片消失，确认状态写入 DataStore。
+- 独立复审已在同一模拟器执行“清除 AI 配置”确认：页面显示本地兜底状态，Base URL/Key 清空，披露卡片重新出现。
+- 已备份并还原 `files/datastore/ai_assistant_settings.preferences_pb`，未保留测试确认状态。
+- 真实第三方 AI 服务未连接；实际请求体脱敏仍以单元测试为主。
+- B6 修复主要涉及等待失败路径和客户端最终防线，未改变页面布局，本轮未重复模拟器 UI smoke test。
+
+### 13. 已知限制与未解决项
+
+- CR-003 的第三方实际数据流尚未通过真实 AI 服务验证；只验证了本地逻辑和模拟器 UI。
+- `ServerSensitiveHostProvider` 首个 emission 前的空 host 窗口已由 `awaitReady()` 关闭；`AiAssistantClient.executeChat()` 在所有真实发送路径的统一入口再次等待，失败时不发请求。首个 emission 被视为完整快照，空配置按“当前无服务器”处理。
+- 发送历史消息时 `assistant` / `tool` / `system` 内容纳入脱敏，用户消息保留原文；这是有意设计，避免改写用户主动输入。旧会话中未归档的裸短 host 仍受脱敏规则残余限制。
+- `AiPrivacySanitizer` 对旧历史中无归档元数据、仅裸短 host 的覆盖仍有残余限制；第 4 批 provider 扩展后继续回归。
+- `CrossSettingsSaveTest` 仍基于 fake store，未直接覆盖真实 `AiAssistantStore`/DataStore 写入（B6-08，低优先级）。
+- `ChatViewModel.send()` 的 provider 失败收口未新增直接单测；该方法依赖具体 Android 类，本轮由 provider 失败测试 + 代码路径确认（B6-06 残余）。
+- 第 2 批新增的文案已进入 `strings.xml`；此前第 1 批剩余的部分错误提示仍在 ViewModel 中硬编码，继续作为低优先级项记录（B5-05）。
+- 复审 B7 低优先级残余：`ChatViewModel.send()` 失败无直接单测（B7-01）、tool arguments 中 URL 紧邻 JSON 引号会破坏嵌套 JSON（B7-02）、参数标记后可能保留第二个路径（B7-03）、既有 suspend provider 的 `runCatching` 取消语义（B7-04）、损坏 `servers_json` 退化为空快照（B7-05）。
+
+### 14. 独立复审结论
+
+- 第 2 批 B6 修复后独立复审：**APPROVED**。
+- 第 2 批已提交为 `fix: 完成 AI 第三方披露与隐私边界修复`；审核报告 `docs/FIX_REVIEW.md` 保持未跟踪，不纳入提交。
+- 独立验证：66 suites / 330 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- 允许提交第 2 批 commit 并进入第 3 批 CR-017。
+- 上表 B5-05、B6-08 和 B7-01～B7-05 均为低优先级残余，不阻断本批；复审建议进入第 3 批前优先处理 B7-02。

@@ -7,6 +7,7 @@ import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
+import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
@@ -25,6 +26,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
+import io.github.xiaowu20245.nekopaint.data.repository.ServerSensitiveHostProvider
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
@@ -57,6 +59,8 @@ class AppContainer(context: Context) {
     }
 
     val serverConfigStore = ServerConfigStore(context.applicationContext, json)
+    val sensitiveHostProvider = ServerSensitiveHostProvider(serverConfigStore, appScope)
+    val aiPrivacySanitizer = AiPrivacySanitizer(sensitiveHostProvider)
     val clientIdStore = ClientIdStore(context.applicationContext)
     val settingsStore = SettingsStore(context.applicationContext)
     val aiAssistantStore = AiAssistantStore(context.applicationContext)
@@ -103,6 +107,8 @@ class AppContainer(context: Context) {
         json = json,
         sessionIdProvider = clientIdStore::getOrCreate,
         consentProvider = aiAssistantStore::currentHttpConsent,
+        disclosureProvider = aiAssistantStore::isDisclosureAcknowledged,
+        privacySanitizer = aiPrivacySanitizer,
     )
 
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)

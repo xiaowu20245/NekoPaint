@@ -423,7 +423,7 @@
     <string name="settings_about_version">版本</string>
     <string name="settings_about_package">包名</string>
     <string name="settings_about_privacy_title">隐私与安全</string>
-    <string name="settings_about_privacy_desc">NekoPaint 的配置、会话和缓存保存在本机；API Key 使用 Android Keystore 加密。诊断导出不包含提示词、图片内容、服务器 IP 或文件名。</string>
+    <string name="settings_about_privacy_desc">NekoPaint 的配置、会话和缓存保存在本机；API Key 使用 Android Keystore 加密。启用 AI 后，提示词、你选择的图片、任务摘要和工具结果会发送到你配置的第三方 AI 服务；未选择的图片和本地文件不会自动发送。诊断导出不包含提示词、图片内容、服务器 IP 或文件名。</string>
     <string name="settings_about_resources">资源与反馈</string>
     <string name="settings_about_licenses_title">开源许可</string>
     <string name="settings_about_licenses_desc">查看使用的开源组件</string>
@@ -494,10 +494,15 @@
     <string name="ai_assistant_test_failed">连接失败：%1$s</string>
     <string name="ai_assistant_confirm_title">确认 AI 配置变更</string>
     <string name="ai_assistant_confirm_action">继续</string>
+    <string name="ai_assistant_disclosure_title">第三方 AI 数据披露</string>
+    <string name="ai_assistant_disclosure_desc">启用 AI 后，提示词、你主动选择的图片、任务摘要、错误信息和工作流/历史工具结果会发送到你配置的第三方 AI 服务。未选择的图片、整个本地文件和 API Key 以外的凭据不会自动发送；第三方如何处理数据取决于其隐私政策。</string>
+    <string name="ai_assistant_disclosure_confirm">我已知晓并继续</string>
+    <string name="ai_assistant_clear_config">清除 AI 配置</string>
+    <string name="ai_assistant_local_only">当前未启用 AI，翻译/润色使用本地词库兜底。</string>
     <string name="ai_assistant_save">保存配置</string>
     <string name="ai_assistant_saving">保存中…</string>
     <string name="ai_assistant_saved">配置已保存</string>
-    <string name="ai_assistant_security_note">API Key 使用 Android Keystore 加密后保存在本机；诊断导出不会包含密钥。</string>
+    <string name="ai_assistant_security_note">API Key 使用 Android Keystore 加密后保存在本机；启用 AI 后，提示词、所选图片和任务摘要会发送到所配置的第三方服务，首次使用需要确认数据披露。诊断导出不会包含密钥。</string>
 
     <string name="server_setup_hint">输入运行 ComfyUI 的电脑局域网 IP 和端口。</string>
     <string name="server_name">名称（可选）</string>

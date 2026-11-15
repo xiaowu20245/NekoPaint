@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.feature.chat
 
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCapability
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
+import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
@@ -18,6 +19,7 @@ import kotlin.math.roundToInt
 class ChatContextBuilder(
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
+    private val privacySanitizer: AiPrivacySanitizer,
 ) {
 
     suspend fun build(intent: ChatIntent, userText: String): String? = when (intent) {
@@ -53,7 +55,7 @@ class ChatContextBuilder(
             val task = tasks[item.promptId]
             lines += "- 等待中：${task?.templateName ?: "未命名任务"}（${shortId(item.promptId)}）"
         }
-        return lines.joinToString("\n")
+        return privacySanitizer.sanitize(lines.joinToString("\n"))
     }
 
     fun historySnapshot(limit: Int = 5, status: String? = null): String {
@@ -75,7 +77,7 @@ class ChatContextBuilder(
                 entry.errorMessage?.let { append("，错误：${it.take(120)}") }
             }
         }
-        return lines.joinToString("\n")
+        return privacySanitizer.sanitize(lines.joinToString("\n"))
     }
 
     suspend fun workflowSummary(keyword: String? = null): String {
@@ -108,7 +110,7 @@ class ChatContextBuilder(
                 if (issueCount > 0) append("，$issueCount 项提示")
             }
         }
-        return lines.joinToString("\n")
+        return privacySanitizer.sanitize(lines.joinToString("\n"))
     }
 
     fun historyImages(promptId: String?, maxImages: Int): ChatHistoryImageResult? =
@@ -129,7 +131,9 @@ class ChatContextBuilder(
             entry = entry,
             task = task,
             summary = diagnoseTask(promptId),
-        )
+        ).let { context ->
+            context.copy(title = privacySanitizer.sanitize(context.title))
+        }
     }
 
     fun diagnoseTask(promptId: String? = null): String {
@@ -152,7 +156,7 @@ class ChatContextBuilder(
             "sampler" to values.byInput("sampler_name"),
             "model" to values.byInput("ckpt_name"),
         ).mapNotNull { (label, value) -> value?.let { "$label=$it" } }
-        return buildString {
+        return privacySanitizer.sanitize(buildString {
             if (promptId.isNullOrBlank()) {
                 appendLine("本地状态：最近一条失败/中断记录")
             } else {
@@ -171,7 +175,7 @@ class ChatContextBuilder(
             } else {
                 append("请基于以上信息回答用户关于该任务的问题；不要编造未列出的数据。")
             }
-        }
+        })
     }
 
     private fun Map<String, String>.byInput(input: String): String? =

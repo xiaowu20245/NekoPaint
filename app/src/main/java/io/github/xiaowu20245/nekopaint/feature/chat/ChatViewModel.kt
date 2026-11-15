@@ -11,6 +11,7 @@ import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
 import io.github.xiaowu20245.nekopaint.core.network.AiChatMessage
+import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.AiToolCall
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
@@ -96,6 +97,7 @@ class ChatViewModel(
     private val historyStore: ChatHistoryStore,
     private val actionHandler: ChatTaskActionHandler,
     private val appScope: CoroutineScope,
+    private val privacySanitizer: AiPrivacySanitizer,
     contextPromptId: String? = null,
 ) : ViewModel() {
 
@@ -194,28 +196,20 @@ class ChatViewModel(
         persistMessages()
 
         appScope.launch {
+            if (!privacySanitizer.awaitReady()) {
+                failUserMessage(
+                    userMessageId = userMessage.id,
+                    text = "无法加载服务器隐私配置，已停止发送。请稍后重试。",
+                )
+                return@launch
+            }
             val imageData = if (imageUri != null) {
                 val result = imageEncoder.toDataUrl(imageUri)
                 val data = result.getOrElse { error ->
-                    _state.update { current ->
-                        current.copy(
-                            sending = false,
-                            status = null,
-                            messages = current.messages.map { message ->
-                                if (message.id == userMessage.id) {
-                                    message.copy(isError = true)
-                                } else {
-                                    message
-                                }
-                            } + ChatUiMessage(
-                                id = nextMessageId++,
-                                role = ChatRole.ASSISTANT,
-                                text = "图片处理失败：${error.message ?: "无法读取图片"}",
-                                isError = true,
-                            ),
-                        )
-                    }
-                    persistMessages()
+                    failUserMessage(
+                        userMessageId = userMessage.id,
+                        text = "图片处理失败：${error.message ?: "无法读取图片"}",
+                    )
                     return@launch
                 }
                 _state.update { current ->
@@ -244,7 +238,11 @@ class ChatViewModel(
                 .map { message ->
                     AiChatMessage(
                         role = message.role.apiRole,
-                        content = message.text,
+                        content = if (message.role == ChatRole.ASSISTANT) {
+                            privacySanitizer.sanitize(message.text)
+                        } else {
+                            message.text
+                        },
                         imageDataUrl = message.imageDataUrl,
                     )
                 }
@@ -1143,6 +1141,33 @@ class ChatViewModel(
         persistMessages()
     }
 
+    /**
+     * Marks the user message that triggered the failed send and appends a
+     * controlled error, so the UI never stays in the "sending" state.
+     */
+    private fun failUserMessage(userMessageId: Long, text: String) {
+        _state.update { current ->
+            current.copy(
+                sending = false,
+                status = null,
+                streamingMessageId = null,
+                messages = current.messages.map { message ->
+                    if (message.id == userMessageId) {
+                        message.copy(isError = true)
+                    } else {
+                        message
+                    }
+                } + ChatUiMessage(
+                    id = nextMessageId++,
+                    role = ChatRole.ASSISTANT,
+                    text = text,
+                    isError = true,
+                ),
+            )
+        }
+        persistMessages()
+    }
+
     companion object {
         private const val MAX_TOOL_ROUNDS = 3
         private const val MAX_CONTEXT_MESSAGES = 40
@@ -1219,9 +1244,11 @@ class ChatViewModel(
             promptId: String? = null,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
+                val privacySanitizer = container.aiPrivacySanitizer
                 val contextBuilder = ChatContextBuilder(
                     taskManager = container.taskManager,
                     workflowRepository = container.workflowRepository,
+                    privacySanitizer = privacySanitizer,
                 )
                 val actionHandler = ChatTaskActionHandler(
                     dataSource = DefaultChatTaskActionDataSource(
@@ -1247,10 +1274,12 @@ class ChatViewModel(
                         contextBuilder = contextBuilder,
                         actionHandler = actionHandler,
                         visionAnalyzer = visionAnalyzer,
+                        privacySanitizer = privacySanitizer,
                     ),
                     historyStore = container.chatHistoryStore,
                     actionHandler = actionHandler,
                     appScope = container.appScope,
+                    privacySanitizer = container.aiPrivacySanitizer,
                     contextPromptId = promptId,
                 )
             }

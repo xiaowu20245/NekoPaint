@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantSettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
+import io.github.xiaowu20245.nekopaint.core.model.ai.AiDisclosurePolicy
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import io.github.xiaowu20245.nekopaint.core.network.AiAssistantSettingsClient
 import io.github.xiaowu20245.nekopaint.core.network.AiCredentialPolicy
@@ -28,8 +29,6 @@ data class AiAssistantFormState(
     val apiKeyOrigin: String? = null,
     val textModel: String = "",
     val visionModel: String = "",
-    val persona: String = "",
-    val preInstruction: String = "",
     val keyVisible: Boolean = false,
     val testing: Boolean = false,
     val saving: Boolean = false,
@@ -40,6 +39,7 @@ data class AiAssistantFormState(
     val credentialMessage: String? = null,
     val policyMessage: String? = null,
     val policyBlocked: Boolean = false,
+    val disclosureAcknowledged: Boolean = false,
     val confirmationMessage: String? = null,
     val saved: Boolean = false,
     val loaded: Boolean = false,
@@ -57,8 +57,6 @@ data class AiAssistantFormState(
         apiKeyOrigin = apiKeyOrigin,
         textModel = textModel.trim(),
         visionModel = visionModel.trim(),
-        persona = persona.trim(),
-        preInstruction = preInstruction.trim(),
     )
 }
 
@@ -75,6 +73,7 @@ class AiAssistantSettingsViewModel(
     private var originalBaseUrlValid = true
     private var originalApiKey = ""
     private var keyEdited = false
+    private var disclosureAcknowledgements: Set<String> = emptySet()
 
     init {
         viewModelScope.launch {
@@ -84,6 +83,9 @@ class AiAssistantSettingsViewModel(
             keyEdited = false
             consent = runCatching { store.currentHttpConsent() }
                 .getOrDefault(AiHttpConsent())
+            disclosureAcknowledgements = runCatching {
+                store.currentDisclosureAcknowledgements()
+            }.getOrDefault(emptySet())
             _uiState.update { current ->
                 withDerived(
                     current.copy(
@@ -95,8 +97,6 @@ class AiAssistantSettingsViewModel(
                         apiKeyOrigin = config.apiKeyOrigin,
                         textModel = config.textModel,
                         visionModel = config.visionModel,
-                        persona = config.persona,
-                        preInstruction = config.preInstruction,
                         loaded = true,
                     ),
                 )
@@ -155,26 +155,55 @@ class AiAssistantSettingsViewModel(
         }
     }
 
-    fun onPersonaChange(value: String) {
-        updateForm {
-            it.copy(
-                persona = value,
-                saved = false,
-            )
-        }
-    }
-
-    fun onPreInstructionChange(value: String) {
-        updateForm {
-            it.copy(
-                preInstruction = value,
-                saved = false,
-            )
-        }
-    }
-
     fun toggleKeyVisible() {
         _uiState.update { it.copy(keyVisible = !it.keyVisible) }
+    }
+
+    fun acknowledgeDisclosure() {
+        val endpoint = AiEndpointValidator.parse(_uiState.value.baseUrl).getOrNull()
+        if (endpoint == null) {
+            _uiState.update { it.copy(error = "请先填写有效的 Base URL") }
+            return
+        }
+        viewModelScope.launch {
+            runCatching { store.acknowledgeDisclosure(endpoint.origin) }
+                .onSuccess {
+                    disclosureAcknowledgements = disclosureAcknowledgements +
+                        AiDisclosurePolicy.key(endpoint.origin)
+                    _uiState.update { withDerived(it) }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(error = "无法保存数据披露确认：${error.message ?: "请重试"}")
+                    }
+                }
+        }
+    }
+
+    fun requestClearConfig() {
+        pendingAction = {
+            viewModelScope.launch {
+                runCatching { store.clear() }
+                    .onSuccess {
+                        disclosureAcknowledgements = emptySet()
+                        consent = AiHttpConsent()
+                        originalBaseUrlValid = true
+                        originalApiKey = ""
+                        keyEdited = false
+                        _uiState.update {
+                            AiAssistantFormState(loaded = true)
+                        }
+                    }
+                    .onFailure { error ->
+                        _uiState.update {
+                            it.copy(error = "清除 AI 配置失败：${error.message ?: "请重试"}")
+                        }
+                    }
+            }
+        }
+        _uiState.update {
+            it.copy(confirmationMessage = "将清除 AI Base URL、API Key、人设和所有安全确认，是否继续？")
+        }
     }
 
     fun applyPreset(preset: AiProviderPreset) {
@@ -383,7 +412,40 @@ class AiAssistantSettingsViewModel(
                 }
             }
 
-            is AiEndpointPolicyResult.Allowed -> runRequest(test, state)
+            is AiEndpointPolicyResult.Allowed -> {
+                if (test && !AiDisclosurePolicy.isAcknowledged(
+                        endpoint.origin,
+                        disclosureAcknowledgements,
+                    )
+                ) {
+                    pendingAction = {
+                        viewModelScope.launch {
+                            runCatching { store.acknowledgeDisclosure(endpoint.origin) }
+                                .onSuccess {
+                                    disclosureAcknowledgements = disclosureAcknowledgements +
+                                        AiDisclosurePolicy.key(endpoint.origin)
+                                    _uiState.update { withDerived(it) }
+                                    prepareRequest(true)
+                                }
+                                .onFailure { error ->
+                                    _uiState.update {
+                                        it.copy(
+                                            error = "无法保存数据披露确认：${error.message ?: "请重试"}",
+                                        )
+                                    }
+                                }
+                        }
+                    }
+                    _uiState.update {
+                        it.copy(
+                            confirmationMessage =
+                                "测试连接会把提示词、所选择的图片、任务摘要和错误信息发送到第三方 AI 服务。是否继续并记录此地址的确认？",
+                        )
+                    }
+                } else {
+                    runRequest(test, state)
+                }
+            }
         }
     }
 
@@ -423,10 +485,10 @@ class AiAssistantSettingsViewModel(
         if (_uiState.value.saving) return
         viewModelScope.launch {
             _uiState.update { it.copy(saving = true, error = null, saved = false) }
-            store.save(state.toConfig())
+            store.updateServiceConfig(state.toConfig())
                 .onSuccess {
                     originalBaseUrlValid = AiEndpointValidator.parse(state.baseUrl).isSuccess
-                    originalApiKey = state.apiKey
+                    originalApiKey = state.toConfig().apiKey
                     keyEdited = false
                     _uiState.update { it.copy(saving = false, saved = true) }
                 }
@@ -447,11 +509,17 @@ class AiAssistantSettingsViewModel(
 
     private fun withDerived(state: AiAssistantFormState): AiAssistantFormState {
         val derived = AiAssistantSettingsPolicy.derive(state, consent)
+        val endpoint = AiEndpointValidator.parse(state.baseUrl).getOrNull()
         return state.copy(
             baseUrlError = derived.baseUrlError,
             credentialMessage = derived.credentialMessage,
             policyMessage = derived.policyMessage,
             policyBlocked = derived.policyBlocked,
+            disclosureAcknowledged = endpoint != null &&
+                AiDisclosurePolicy.isAcknowledged(
+                    endpoint.origin,
+                    disclosureAcknowledgements,
+                ),
         )
     }
 

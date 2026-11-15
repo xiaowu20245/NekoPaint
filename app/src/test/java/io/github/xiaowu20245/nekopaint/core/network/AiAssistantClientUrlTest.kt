@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.core.network
 
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
+import io.github.xiaowu20245.nekopaint.core.privacy.SensitiveHostProvider
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -29,6 +30,7 @@ class AiAssistantClientUrlTest {
         val client = AiAssistantClient(
             client = OkHttpClient(),
             json = json,
+            privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
         )
         val result = client.chat(
             config = AiAssistantConfig(baseUrl = "foo", textModel = "model"),
@@ -53,7 +55,9 @@ class AiAssistantClientUrlTest {
             val client = AiAssistantClient(
                 client = OkHttpClient(),
                 json = json,
+            privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
                 consentProvider = { AiHttpConsent(keyApprovedOrigins = setOf(endpoint.origin)) },
+                disclosureProvider = { true },
             )
             val config = AiAssistantConfig(
                 baseUrl = baseUrl,
@@ -88,7 +92,9 @@ class AiAssistantClientUrlTest {
             val client = AiAssistantClient(
                 client = OkHttpClient(),
                 json = json,
+            privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
                 consentProvider = { AiHttpConsent(keyApprovedOrigins = setOf(endpoint.origin)) },
+                disclosureProvider = { true },
             )
             val config = AiAssistantConfig(
                 baseUrl = baseUrl,
@@ -127,7 +133,9 @@ class AiAssistantClientUrlTest {
                 val client = AiAssistantClient(
                     client = OkHttpClient(),
                     json = json,
+            privacySanitizer = AiPrivacySanitizer(SensitiveHostProvider { emptySet() }),
                     consentProvider = { AiHttpConsent(keyApprovedOrigins = setOf(endpoint.origin)) },
+                    disclosureProvider = { true },
                 )
                 val config = AiAssistantConfig(
                     baseUrl = baseUrl,

@@ -94,6 +94,37 @@ fun AiAssistantSettingsScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (state.baseUrl.isBlank() && state.apiKey.isBlank()) {
+                    Text(
+                        text = stringResource(R.string.ai_assistant_local_only),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NekoTheme.colors.success,
+                    )
+                }
+            }
+
+            if (!state.disclosureAcknowledged) {
+                item {
+                    SettingsGroupCard(
+                        title = stringResource(R.string.ai_assistant_disclosure_title),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.ai_assistant_disclosure_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                        ActionButton(
+                            label = stringResource(R.string.ai_assistant_disclosure_confirm),
+                            loading = false,
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            enabled = state.baseUrl.isNotBlank() && state.baseUrlError == null,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = viewModel::acknowledgeDisclosure,
+                        )
+                    }
+                }
             }
 
             item {
@@ -302,6 +333,20 @@ fun AiAssistantSettingsScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            if (state.baseUrl.isNotBlank() || state.apiKey.isNotBlank() || state.textModel.isNotBlank()) {
+                item {
+                    ActionButton(
+                        label = stringResource(R.string.ai_assistant_clear_config),
+                        loading = false,
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        enabled = !state.saving && !state.testing,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = viewModel::requestClearConfig,
+                    )
+                }
             }
         }
 

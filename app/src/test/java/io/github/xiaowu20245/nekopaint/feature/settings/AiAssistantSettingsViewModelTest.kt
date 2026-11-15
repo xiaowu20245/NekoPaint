@@ -7,6 +7,8 @@ import io.github.xiaowu20245.nekopaint.core.network.AiAssistantSettingsClient
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -42,7 +44,7 @@ class AiAssistantSettingsViewModelTest {
     @Test
     fun newKeyWithInvalidOriginalUrlCanBindAfterUrlBecomesValid() = runViewModelTest {
         val store = FakeStore(
-            config = AiAssistantConfig(baseUrl = "", textModel = "model"),
+            initialConfig = AiAssistantConfig(baseUrl = "", textModel = "model"),
         )
         val vm = createViewModel(store)
         advanceUntilIdle()
@@ -65,7 +67,7 @@ class AiAssistantSettingsViewModelTest {
     @Test
     fun legacyKeyWithInvalidOriginalUrlIsClearedRatherThanBoundToNewAddress() = runViewModelTest {
         val store = FakeStore(
-            config = AiAssistantConfig(
+            initialConfig = AiAssistantConfig(
                 baseUrl = "not-a-valid-url",
                 apiKey = "sk-old",
                 textModel = "model",
@@ -89,7 +91,7 @@ class AiAssistantSettingsViewModelTest {
     @Test
     fun originChangeCanBeCancelledAndKeepsKey() = runViewModelTest {
         val store = FakeStore(
-            config = AiAssistantConfig(
+            initialConfig = AiAssistantConfig(
                 baseUrl = "https://old.example.com/v1",
                 apiKey = "sk-old",
                 apiKeyOrigin = "https://old.example.com:443",
@@ -114,7 +116,7 @@ class AiAssistantSettingsViewModelTest {
     @Test
     fun publicHttpDisablesSubmissionAndDoesNotSave() = runViewModelTest {
         val store = FakeStore(
-            config = AiAssistantConfig(
+            initialConfig = AiAssistantConfig(
                 baseUrl = "http://8.8.8.8/v1",
                 textModel = "model",
             ),
@@ -137,7 +139,7 @@ class AiAssistantSettingsViewModelTest {
     @Test
     fun consentWriteFailureShowsErrorAndDoesNotContinueRequest() = runViewModelTest {
         val store = FakeStore(
-            config = AiAssistantConfig(
+            initialConfig = AiAssistantConfig(
                 baseUrl = "http://127.0.0.1:8188/v1",
                 apiKey = "sk-test",
                 apiKeyOrigin = "http://127.0.0.1:8188",
@@ -162,10 +164,126 @@ class AiAssistantSettingsViewModelTest {
     }
 
     @Test
+    fun disclosureAcknowledgementFailureShowsError() = runViewModelTest {
+        val store = FakeStore(
+            initialConfig = AiAssistantConfig(
+                baseUrl = "https://api.example.com/v1",
+                textModel = "model",
+            ),
+            failDisclosure = true,
+        )
+        val vm = createViewModel(store)
+        advanceUntilIdle()
+
+        vm.acknowledgeDisclosure()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.error.orEmpty().contains("无法保存数据披露确认"))
+        assertFalse(vm.uiState.value.disclosureAcknowledged)
+    }
+
+    @Test
+    fun testConnectionRequiresDisclosureAcknowledgement() = runViewModelTest {
+        val store = FakeStore(
+            initialConfig = AiAssistantConfig(
+                baseUrl = "https://api.example.com/v1",
+                apiKey = "sk-test",
+                apiKeyOrigin = "https://api.example.com:443",
+                textModel = "model",
+            ),
+        )
+        val client = FakeClient()
+        val vm = createViewModel(store, client)
+        advanceUntilIdle()
+
+        vm.testConnection()
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.confirmationMessage)
+        assertEquals(0, client.calls)
+
+        vm.confirmPendingAction()
+        advanceUntilIdle()
+
+        assertEquals(1, client.calls)
+        assertTrue(store.disclosures.contains("v1|https://api.example.com:443"))
+    }
+
+    @Test
+    fun clearConfigCanBeCancelled() = runViewModelTest {
+        val store = FakeStore(
+            initialConfig = AiAssistantConfig(
+                baseUrl = "https://api.example.com/v1",
+                apiKey = "sk-test",
+                apiKeyOrigin = "https://api.example.com:443",
+                textModel = "model",
+            ),
+        )
+        val vm = createViewModel(store)
+        advanceUntilIdle()
+
+        vm.requestClearConfig()
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.confirmationMessage)
+
+        vm.cancelPendingAction()
+        advanceUntilIdle()
+
+        assertEquals(0, store.clearCalls)
+        assertEquals("sk-test", vm.uiState.value.apiKey)
+    }
+
+    @Test
+    fun clearConfigConfirmationResetsStateAndCallsStore() = runViewModelTest {
+        val store = FakeStore(
+            initialConfig = AiAssistantConfig(
+                baseUrl = "https://api.example.com/v1",
+                apiKey = "sk-test",
+                apiKeyOrigin = "https://api.example.com:443",
+                textModel = "model",
+            ),
+        )
+        val vm = createViewModel(store)
+        advanceUntilIdle()
+
+        vm.requestClearConfig()
+        advanceUntilIdle()
+        vm.confirmPendingAction()
+        advanceUntilIdle()
+
+        assertEquals(1, store.clearCalls)
+        assertTrue(vm.uiState.value.baseUrl.isBlank())
+        assertTrue(vm.uiState.value.apiKey.isBlank())
+        assertFalse(vm.uiState.value.disclosureAcknowledged)
+    }
+
+    @Test
+    fun clearConfigFailureKeepsExistingState() = runViewModelTest {
+        val store = FakeStore(
+            initialConfig = AiAssistantConfig(
+                baseUrl = "https://api.example.com/v1",
+                apiKey = "sk-test",
+                apiKeyOrigin = "https://api.example.com:443",
+                textModel = "model",
+            ),
+            failClear = true,
+        )
+        val vm = createViewModel(store)
+        advanceUntilIdle()
+
+        vm.requestClearConfig()
+        advanceUntilIdle()
+        vm.confirmPendingAction()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.error.orEmpty().contains("清除 AI 配置失败"))
+        assertEquals("sk-test", vm.uiState.value.apiKey)
+    }
+
+    @Test
     fun successfulSavePersistsApiKeyOrigin() = runViewModelTest {
         val origin = "https://api.example.com:443"
         val store = FakeStore(
-            config = AiAssistantConfig(
+            initialConfig = AiAssistantConfig(
                 baseUrl = "https://api.example.com/v1",
                 apiKey = "sk-test",
                 apiKeyOrigin = origin,
@@ -183,16 +301,30 @@ class AiAssistantSettingsViewModelTest {
     }
 
     private class FakeStore(
-        var config: AiAssistantConfig,
+        initialConfig: AiAssistantConfig,
         var consent: AiHttpConsent = AiHttpConsent(),
         private val failConsentWrite: Boolean = false,
+        var disclosures: Set<String> = emptySet(),
+        var failClear: Boolean = false,
+        private val failDisclosure: Boolean = false,
     ) : AiAssistantSettingsStore {
 
         var saved: AiAssistantConfig? = null
+        var clearCalls: Int = 0
+        private val configFlow = MutableStateFlow(initialConfig)
 
-        override suspend fun current(): AiAssistantConfig = config
+        override val config: StateFlow<AiAssistantConfig> = configFlow
+
+        override suspend fun current(): AiAssistantConfig = configFlow.value
 
         override suspend fun currentHttpConsent(): AiHttpConsent = consent
+
+        override suspend fun currentDisclosureAcknowledgements(): Set<String> = disclosures
+
+        override suspend fun acknowledgeDisclosure(origin: String) {
+            if (failDisclosure) throw IOException("disclosure write failed")
+            disclosures = disclosures + "v1|$origin"
+        }
 
         override suspend fun trustHttpOrigin(origin: String) {
             if (failConsentWrite) throw IOException("consent write failed")
@@ -204,9 +336,35 @@ class AiAssistantSettingsViewModelTest {
             consent = consent.copy(keyApprovedOrigins = consent.keyApprovedOrigins + origin)
         }
 
-        override suspend fun save(config: AiAssistantConfig): Result<Unit> {
+        override suspend fun updateServiceConfig(config: AiAssistantConfig): Result<Unit> {
             saved = config
+            configFlow.value = configFlow.value.copy(
+                providerId = config.providerId,
+                baseUrl = config.baseUrl,
+                apiKey = config.apiKey,
+                apiKeyOrigin = config.apiKeyOrigin,
+                textModel = config.textModel,
+                visionModel = config.visionModel,
+            )
             return Result.success(Unit)
+        }
+
+        override suspend fun updatePersonaInstruction(
+            persona: String,
+            preInstruction: String,
+        ): Result<Unit> {
+            configFlow.value = configFlow.value.copy(
+                persona = persona.trim(),
+                preInstruction = preInstruction.trim(),
+            )
+            return Result.success(Unit)
+        }
+
+        override suspend fun clear() {
+            clearCalls++
+            if (failClear) throw IOException("clear failed")
+            configFlow.value = AiAssistantConfig()
+            saved = null
         }
     }
 

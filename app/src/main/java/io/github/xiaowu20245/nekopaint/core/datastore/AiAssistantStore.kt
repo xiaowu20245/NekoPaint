@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
+import io.github.xiaowu20245.nekopaint.core.model.ai.AiDisclosurePolicy
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import io.github.xiaowu20245.nekopaint.core.security.SecretCipher
 import kotlinx.coroutines.flow.Flow
@@ -31,7 +32,7 @@ class AiAssistantStore(
 
     private val dataStore = context.applicationContext.aiAssistantDataStore
 
-    val config: Flow<AiAssistantConfig> = dataStore.data.map { preferences ->
+    override val config: Flow<AiAssistantConfig> = dataStore.data.map { preferences ->
         val encryptedKey = preferences[ApiKey] ?: ""
         AiAssistantConfig(
             providerId = preferences[ProviderId] ?: AiAssistantConfig.PROVIDER_CUSTOM,
@@ -56,6 +57,21 @@ class AiAssistantStore(
 
     override suspend fun currentHttpConsent(): AiHttpConsent = httpConsent.first()
 
+    override suspend fun currentDisclosureAcknowledgements(): Set<String> =
+        dataStore.data.map { it[DisclosureAcknowledgements].orEmpty() }.first()
+
+    override suspend fun acknowledgeDisclosure(origin: String) {
+        if (origin.isBlank()) return
+        dataStore.edit { preferences ->
+            preferences[DisclosureAcknowledgements] =
+                preferences[DisclosureAcknowledgements].orEmpty() +
+                    AiDisclosurePolicy.key(origin)
+        }
+    }
+
+    suspend fun isDisclosureAcknowledged(origin: String): Boolean =
+        AiDisclosurePolicy.isAcknowledged(origin, currentDisclosureAcknowledgements())
+
     override suspend fun trustHttpOrigin(origin: String) {
         if (origin.isBlank()) return
         dataStore.edit { preferences ->
@@ -72,7 +88,7 @@ class AiAssistantStore(
         }
     }
 
-    override suspend fun save(config: AiAssistantConfig): Result<Unit> = runCatching {
+    override suspend fun updateServiceConfig(config: AiAssistantConfig): Result<Unit> = runCatching {
         val encryptedKey = if (config.apiKey.isBlank()) {
             ""
         } else {
@@ -84,8 +100,6 @@ class AiAssistantStore(
             preferences[BaseUrl] = config.baseUrl.trim()
             preferences[TextModel] = config.textModel.trim()
             preferences[VisionModel] = config.visionModel.trim()
-            preferences[Persona] = config.persona.trim()
-            preferences[PreInstruction] = config.preInstruction.trim()
             preferences[ApiKey] = encryptedKey
             if (config.apiKey.isBlank() || config.apiKeyOrigin.isNullOrBlank()) {
                 preferences.remove(ApiKeyOrigin)
@@ -95,7 +109,17 @@ class AiAssistantStore(
         }
     }
 
-    suspend fun clear() {
+    override suspend fun updatePersonaInstruction(
+        persona: String,
+        preInstruction: String,
+    ): Result<Unit> = runCatching {
+        dataStore.edit { preferences ->
+            preferences[Persona] = persona.trim()
+            preferences[PreInstruction] = preInstruction.trim()
+        }
+    }
+
+    override suspend fun clear() {
         dataStore.edit { preferences ->
             preferences.remove(ProviderId)
             preferences.remove(BaseUrl)
@@ -107,6 +131,7 @@ class AiAssistantStore(
             preferences.remove(ApiKeyOrigin)
             preferences.remove(HttpTrustedOrigins)
             preferences.remove(HttpKeyApprovedOrigins)
+            preferences.remove(DisclosureAcknowledgements)
         }
     }
 
@@ -121,5 +146,6 @@ class AiAssistantStore(
         val ApiKeyOrigin = stringPreferencesKey("api_key_origin")
         val HttpTrustedOrigins = stringSetPreferencesKey("http_trusted_origins")
         val HttpKeyApprovedOrigins = stringSetPreferencesKey("http_key_approved_origins")
+        val DisclosureAcknowledgements = stringSetPreferencesKey("ai_disclosure_acknowledgements")
     }
 }

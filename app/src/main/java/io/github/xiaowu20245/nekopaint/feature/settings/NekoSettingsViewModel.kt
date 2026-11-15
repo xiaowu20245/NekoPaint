@@ -5,8 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
-import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
+import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantSettingsStore
+import io.github.xiaowu20245.nekopaint.core.datastore.NekoSettingsPreferences
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,8 +25,8 @@ data class NekoSettingsUiState(
 )
 
 class NekoSettingsViewModel(
-    private val aiAssistantStore: AiAssistantStore,
-    private val settingsStore: SettingsStore,
+    private val aiAssistantStore: AiAssistantSettingsStore,
+    private val settingsStore: NekoSettingsPreferences,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NekoSettingsUiState())
@@ -71,12 +71,9 @@ class NekoSettingsViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(saving = true, saved = false, error = null) }
             val result = runCatching {
-                val current = aiAssistantStore.current()
-                aiAssistantStore.save(
-                    current.copy(
-                        persona = _uiState.value.persona.trim(),
-                        preInstruction = _uiState.value.preInstruction.trim(),
-                    ),
+                aiAssistantStore.updatePersonaInstruction(
+                    persona = _uiState.value.persona,
+                    preInstruction = _uiState.value.preInstruction,
                 ).getOrThrow()
             }
             _uiState.update {
