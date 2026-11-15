@@ -34,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -69,7 +68,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
-import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueItem
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
@@ -155,7 +153,6 @@ fun QueueScreen(
                     item {
                         QueueEmptyState(
                             onOpenHistory = onOpenHistory,
-                            onLoadDemo = viewModel::loadDemoQueue,
                         )
                     }
                 }
@@ -864,7 +861,6 @@ private fun PendingCard(
 @Composable
 private fun QueueEmptyState(
     onOpenHistory: () -> Unit,
-    onLoadDemo: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -906,27 +902,17 @@ private fun QueueEmptyState(
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(
-                    onClick = onOpenHistory,
-                    shape = RoundedCornerShape(50),
-                ) {
-                    Icon(
-                        imageVector = NekoIcons.Timeline,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.queue_open_history))
-                }
-                if (BuildConfig.DEBUG) {
-                    OutlinedButton(
-                        onClick = onLoadDemo,
-                        shape = RoundedCornerShape(50),
-                    ) {
-                        Text(stringResource(R.string.queue_demo_data))
-                    }
-                }
+            FilledTonalButton(
+                onClick = onOpenHistory,
+                shape = RoundedCornerShape(50),
+            ) {
+                Icon(
+                    imageVector = NekoIcons.Timeline,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.queue_open_history))
             }
         }
     }

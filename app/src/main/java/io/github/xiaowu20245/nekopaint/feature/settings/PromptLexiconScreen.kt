@@ -2,10 +2,12 @@ package io.github.xiaowu20245.nekopaint.feature.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,11 +15,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -31,17 +44,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
-import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PromptLexiconScreen() {
     val context = LocalContext.current
@@ -52,7 +65,13 @@ fun PromptLexiconScreen() {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var showClearConfirm by remember { mutableStateOf(false) }
+    var showAddTag by remember { mutableStateOf(false) }
+    var newTag by remember { mutableStateOf("") }
+    var newTagZh by remember { mutableStateOf("") }
+    var tagDialogError by remember { mutableStateOf<String?>(null) }
     val exportFileName = stringResource(R.string.prompt_lexicon_export_file)
+    val tagRequiredMessage = stringResource(R.string.prompt_lexicon_custom_required)
+    val tagDuplicateMessage = stringResource(R.string.prompt_lexicon_custom_duplicate)
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -75,6 +94,14 @@ fun PromptLexiconScreen() {
         is PromptLexiconNotice.Exported -> stringResource(
             R.string.prompt_lexicon_export_success,
             notice.count,
+        )
+        is PromptLexiconNotice.CustomTagAdded -> stringResource(
+            R.string.prompt_lexicon_custom_added,
+            notice.tag,
+        )
+        is PromptLexiconNotice.CustomTagRemoved -> stringResource(
+            R.string.prompt_lexicon_custom_removed,
+            notice.tag,
         )
         is PromptLexiconNotice.Failed -> notice.message
         null -> null
@@ -102,106 +129,146 @@ fun PromptLexiconScreen() {
             }
 
             item {
-                SettingsGroupCard(
-                    title = stringResource(R.string.prompt_lexicon_status_title),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                LexiconStatsCard(
+                    builtIn = state.builtInCount,
+                    external = state.externalCount,
+                    custom = state.customCount,
+                )
+            }
+
+            item {
+                SettingsSection(title = stringResource(R.string.prompt_lexicon_custom_title)) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = stringResource(R.string.prompt_lexicon_total_badge, state.builtInCount + state.externalCount),
-                            style = NekoMonoSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            text = stringResource(R.string.prompt_lexicon_custom_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        StatCard(
-                            title = stringResource(R.string.prompt_lexicon_builtin_title),
-                            count = stringResource(
-                                R.string.prompt_lexicon_builtin_count,
-                                state.builtInCount,
-                            ),
-                            caption = stringResource(R.string.prompt_lexicon_builtin_desc),
-                            modifier = Modifier.weight(1f),
-                        )
-                        StatCard(
-                            title = stringResource(R.string.prompt_lexicon_external_title),
-                            count = stringResource(
-                                R.string.prompt_lexicon_external_count,
-                                state.externalCount,
-                            ),
-                            caption = state.fileName.ifBlank {
-                                stringResource(R.string.prompt_lexicon_external_none)
+                        if (state.customTags.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.prompt_lexicon_custom_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                state.customTags.forEach { tag ->
+                                    CustomTagChip(
+                                        tag = tag,
+                                        removing = state.removingCustomTag == tag,
+                                        onRemove = { viewModel.removeCustomTag(tag) },
+                                    )
+                                }
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                newTag = ""
+                                newTagZh = ""
+                                tagDialogError = null
+                                showAddTag = true
                             },
-                            accent = true,
-                            modifier = Modifier.weight(1f),
-                        )
+                            enabled = !state.addingCustom,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = stringResource(R.string.prompt_lexicon_custom_add),
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
                     }
                 }
             }
 
             item {
-                SettingsGroupCard(
-                    title = stringResource(R.string.prompt_lexicon_import_title),
-                ) {
-                    Text(
-                        text = stringResource(R.string.prompt_lexicon_import_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 6.dp),
-                    )
-                    ImportButton(
-                        label = stringResource(
-                            if (state.importing) {
-                                R.string.prompt_lexicon_importing
-                            } else {
-                                R.string.prompt_lexicon_import
-                            },
-                        ),
-                        loading = state.importing,
-                        enabled = !state.importing && !state.clearing,
-                        onClick = { importLauncher.launch("*/*") },
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                SettingsSection(title = stringResource(R.string.prompt_lexicon_import_title)) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        SecondaryButton(
-                            label = stringResource(
+                        Text(
+                            text = stringResource(R.string.prompt_lexicon_import_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            onClick = { importLauncher.launch("*/*") },
+                            enabled = !state.importing && !state.clearing,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                        ) {
+                            if (state.importing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            } else {
+                                Text(stringResource(R.string.prompt_lexicon_import))
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { exportLauncher.launch(exportFileName) },
+                                enabled = !state.exporting && !state.importing,
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                            ) {
                                 if (state.exporting) {
-                                    R.string.prompt_lexicon_exporting
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                    )
                                 } else {
-                                    R.string.prompt_lexicon_export_groups
-                                },
-                            ),
-                            loading = state.exporting,
-                            enabled = !state.exporting && !state.importing,
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                exportLauncher.launch(exportFileName)
-                            },
-                        )
-                        SecondaryButton(
-                            label = stringResource(
+                                    Text(
+                                        text = stringResource(R.string.prompt_lexicon_export_groups),
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { showClearConfirm = true },
+                                enabled = !state.clearing && !state.importing &&
+                                    state.externalCount > 0,
+                                shape = RoundedCornerShape(50),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
+                            ) {
                                 if (state.clearing) {
-                                    R.string.prompt_lexicon_clearing
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                    )
                                 } else {
-                                    R.string.prompt_lexicon_clear_external
-                                },
-                            ),
-                            loading = state.clearing,
-                            enabled = !state.clearing && !state.importing &&
-                                state.externalCount > 0,
-                            modifier = Modifier.weight(1f),
-                            onClick = { showClearConfirm = true },
-                        )
+                                    Text(
+                                        text = stringResource(R.string.prompt_lexicon_clear_external),
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -237,126 +304,198 @@ fun PromptLexiconScreen() {
             },
         )
     }
+
+    if (showAddTag) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!state.addingCustom) showAddTag = false
+            },
+            title = { Text(stringResource(R.string.prompt_lexicon_custom_dialog_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = newTag,
+                        onValueChange = {
+                            if (it.length <= 64) {
+                                newTag = it
+                                tagDialogError = null
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.prompt_lexicon_custom_tag_label)) },
+                        placeholder = {
+                            Text(stringResource(R.string.prompt_lexicon_custom_tag_hint))
+                        },
+                        isError = tagDialogError != null,
+                        supportingText = tagDialogError?.let { message ->
+                            { Text(message) }
+                        },
+                    )
+                    OutlinedTextField(
+                        value = newTagZh,
+                        onValueChange = { newTagZh = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.prompt_lexicon_custom_zh_label)) },
+                        placeholder = {
+                            Text(stringResource(R.string.prompt_lexicon_custom_zh_hint))
+                        },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val tag = newTag.trim()
+                        val error = when {
+                            tag.isBlank() -> tagRequiredMessage
+                            state.customTags.any { it.equals(tag, ignoreCase = true) } ->
+                                tagDuplicateMessage
+                            else -> null
+                        }
+                        if (error != null) {
+                            tagDialogError = error
+                        } else {
+                            viewModel.addCustomTag(tag, newTagZh)
+                            showAddTag = false
+                        }
+                    },
+                    enabled = !state.addingCustom,
+                ) {
+                    Text(stringResource(R.string.prompt_lexicon_custom_add_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showAddTag = false },
+                    enabled = !state.addingCustom,
+                ) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
-private fun StatCard(
-    title: String,
-    count: String,
-    caption: String,
-    modifier: Modifier = Modifier,
-    accent: Boolean = false,
+private fun LexiconStatsCard(
+    builtIn: Int,
+    external: Int,
+    custom: Int,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LexiconStat(
+                count = builtIn,
+                label = stringResource(R.string.prompt_lexicon_stats_builtin),
+                modifier = Modifier.weight(1f),
+            )
+            StatDivider()
+            LexiconStat(
+                count = external,
+                label = stringResource(R.string.prompt_lexicon_stats_external),
+                modifier = Modifier.weight(1f),
+            )
+            StatDivider()
+            LexiconStat(
+                count = custom,
+                label = stringResource(R.string.prompt_lexicon_stats_custom),
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LexiconStat(
+    count: Int,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
         modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = count,
-                style = NekoMonoSmall.copy(fontWeight = FontWeight.Bold),
-                color = if (accent) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-            Text(
-                text = caption,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 
 @Composable
-private fun ImportButton(
-    label: String,
-    loading: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
+private fun StatDivider() {
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(42.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            if (loading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-            } else {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Medium,
-                    ),
-                )
-            }
-        }
-    }
+            .width(1.dp)
+            .height(44.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant),
+    )
 }
 
 @Composable
-private fun SecondaryButton(
-    label: String,
-    loading: Boolean,
-    enabled: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+private fun CustomTagChip(
+    tag: String,
+    removing: Boolean,
+    onRemove: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(
-            alpha = if (enabled) 1f else 0.5f,
-        ),
-        modifier = modifier
-            .height(38.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.widthIn(max = 220.dp),
     ) {
         Row(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.padding(start = 10.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (loading) {
+            Text(
+                text = tag,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (removing) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(13.dp),
-                    strokeWidth = 2.dp,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .padding(2.dp),
+                    strokeWidth = 1.5.dp,
                 )
             } else {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    maxLines = 1,
-                )
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = stringResource(
+                            R.string.prompt_lexicon_custom_delete,
+                            tag,
+                        ),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
             }
         }
     }

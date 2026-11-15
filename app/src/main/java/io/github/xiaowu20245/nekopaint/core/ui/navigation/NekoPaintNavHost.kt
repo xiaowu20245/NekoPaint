@@ -21,9 +21,13 @@ import io.github.xiaowu20245.nekopaint.feature.history.HistoryDetailScreen
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryScreen
 import io.github.xiaowu20245.nekopaint.feature.queue.QueueScreen
 import io.github.xiaowu20245.nekopaint.feature.server.ServerScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.AboutSettingsScreen
 import io.github.xiaowu20245.nekopaint.feature.settings.AiAssistantSettingsScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.AppearanceSettingsScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.NekoSettingsScreen
 import io.github.xiaowu20245.nekopaint.feature.settings.PromptLexiconScreen
 import io.github.xiaowu20245.nekopaint.feature.settings.SettingsScreen
+import io.github.xiaowu20245.nekopaint.feature.settings.StorageSettingsScreen
 import io.github.xiaowu20245.nekopaint.feature.workflow.WorkflowDetailScreen
 import io.github.xiaowu20245.nekopaint.feature.workflow.WorkflowsScreen
 
@@ -34,15 +38,24 @@ fun NekoPaintNavHost(
     modifier: Modifier = Modifier,
     onTopBarIconActionsChange: (List<NekoTopBarIconAction>) -> Unit = {},
     onBackHandlerChange: ((() -> Boolean)?) -> Unit = {},
+    reduceMotion: Boolean = false,
 ) {
     NavHost(
         navController = navController,
         startDestination = NekoPaintDestination.Server.route,
         modifier = modifier,
-        enterTransition = { fadeIn(tween(120)) },
-        exitTransition = { fadeOut(tween(90)) },
-        popEnterTransition = { fadeIn(tween(120)) },
-        popExitTransition = { fadeOut(tween(90)) },
+        enterTransition = {
+            if (reduceMotion) EnterTransition.None else fadeIn(tween(120))
+        },
+        exitTransition = {
+            if (reduceMotion) ExitTransition.None else fadeOut(tween(90))
+        },
+        popEnterTransition = {
+            if (reduceMotion) EnterTransition.None else fadeIn(tween(120))
+        },
+        popExitTransition = {
+            if (reduceMotion) ExitTransition.None else fadeOut(tween(90))
+        },
     ) {
         composable(
             route = NekoPaintDestination.Server.route,
@@ -157,13 +170,73 @@ fun NekoPaintNavHost(
                 onOpenAiSettings = {
                     navController.navigate(NekoPaintDestination.AiAssistant.route)
                 },
+                onOpenNekoSettings = {
+                    navController.navigate(NekoPaintDestination.NekoSettings.route)
+                },
+                onOpenAppearance = {
+                    navController.navigate(NekoPaintDestination.AppearanceSettings.route)
+                },
+                onOpenStorage = {
+                    navController.navigate(NekoPaintDestination.StorageSettings.route)
+                },
+                onOpenAbout = {
+                    navController.navigate(NekoPaintDestination.AboutSettings.route)
+                },
             )
         }
-        composable(NekoPaintDestination.PromptLexicon.route) {
+        composable(
+            route = NekoPaintDestination.PromptLexicon.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             PromptLexiconScreen()
         }
-        composable(NekoPaintDestination.AiAssistant.route) {
+        composable(
+            route = NekoPaintDestination.AiAssistant.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
             AiAssistantSettingsScreen()
+        }
+        composable(
+            route = NekoPaintDestination.NekoSettings.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
+            NekoSettingsScreen()
+        }
+        composable(
+            route = NekoPaintDestination.AppearanceSettings.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
+            AppearanceSettingsScreen()
+        }
+        composable(
+            route = NekoPaintDestination.StorageSettings.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
+            StorageSettingsScreen()
+        }
+        composable(
+            route = NekoPaintDestination.AboutSettings.route,
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+        ) {
+            AboutSettingsScreen()
         }
     }
 }

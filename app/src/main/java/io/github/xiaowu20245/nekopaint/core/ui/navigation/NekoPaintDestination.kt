@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
@@ -29,7 +30,11 @@ enum class NekoPaintDestination(
 
     // 设置二级页：只从设置主页进入，复用全局返回箭头。
     PromptLexicon("settings/lexicon", R.string.prompt_lexicon_title, NekoIcons.Bookmark),
-    AiAssistant("settings/ai", R.string.ai_assistant_title, NekoIcons.Sparkles),
+    AiAssistant("settings/ai", R.string.settings_ai_service_title, NekoIcons.Sparkles),
+    NekoSettings("settings/neko", R.string.settings_neko_title, NekoIcons.Toolbox),
+    AppearanceSettings("settings/appearance", R.string.settings_appearance_title, NekoIcons.Tune),
+    StorageSettings("settings/storage", R.string.settings_storage_title, NekoIcons.Download),
+    AboutSettings("settings/about", R.string.settings_about_destination, Icons.Outlined.Info),
     ;
 
     companion object {

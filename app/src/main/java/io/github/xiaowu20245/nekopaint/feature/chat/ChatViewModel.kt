@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
+import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
 import io.github.xiaowu20245.nekopaint.core.network.AiChatMessage
@@ -20,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
@@ -85,6 +87,7 @@ private data class ChatAnswer(
  */
 class ChatViewModel(
     private val store: AiAssistantStore,
+    private val settingsStore: SettingsStore,
     private val client: AiAssistantClient,
     private val imageEncoder: ChatImageEncoder,
     private val imageStore: ChatImageStore,
@@ -104,6 +107,7 @@ class ChatViewModel(
     private var taskPromptId: String? = contextPromptId
     private var currentSessionId: String? = null
     private var mode = ChatMode.CHAT
+    private var defaultMode = ChatMode.CHAT
 
     init {
         if (contextPromptId != null) {
@@ -115,6 +119,11 @@ class ChatViewModel(
             }
         }
         viewModelScope.launch {
+            defaultMode = if (settingsStore.agentModeByDefault.first()) {
+                ChatMode.AGENT
+            } else {
+                ChatMode.CHAT
+            }
             val sessions = historyStore.listSessions()
             val latest = ChatStartupPolicy.initialSession(contextPromptId, sessions)
             val restored = hydrateStoredImages(
@@ -123,7 +132,7 @@ class ChatViewModel(
             // 避免与用户极快发送消息的竞态：只有当前仍是空白新对话时才应用启动策略。
             if (currentSessionId == null && _state.value.messages.isEmpty()) {
                 currentSessionId = latest?.id
-                mode = ChatStartupPolicy.initialMode(latest)
+                mode = ChatStartupPolicy.initialMode(latest, defaultMode)
                 nextMessageId = (restored.maxOfOrNull { it.id } ?: 0L) + 1L
                 _state.update {
                     it.copy(
@@ -135,6 +144,11 @@ class ChatViewModel(
                 }
             } else {
                 _state.update { it.copy(sessions = sessions) }
+            }
+        }
+        viewModelScope.launch {
+            settingsStore.agentModeByDefault.collect { value ->
+                defaultMode = if (value) ChatMode.AGENT else ChatMode.CHAT
             }
         }
         viewModelScope.launch {
@@ -835,7 +849,7 @@ class ChatViewModel(
     fun newSession() {
         if (_state.value.sending) return
         currentSessionId = null
-        mode = ChatMode.CHAT
+        mode = defaultMode
         _state.update {
             it.copy(
                 messages = emptyList(),
@@ -843,7 +857,7 @@ class ChatViewModel(
                 sending = false,
                 status = null,
                 streamingMessageId = null,
-                mode = ChatMode.CHAT,
+                mode = defaultMode,
             )
         }
     }
@@ -900,7 +914,7 @@ class ChatViewModel(
             if (_state.value.currentSessionId == sessionId) {
                 currentSessionId = null
                 nextMessageId = 1L
-                mode = ChatMode.CHAT
+                mode = defaultMode
                 _state.update {
                     it.copy(
                         messages = emptyList(),
@@ -909,7 +923,7 @@ class ChatViewModel(
                         sending = false,
                         status = null,
                         streamingMessageId = null,
-                        mode = ChatMode.CHAT,
+                        mode = defaultMode,
                     )
                 }
             } else {
@@ -1223,6 +1237,7 @@ class ChatViewModel(
                 )
                 ChatViewModel(
                     store = container.aiAssistantStore,
+                    settingsStore = container.settingsStore,
                     client = container.aiAssistantClient,
                     imageEncoder = container.chatImageEncoder,
                     imageStore = container.chatImageStore,

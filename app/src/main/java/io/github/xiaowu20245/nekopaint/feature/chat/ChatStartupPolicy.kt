@@ -17,6 +17,8 @@ internal object ChatStartupPolicy {
         return null
     }
 
-    fun initialMode(session: ChatSessionSummary?): ChatMode =
-        session?.mode ?: ChatMode.CHAT
+    fun initialMode(
+        session: ChatSessionSummary?,
+        defaultMode: ChatMode = ChatMode.CHAT,
+    ): ChatMode = session?.mode ?: defaultMode
 }

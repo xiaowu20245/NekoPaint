@@ -13,6 +13,7 @@ import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ThemeMode
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagCatalog
+import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
@@ -38,10 +39,18 @@ data class SettingsUiState(
     val showTempPreviews: Boolean = false,
     val autoSaveHistoryImages: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val dynamicColor: Boolean = false,
+    val reduceMotion: Boolean = false,
+    val agentModeByDefault: Boolean = false,
     val builtInWords: Int = 0,
     val externalWords: Int = 0,
+    val customWords: Int = 0,
     val externalFileName: String = "",
     val aiConfig: AiAssistantConfig = AiAssistantConfig(),
+    val chatImageCount: Int = 0,
+    val chatImageBytes: Long = 0L,
+    val chatImagesClearing: Boolean = false,
+    val chatImagesCleared: Boolean = false,
 )
 
 class SettingsViewModel(
@@ -52,6 +61,7 @@ class SettingsViewModel(
     private val workflowRepository: WorkflowRepository,
     private val promptLexiconRepository: PromptLexiconRepository,
     private val aiAssistantStore: AiAssistantStore,
+    private val chatImageStore: ChatImageStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -59,6 +69,7 @@ class SettingsViewModel(
 
     init {
         refreshCacheSize()
+        refreshChatImageStats()
         viewModelScope.launch {
             settingsStore.showTempPreviews.collect { showTempPreviews ->
                 _uiState.update { it.copy(showTempPreviews = showTempPreviews) }
@@ -75,11 +86,27 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
+            settingsStore.dynamicColor.collect { value ->
+                _uiState.update { it.copy(dynamicColor = value) }
+            }
+        }
+        viewModelScope.launch {
+            settingsStore.reduceMotion.collect { value ->
+                _uiState.update { it.copy(reduceMotion = value) }
+            }
+        }
+        viewModelScope.launch {
+            settingsStore.agentModeByDefault.collect { value ->
+                _uiState.update { it.copy(agentModeByDefault = value) }
+            }
+        }
+        viewModelScope.launch {
             promptLexiconRepository.state.collect { lexicon ->
                 _uiState.update {
                     it.copy(
                         builtInWords = PromptTagCatalog.builtInCount,
                         externalWords = lexicon.externalCount,
+                        customWords = lexicon.customCount,
                         externalFileName = lexicon.fileName,
                     )
                 }
@@ -111,6 +138,24 @@ class SettingsViewModel(
         }
     }
 
+    fun setDynamicColor(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setDynamicColor(value)
+        }
+    }
+
+    fun setReduceMotion(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setReduceMotion(value)
+        }
+    }
+
+    fun setAgentModeByDefault(value: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setAgentModeByDefault(value)
+        }
+    }
+
     suspend fun buildDiagnostics(): String {
         val server = runCatching { serverConfigStore.activeServer.first() }.getOrNull()
         val host = server?.host.orEmpty()
@@ -132,6 +177,7 @@ class SettingsViewModel(
             .getOrDefault(false)
         val aiConfig = runCatching { aiAssistantStore.current() }
             .getOrDefault(AiAssistantConfig())
+        val chatImageStats = runCatching { chatImageStore.stats() }.getOrNull()
         val externalWords = promptLexiconRepository.state.value.externalCount
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             .format(Date())
@@ -154,7 +200,11 @@ class SettingsViewModel(
             }
             appendLine("模板数量：${if (templateCount >= 0) templateCount else "读取失败"}")
             appendLine("图片缓存：${cacheBytes / 1024 / 1024} MB")
+            appendLine("Neko I 聊天图片：${chatImageStats?.count ?: 0} 张 / ${(chatImageStats?.bytes ?: 0L) / 1024} KB")
             appendLine("主题：${theme.name}")
+            appendLine("动态取色：${settingsStore.dynamicColor.first()}")
+            appendLine("减少动画：${settingsStore.reduceMotion.first()}")
+            appendLine("Neko I 默认 Agent：${settingsStore.agentModeByDefault.first()}")
             appendLine("显示临时预览图：$showTemp")
             appendLine("自动保存历史图片：$autoSave")
             appendLine("外部词库：$externalWords 词")
@@ -213,6 +263,41 @@ class SettingsViewModel(
         }
     }
 
+    fun refreshChatImageStats() {
+        if (_uiState.value.chatImagesClearing) return
+        viewModelScope.launch {
+            val stats = runCatching { chatImageStore.stats() }.getOrNull()
+            _uiState.update {
+                it.copy(
+                    chatImageCount = stats?.count ?: 0,
+                    chatImageBytes = stats?.bytes ?: 0L,
+                )
+            }
+        }
+    }
+
+    fun clearChatImages() {
+        if (_uiState.value.chatImagesClearing) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(chatImagesClearing = true) }
+            val result = runCatching { chatImageStore.clear() }
+            val stats = runCatching { chatImageStore.stats() }.getOrNull()
+            _uiState.update {
+                it.copy(
+                    chatImagesClearing = false,
+                    chatImageCount = stats?.count ?: 0,
+                    chatImageBytes = stats?.bytes ?: 0L,
+                    chatImagesCleared = result.isSuccess,
+                    error = result.exceptionOrNull()?.message,
+                )
+            }
+        }
+    }
+
+    fun consumeChatImagesCleared() {
+        _uiState.update { it.copy(chatImagesCleared = false) }
+    }
+
     fun consumeCacheCleared() {
         _uiState.update { it.copy(cacheCleared = false) }
     }
@@ -232,6 +317,7 @@ class SettingsViewModel(
                     workflowRepository = container.workflowRepository,
                     promptLexiconRepository = container.promptLexiconRepository,
                     aiAssistantStore = container.aiAssistantStore,
+                    chatImageStore = container.chatImageStore,
                 )
             }
         }

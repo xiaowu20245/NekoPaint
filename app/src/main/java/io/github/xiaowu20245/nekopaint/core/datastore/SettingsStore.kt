@@ -37,6 +37,18 @@ class SettingsStore(context: Context) {
         runCatching { ThemeMode.valueOf(raw.orEmpty()) }.getOrDefault(ThemeMode.SYSTEM)
     }
 
+    val dynamicColor: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[DynamicColor] ?: false
+    }
+
+    val reduceMotion: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[ReduceMotion] ?: false
+    }
+
+    val agentModeByDefault: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AgentModeByDefault] ?: false
+    }
+
     suspend fun setShowTempPreviews(value: Boolean) {
         dataStore.edit { it[ShowTempPreviews] = value }
     }
@@ -49,9 +61,24 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[ThemeModeKey] = value.name }
     }
 
+    suspend fun setDynamicColor(value: Boolean) {
+        dataStore.edit { it[DynamicColor] = value }
+    }
+
+    suspend fun setReduceMotion(value: Boolean) {
+        dataStore.edit { it[ReduceMotion] = value }
+    }
+
+    suspend fun setAgentModeByDefault(value: Boolean) {
+        dataStore.edit { it[AgentModeByDefault] = value }
+    }
+
     private companion object {
         val ShowTempPreviews = booleanPreferencesKey("show_temp_previews")
         val AutoSaveHistoryImages = booleanPreferencesKey("auto_save_history_images")
         val ThemeModeKey = stringPreferencesKey("theme_mode")
+        val DynamicColor = booleanPreferencesKey("dynamic_color")
+        val ReduceMotion = booleanPreferencesKey("reduce_motion")
+        val AgentModeByDefault = booleanPreferencesKey("agent_mode_by_default")
     }
 }

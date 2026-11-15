@@ -79,4 +79,23 @@ class AiSloganProviderTest {
         val result = pick("12:00", previousKaomoji = generalKaomoji.first())
         assertFalse(result.endsWith(" ${generalKaomoji.first()}"))
     }
+
+    @Test
+    fun `kaomoji is kept as separate part for wrapping`() {
+        val result = AiSloganProvider.pickSlogan(
+            generalSlogans = general,
+            lateNightSlogans = lateNight,
+            morningSlogan = "早上好喵~",
+            eveningSlogan = "晚上好，喵~",
+            sleepSlogan = "zzZ...",
+            generalKaomoji = generalKaomoji,
+            sleepKaomoji = sleepKaomoji,
+            now = LocalTime.parse("12:00"),
+            random = Random(1),
+        )
+
+        assertTrue(general.any { result.text == it })
+        assertTrue(result.kaomoji in generalKaomoji)
+        assertEquals("${result.text} ${result.kaomoji}", result.fullText)
+    }
 }

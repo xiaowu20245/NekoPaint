@@ -120,8 +120,6 @@ class HistoryViewModel(
     private val settingsStore: SettingsStore,
 ) : ViewModel() {
 
-    private val demoEntries = MutableStateFlow<List<HistoryEntry>>(emptyList())
-    private val demoTasks = MutableStateFlow<List<TaskRecord>>(emptyList())
     private val archivedEntries = MutableStateFlow<List<HistoryEntry>>(emptyList())
     private val archivedTasks = MutableStateFlow<List<TaskRecord>>(emptyList())
 
@@ -137,10 +135,6 @@ class HistoryViewModel(
         entries to tasks
     }
 
-    private val demoState = combine(demoEntries, demoTasks) { entries, tasks ->
-        entries to tasks
-    }
-
     private val serverState = combine(
         serverConfigStore.servers,
         serverConfigStore.activeServerId,
@@ -153,20 +147,16 @@ class HistoryViewModel(
         )
     }
 
-    private val base = combine(liveState, archiveState, demoState, serverState) { live, archive, demo, servers ->
+    private val base = combine(liveState, archiveState, serverState) { live, archive, servers ->
         val (liveEntries, liveTasks, connection) = live
         val mergedEntries = mergeHistoryArchives(
             archived = archive.first,
             live = liveEntries,
-        ).let { entries ->
-            if (demo.first.isEmpty()) entries else mergeHistoryArchives(entries, demo.first)
-        }.map { it.withHostId() }
+        ).map { it.withHostId() }
         val mergedTasks = mergeTaskArchives(
             archived = archive.second,
             live = liveTasks,
-        ).let { tasks ->
-            if (demo.second.isEmpty()) tasks else mergeTaskArchives(tasks, demo.second)
-        }.map { it.withHostId() }
+        ).map { it.withHostId() }
         HistoryUiState(
             entries = dedupeHistoryByPrompt(mergedEntries, servers.activeId),
             tasks = dedupeTasksByPrompt(mergedTasks, servers.activeId),
@@ -352,153 +342,6 @@ class HistoryViewModel(
 
     private fun TaskRecord.withHostId(): TaskRecord =
         if (serverId.isBlank()) copy(serverId = ServerConfigStore.DEFAULT_SERVER_ID) else this
-
-    fun loadDemoHistory() {
-        val now = System.currentTimeMillis()
-        val p1 = "demo-hist-001"
-        val p2 = "demo-hist-002"
-        val p3 = "demo-hist-003"
-
-        demoEntries.value = listOf(
-            HistoryEntry(
-                promptId = p1,
-                status = "success",
-                completed = true,
-                timestamp = now - 1000 * 60 * 12,
-                startedAt = now - 1000 * 60 * 12 - 18000,
-                finishedAt = now - 1000 * 60 * 12,
-                images = listOf(
-                    HistoryImage("flux_out_01.png", "", "output", "https://picsum.photos/512/512?random=1"),
-                    HistoryImage("flux_out_02.png", "", "output", "https://picsum.photos/512/512?random=2"),
-                ),
-                errorNodeId = null,
-                errorMessage = null,
-            ),
-            HistoryEntry(
-                promptId = p2,
-                status = "success",
-                completed = true,
-                timestamp = now - 1000 * 60 * 95,
-                startedAt = now - 1000 * 60 * 95 - 24000,
-                finishedAt = now - 1000 * 60 * 95,
-                images = listOf(
-                    HistoryImage("anime_01.png", "", "output", "https://picsum.photos/512/512?random=3"),
-                    HistoryImage("anime_preview_temp.png", "", "temp", "https://picsum.photos/512/512?random=4"),
-                ),
-                errorNodeId = null,
-                errorMessage = null,
-            ),
-            HistoryEntry(
-                promptId = p3,
-                status = "success",
-                completed = true,
-                timestamp = now - 1000 * 60 * 60 * 28,
-                startedAt = now - 1000 * 60 * 60 * 28 - 15000,
-                finishedAt = now - 1000 * 60 * 60 * 28,
-                images = listOf(
-                    HistoryImage("scenic_lake.png", "", "output", "https://picsum.photos/512/512?random=5"),
-                ),
-                errorNodeId = null,
-                errorMessage = null,
-            ),
-        )
-
-        demoTasks.value = listOf(
-            TaskRecord(
-                promptId = p1,
-                templateId = "flux-dev",
-                templateName = "Flux 快速生图",
-                clientId = "local-client",
-                submittedAt = now - 1000 * 60 * 12 - 20000,
-                startedAt = now - 1000 * 60 * 12 - 18000,
-                finishedAt = now - 1000 * 60 * 12,
-                status = "success",
-                values = mapOf(
-                    "6:text" to "masterpiece, 1girl, cat ears, neon cyberpunk city, cinematic lighting, 8k",
-                    "7:text" to "worst quality, low quality",
-                    "3:seed" to "42819024",
-                    "3:steps" to "20",
-                    "3:cfg" to "7.0",
-                    "3:sampler_name" to "euler",
-                    "3:scheduler" to "normal",
-                    "4:ckpt_name" to "flux1-dev-fp8.safetensors",
-                    "5:width" to "1024",
-                    "5:height" to "1024",
-                ),
-            ),
-            TaskRecord(
-                promptId = p2,
-                templateId = "anime-sdxl",
-                templateName = "动漫插画精细生成",
-                clientId = "local-client",
-                submittedAt = now - 1000 * 60 * 95 - 26000,
-                startedAt = now - 1000 * 60 * 95 - 24000,
-                finishedAt = now - 1000 * 60 * 95,
-                status = "success",
-                values = mapOf(
-                    "6:text" to "1girl, silver hair, starry sky, floating glowing petals, beautiful eyes",
-                    "3:seed" to "987654321",
-                    "3:steps" to "28",
-                    "3:cfg" to "6.5",
-                    "3:sampler_name" to "euler_ancestral",
-                    "3:scheduler" to "karras",
-                    "4:ckpt_name" to "animagineXLV31.safetensors",
-                    "5:width" to "1024",
-                    "5:height" to "1024",
-                ),
-            ),
-            TaskRecord(
-                promptId = p3,
-                templateId = "landscape-v1",
-                templateName = "自然风景与建筑",
-                clientId = "local-client",
-                submittedAt = now - 1000 * 60 * 60 * 28 - 18000,
-                startedAt = now - 1000 * 60 * 60 * 28 - 15000,
-                finishedAt = now - 1000 * 60 * 60 * 28,
-                status = "success",
-                values = mapOf(
-                    "6:text" to "scenic mountain lake at dawn, reflection in crystal clear water, pine trees",
-                    "3:seed" to "554433221",
-                    "3:steps" to "20",
-                    "3:cfg" to "7.0",
-                    "4:ckpt_name" to "sd_xl_base_1.0.safetensors",
-                    "5:width" to "1024",
-                    "5:height" to "1024",
-                ),
-            ),
-        )
-        bindDemoTasksToLocalTemplate()
-    }
-
-    /**
-     * 调试用演示数据在本地存在工作流时，自动映射到真实模板 ID 与候选参数，
-     * 便于在模拟器验证“回填至工作流”闭环；正式包不显示入口。
-     */
-    private fun bindDemoTasksToLocalTemplate() {
-        viewModelScope.launch {
-            val template = runCatching { workflowRepository.listTemplates() }
-                .getOrDefault(emptyList())
-                .firstOrNull() ?: return@launch
-            demoTasks.value = demoTasks.value.map { task ->
-                val mapped = buildMap {
-                    task.values.forEach { (key, value) ->
-                        val inputName = key.substringAfter(':', key)
-                        val negative = key.endsWith(":text") && key.startsWith("7:")
-                        val candidate = template.candidates.firstOrNull {
-                            !it.readOnly && it.inputName == inputName &&
-                                (negative == it.label.contains("负"))
-                        }
-                        if (candidate != null) put(candidate.id, value)
-                    }
-                }
-                task.copy(
-                    templateId = template.id,
-                    templateName = template.name,
-                    values = mapped,
-                )
-            }
-        }
-    }
 
     fun refresh() = taskManager.refresh()
 

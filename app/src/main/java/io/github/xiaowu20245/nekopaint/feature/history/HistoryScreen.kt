@@ -112,7 +112,6 @@ import coil3.compose.AsyncImagePainter
 import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
-import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
@@ -581,7 +580,6 @@ fun HistoryScreen(
                 ) {
                     EmptyHistory(
                         loading = state.refreshing,
-                        onLoadDemo = viewModel::loadDemoHistory,
                     )
                 }
             } else {
@@ -2291,7 +2289,6 @@ private fun ParamDetailRow(label: String, value: String) {
 @Composable
 private fun EmptyHistory(
     loading: Boolean,
-    onLoadDemo: () -> Unit = {},
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2316,15 +2313,6 @@ private fun EmptyHistory(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(4.dp))
-            if (BuildConfig.DEBUG) {
-                OutlinedButton(
-                    onClick = onLoadDemo,
-                    shape = RoundedCornerShape(50),
-                ) {
-                    Text(stringResource(R.string.history_demo_records))
-                }
-            }
         }
     }
 }

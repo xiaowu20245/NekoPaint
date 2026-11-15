@@ -20,14 +20,21 @@ class MainActivity : ComponentActivity() {
         setContent {
             val themeMode by app.container.settingsStore.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
+            val dynamicColor by app.container.settingsStore.dynamicColor
+                .collectAsStateWithLifecycle(initialValue = false)
+            val reduceMotion by app.container.settingsStore.reduceMotion
+                .collectAsStateWithLifecycle(initialValue = false)
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (themeMode) {
                 ThemeMode.SYSTEM -> systemDark
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
-            NekoPaintTheme(darkTheme = darkTheme) {
-                NekoPaintApp()
+            NekoPaintTheme(
+                darkTheme = darkTheme,
+                dynamicColor = dynamicColor,
+            ) {
+                NekoPaintApp(reduceMotion = reduceMotion)
             }
         }
     }

@@ -56,4 +56,10 @@ class ChatStartupPolicyTest {
         assertNull(session)
         assertEquals(ChatMode.CHAT, ChatStartupPolicy.initialMode(session))
     }
+
+    @Test
+    fun `default mode applies to blank new session`() {
+        assertEquals(ChatMode.AGENT, ChatStartupPolicy.initialMode(null, ChatMode.AGENT))
+        assertEquals(ChatMode.CHAT, ChatStartupPolicy.initialMode(null, ChatMode.CHAT))
+    }
 }

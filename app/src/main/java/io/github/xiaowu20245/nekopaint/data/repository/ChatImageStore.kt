@@ -41,6 +41,22 @@ class ChatImageStore(context: Context) {
         }
     }
 
+    suspend fun stats(): ChatImageStats = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val files = dir.listFiles()?.filter { it.isFile }.orEmpty()
+            ChatImageStats(
+                count = files.size,
+                bytes = files.sumOf { it.length() },
+            )
+        }
+    }
+
+    suspend fun clear() = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            dir.listFiles()?.forEach { it.delete() }
+        }
+    }
+
     private fun fileFor(id: String): File =
         File(dir, id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".txt")
 
@@ -57,3 +73,8 @@ class ChatImageStore(context: Context) {
         const val MAX_FILES = 50
     }
 }
+
+data class ChatImageStats(
+    val count: Int,
+    val bytes: Long,
+)

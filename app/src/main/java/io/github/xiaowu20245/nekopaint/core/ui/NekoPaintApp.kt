@@ -42,7 +42,7 @@ import io.github.xiaowu20245.nekopaint.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NekoPaintApp() {
+fun NekoPaintApp(reduceMotion: Boolean = false) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = NekoPaintDestination.fromRoute(backStackEntry?.destination?.route)
@@ -178,6 +178,7 @@ fun NekoPaintApp() {
             onTopBarActionChange = { topBarAction = it },
             onTopBarIconActionsChange = { topBarIconActions = it },
             onBackHandlerChange = { screenBackHandler = it },
+            reduceMotion = reduceMotion,
             modifier = Modifier.padding(innerPadding),
         )
     }

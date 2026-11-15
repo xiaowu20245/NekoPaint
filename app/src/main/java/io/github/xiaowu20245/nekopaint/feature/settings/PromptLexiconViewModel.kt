@@ -20,16 +20,22 @@ sealed interface PromptLexiconNotice {
     data class Imported(val fileName: String, val count: Int) : PromptLexiconNotice
     data object Cleared : PromptLexiconNotice
     data class Exported(val count: Int) : PromptLexiconNotice
+    data class CustomTagAdded(val tag: String) : PromptLexiconNotice
+    data class CustomTagRemoved(val tag: String) : PromptLexiconNotice
     data class Failed(val message: String) : PromptLexiconNotice
 }
 
 data class PromptLexiconUiState(
     val builtInCount: Int = PromptTagCatalog.builtInCount,
     val externalCount: Int = 0,
+    val customCount: Int = 0,
+    val customTags: List<String> = emptyList(),
     val fileName: String = "",
     val importing: Boolean = false,
     val clearing: Boolean = false,
     val exporting: Boolean = false,
+    val addingCustom: Boolean = false,
+    val removingCustomTag: String? = null,
     val notice: PromptLexiconNotice? = null,
 )
 
@@ -48,6 +54,8 @@ class PromptLexiconViewModel(
                     it.copy(
                         builtInCount = PromptTagCatalog.builtInCount,
                         externalCount = state.externalCount,
+                        customCount = state.customCount,
+                        customTags = state.customTags,
                         fileName = state.fileName,
                     )
                 }
@@ -103,6 +111,71 @@ class PromptLexiconViewModel(
                             clearing = false,
                             notice = PromptLexiconNotice.Failed(
                                 throwable.message ?: "清空失败",
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun addCustomTag(tag: String, zh: String) {
+        if (_uiState.value.addingCustom) return
+        val value = tag.trim()
+        if (value.isBlank()) {
+            _uiState.update {
+                it.copy(notice = PromptLexiconNotice.Failed("标签不能为空"))
+            }
+            return
+        }
+        if (_uiState.value.customTags.any { it.equals(value, ignoreCase = true) }) {
+            _uiState.update {
+                it.copy(notice = PromptLexiconNotice.Failed("标签已存在"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(addingCustom = true) }
+            repository.addCustomTag(value, zh)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            addingCustom = false,
+                            notice = PromptLexiconNotice.CustomTagAdded(value),
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            addingCustom = false,
+                            notice = PromptLexiconNotice.Failed(
+                                throwable.message ?: "添加标签失败",
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun removeCustomTag(tag: String) {
+        if (_uiState.value.removingCustomTag != null) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(removingCustomTag = tag) }
+            repository.removeCustomTag(tag)
+                .onSuccess {
+                    _uiState.update {
+                        it.copy(
+                            removingCustomTag = null,
+                            notice = PromptLexiconNotice.CustomTagRemoved(tag),
+                        )
+                    }
+                }
+                .onFailure { throwable ->
+                    _uiState.update {
+                        it.copy(
+                            removingCustomTag = null,
+                            notice = PromptLexiconNotice.Failed(
+                                throwable.message ?: "删除标签失败",
                             ),
                         )
                     }

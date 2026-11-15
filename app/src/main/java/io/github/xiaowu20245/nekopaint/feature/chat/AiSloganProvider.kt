@@ -23,6 +23,14 @@ import kotlin.random.Random
  */
 object AiSloganProvider {
 
+    data class Slogan(
+        val text: String,
+        val kaomoji: String? = null,
+    ) {
+        val fullText: String
+            get() = if (kaomoji.isNullOrBlank()) text else "$text $kaomoji"
+    }
+
     private val generalFallback = listOf("需要帮忙嘛")
 
     @Volatile
@@ -39,7 +47,31 @@ object AiSloganProvider {
         now: LocalTime = LocalTime.now(),
         random: Random = Random.Default,
         previousKaomoji: String? = null,
-    ): String {
+    ): String = pickSlogan(
+        generalSlogans = generalSlogans,
+        lateNightSlogans = lateNightSlogans,
+        morningSlogan = morningSlogan,
+        eveningSlogan = eveningSlogan,
+        sleepSlogan = sleepSlogan,
+        generalKaomoji = generalKaomoji,
+        sleepKaomoji = sleepKaomoji,
+        now = now,
+        random = random,
+        previousKaomoji = previousKaomoji,
+    ).fullText
+
+    internal fun pickSlogan(
+        generalSlogans: List<String>,
+        lateNightSlogans: List<String>,
+        morningSlogan: String,
+        eveningSlogan: String,
+        sleepSlogan: String,
+        generalKaomoji: List<String>,
+        sleepKaomoji: List<String>,
+        now: LocalTime = LocalTime.now(),
+        random: Random = Random.Default,
+        previousKaomoji: String? = null,
+    ): Slogan {
         val minuteOfDay = now.hour * 60 + now.minute
         val slogan = when {
             minuteOfDay < 4 * 60 + 30 -> lateNightSlogans.ifEmpty { generalSlogans }
@@ -53,7 +85,7 @@ object AiSloganProvider {
         // Ciallo~! 自带固定颜文字，不能再追加。
         if (slogan.contains("Ciallo~!")) {
             lastKaomoji = null
-            return slogan
+            return Slogan(text = slogan)
         }
 
         // 00:00–09:00 的标语只使用睡眠颜文字池；
@@ -67,18 +99,18 @@ object AiSloganProvider {
         }
         val picked = candidates.ifEmpty { listOf("(・ω・)ノ") }.random(random)
         lastKaomoji = picked
-        return "$slogan $picked"
+        return Slogan(text = slogan, kaomoji = picked)
     }
 
     @Composable
-    fun rememberSlogan(): String {
+    fun rememberSlogan(): Slogan {
         val context = LocalContext.current
         return remember { pick(context) }
     }
 
-    private fun pick(context: Context): String {
+    private fun pick(context: Context): Slogan {
         val resources = context.resources
-        return pick(
+        return pickSlogan(
             generalSlogans = resources.getStringArray(R.array.ai_slogan_general).toList(),
             lateNightSlogans = resources.getStringArray(R.array.ai_slogan_late_night).toList(),
             morningSlogan = resources.getString(R.string.ai_slogan_morning),
