@@ -5,8 +5,10 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
+import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import io.github.xiaowu20245.nekopaint.core.security.SecretCipher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -25,7 +27,7 @@ private val Context.aiAssistantDataStore: DataStore<Preferences> by preferencesD
 class AiAssistantStore(
     context: Context,
     private val cipher: SecretCipher = SecretCipher(),
-) {
+) : AiAssistantSettingsStore {
 
     private val dataStore = context.applicationContext.aiAssistantDataStore
 
@@ -35,6 +37,7 @@ class AiAssistantStore(
             providerId = preferences[ProviderId] ?: AiAssistantConfig.PROVIDER_CUSTOM,
             baseUrl = preferences[BaseUrl] ?: "",
             apiKey = if (encryptedKey.isBlank()) "" else cipher.decrypt(encryptedKey).orEmpty(),
+            apiKeyOrigin = preferences[ApiKeyOrigin],
             textModel = preferences[TextModel] ?: "",
             visionModel = preferences[VisionModel] ?: "",
             persona = preferences[Persona] ?: "",
@@ -42,9 +45,34 @@ class AiAssistantStore(
         )
     }
 
-    suspend fun current(): AiAssistantConfig = config.first()
+    override suspend fun current(): AiAssistantConfig = config.first()
 
-    suspend fun save(config: AiAssistantConfig): Result<Unit> = runCatching {
+    val httpConsent: Flow<AiHttpConsent> = dataStore.data.map { preferences ->
+        AiHttpConsent(
+            trustedOrigins = preferences[HttpTrustedOrigins].orEmpty(),
+            keyApprovedOrigins = preferences[HttpKeyApprovedOrigins].orEmpty(),
+        )
+    }
+
+    override suspend fun currentHttpConsent(): AiHttpConsent = httpConsent.first()
+
+    override suspend fun trustHttpOrigin(origin: String) {
+        if (origin.isBlank()) return
+        dataStore.edit { preferences ->
+            preferences[HttpTrustedOrigins] =
+                preferences[HttpTrustedOrigins].orEmpty() + origin
+        }
+    }
+
+    override suspend fun approveHttpKeyOrigin(origin: String) {
+        if (origin.isBlank()) return
+        dataStore.edit { preferences ->
+            preferences[HttpKeyApprovedOrigins] =
+                preferences[HttpKeyApprovedOrigins].orEmpty() + origin
+        }
+    }
+
+    override suspend fun save(config: AiAssistantConfig): Result<Unit> = runCatching {
         val encryptedKey = if (config.apiKey.isBlank()) {
             ""
         } else {
@@ -59,6 +87,11 @@ class AiAssistantStore(
             preferences[Persona] = config.persona.trim()
             preferences[PreInstruction] = config.preInstruction.trim()
             preferences[ApiKey] = encryptedKey
+            if (config.apiKey.isBlank() || config.apiKeyOrigin.isNullOrBlank()) {
+                preferences.remove(ApiKeyOrigin)
+            } else {
+                preferences[ApiKeyOrigin] = config.apiKeyOrigin
+            }
         }
     }
 
@@ -71,6 +104,9 @@ class AiAssistantStore(
             preferences.remove(Persona)
             preferences.remove(PreInstruction)
             preferences.remove(ApiKey)
+            preferences.remove(ApiKeyOrigin)
+            preferences.remove(HttpTrustedOrigins)
+            preferences.remove(HttpKeyApprovedOrigins)
         }
     }
 
@@ -82,5 +118,8 @@ class AiAssistantStore(
         val Persona = stringPreferencesKey("persona")
         val PreInstruction = stringPreferencesKey("pre_instruction")
         val ApiKey = stringPreferencesKey("api_key_encrypted")
+        val ApiKeyOrigin = stringPreferencesKey("api_key_origin")
+        val HttpTrustedOrigins = stringSetPreferencesKey("http_trusted_origins")
+        val HttpKeyApprovedOrigins = stringSetPreferencesKey("http_key_approved_origins")
     }
 }

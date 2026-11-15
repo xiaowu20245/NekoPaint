@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +29,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -126,6 +128,14 @@ fun AiAssistantSettingsScreen() {
                         placeholder = stringResource(R.string.ai_assistant_base_url_hint),
                         keyboardType = KeyboardType.Uri,
                     )
+                    state.baseUrlError?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                    }
                     LabeledInput(
                         label = stringResource(R.string.ai_assistant_api_key),
                         value = state.apiKey,
@@ -174,6 +184,27 @@ fun AiAssistantSettingsScreen() {
                             onValueChange = viewModel::onVisionModelChange,
                             modifier = Modifier.weight(1f),
                             keyboardType = KeyboardType.Text,
+                        )
+                    }
+
+                    state.credentialMessage?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NekoTheme.colors.warning,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                    }
+                    state.policyMessage?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (state.policyBlocked) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                NekoTheme.colors.warning
+                            },
+                            modifier = Modifier.padding(horizontal = 4.dp),
                         )
                     }
 
@@ -242,7 +273,7 @@ fun AiAssistantSettingsScreen() {
                             icon = Icons.Outlined.Refresh,
                             containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                             contentColor = MaterialTheme.colorScheme.primary,
-                            enabled = !state.testing && !state.saving,
+                            enabled = !state.testing && !state.saving && state.canSubmit,
                             modifier = Modifier.weight(1f),
                             onClick = viewModel::testConnection,
                         )
@@ -257,7 +288,7 @@ fun AiAssistantSettingsScreen() {
                             loading = state.saving,
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary,
-                            enabled = !state.testing && !state.saving,
+                            enabled = !state.testing && !state.saving && state.canSubmit,
                             modifier = Modifier.weight(1f),
                             onClick = viewModel::save,
                         )
@@ -272,6 +303,26 @@ fun AiAssistantSettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+
+        state.confirmationMessage?.let { message ->
+            AlertDialog(
+                onDismissRequest = viewModel::cancelPendingAction,
+                title = {
+                    Text(text = stringResource(R.string.ai_assistant_confirm_title))
+                },
+                text = { Text(text = message) },
+                confirmButton = {
+                    TextButton(onClick = viewModel::confirmPendingAction) {
+                        Text(text = stringResource(R.string.ai_assistant_confirm_action))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = viewModel::cancelPendingAction) {
+                        Text(text = stringResource(R.string.action_cancel))
+                    }
+                },
+            )
         }
 
         SnackbarHost(

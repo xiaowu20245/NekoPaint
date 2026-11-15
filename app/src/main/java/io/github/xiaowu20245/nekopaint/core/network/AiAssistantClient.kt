@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.core.network
 
 import io.github.xiaowu20245.nekopaint.BuildConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
+import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -35,12 +36,23 @@ data class AiChatMessage(
  * 不记录请求体，避免提示词或 API Key 进入日志。
  */
 class AiAssistantClient(
-    private val client: OkHttpClient,
+    client: OkHttpClient,
     private val json: Json,
     private val sessionIdProvider: suspend () -> String = { "" },
-) {
+    private val consentProvider: suspend () -> AiHttpConsent = { AiHttpConsent() },
+) : AiAssistantSettingsClient {
 
-    suspend fun testConnection(config: AiAssistantConfig): Result<Long> = withContext(Dispatchers.IO) {
+    /**
+     * AI requests must never follow redirects: the initial endpoint has been
+     * validated, but a redirect could otherwise move the request (and the
+     * Authorization header) to an unapproved origin.
+     */
+    private val requestClient = client.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
+    override suspend fun testConnection(config: AiAssistantConfig): Result<Long> = withContext(Dispatchers.IO) {
         if (!config.isConfigured) {
             return@withContext Result.failure(IllegalStateException("请填写 Base URL 和文本模型"))
         }
@@ -201,7 +213,49 @@ class AiAssistantClient(
         stream: Boolean = false,
         onDelta: (String) -> Unit = {},
     ): Result<AiChatCompletion> = withContext(Dispatchers.IO) {
-        val url = buildEndpoint(config.baseUrl)
+        val endpoint = AiEndpointValidator.parse(config.baseUrl).getOrElse { error ->
+            return@withContext Result.failure(
+                IllegalArgumentException("Base URL 格式无效：${error.message ?: "请检查地址"}"),
+            )
+        }
+        when (AiCredentialPolicy.evaluate(
+            apiKey = config.apiKey,
+            apiKeyOrigin = config.apiKeyOrigin,
+            endpoint = endpoint,
+        )) {
+            AiCredentialState.Bound,
+            AiCredentialState.NoKey,
+            -> Unit
+
+            AiCredentialState.MissingOrigin -> {
+                return@withContext Result.failure(
+                    IllegalStateException("API Key 尚未绑定当前地址，请先在设置中确认绑定或重新输入"),
+                )
+            }
+
+            is AiCredentialState.OriginChanged -> {
+                return@withContext Result.failure(
+                    IllegalStateException("API Key 不属于当前 AI 地址，请先确认清空并重新输入"),
+                )
+            }
+
+            AiCredentialState.InvalidEndpoint -> {
+                return@withContext Result.failure(
+                    IllegalStateException("Base URL 格式无效，请检查地址"),
+                )
+            }
+        }
+        val consent = runCatching { consentProvider() }.getOrDefault(AiHttpConsent())
+        val policy = AiEndpointPolicy.evaluate(
+            endpoint = endpoint,
+            hasApiKey = config.apiKey.isNotBlank(),
+            consent = consent,
+        )
+        if (!policy.allowed) {
+            return@withContext Result.failure(
+                IllegalStateException(policy.message ?: "AI 地址未通过安全校验"),
+            )
+        }
         val body = buildJsonObject {
             put("model", model.trim())
             putJsonArray("messages") {
@@ -272,24 +326,24 @@ class AiAssistantClient(
             put("max_tokens", maxTokens)
         }.toString()
 
-        val sessionId = runCatching { sessionIdProvider() }.getOrDefault("")
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "NekoPaint/${BuildConfig.VERSION_NAME}")
-            .post(body.toRequestBody(JSON_MEDIA_TYPE))
-            .apply {
-                if (config.apiKey.isNotBlank()) {
-                    header("Authorization", "Bearer ${config.apiKey}")
-                }
-                // OpenCode Go 用该头做路由与提示缓存；其他兼容服务会忽略未知头。
-                if (sessionId.isNotBlank()) {
-                    header("x-opencode-session", sessionId)
-                }
-            }
-            .build()
-
         try {
-            client.newCall(request).execute().use { response ->
+            val sessionId = runCatching { sessionIdProvider() }.getOrDefault("")
+            val request = Request.Builder()
+                .url(endpoint.chatCompletionsUrl())
+                .header("User-Agent", "NekoPaint/${BuildConfig.VERSION_NAME}")
+                .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                .apply {
+                    if (config.apiKey.isNotBlank()) {
+                        header("Authorization", "Bearer ${config.apiKey}")
+                    }
+                    // OpenCode Go 用该头做路由与提示缓存；其他兼容服务会忽略未知头。
+                    if (sessionId.isNotBlank()) {
+                        header("x-opencode-session", sessionId)
+                    }
+                }
+                .build()
+
+            requestClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val rawBody = response.body.string()
                     val detail = AiChatResponseParser.parseErrorMessage(json, rawBody)
@@ -319,6 +373,10 @@ class AiAssistantClient(
             Result.failure(IllegalStateException("无法解析服务器地址，请检查 Base URL"))
         } catch (io: IOException) {
             Result.failure(IllegalStateException("网络请求失败：${io.message ?: "请检查网络和地址"}"))
+        } catch (invalid: IllegalArgumentException) {
+            Result.failure(
+                IllegalStateException("Base URL 格式无效，请检查地址（${invalid.message ?: "非法地址"}）"),
+            )
         }
     }
 
@@ -361,17 +419,9 @@ class AiAssistantClient(
         )
     }
 
-    private fun buildEndpoint(baseUrl: String): String {
-        val normalized = baseUrl.trim().trimEnd('/')
-        return if (normalized.endsWith("/chat/completions")) {
-            normalized
-        } else {
-            "$normalized/chat/completions"
-        }
-    }
-
     private fun friendlyHttpError(code: Int, detail: String?): String {
         val reason = when (code) {
+            in 300..399 -> "地址发生重定向，已阻止；请直接填写最终 HTTPS 地址"
             401, 403 -> "API Key 无效或没有权限"
             404 -> "接口地址不存在，请检查 Base URL 是否包含 /v1"
             429 -> "请求过于频繁或额度不足"

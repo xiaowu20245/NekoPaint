@@ -9,6 +9,7 @@ data class AiAssistantConfig(
     val providerId: String = PROVIDER_CUSTOM,
     val baseUrl: String = "",
     val apiKey: String = "",
+    val apiKeyOrigin: String? = null,
     val textModel: String = "",
     val visionModel: String = "",
     val persona: String = "",

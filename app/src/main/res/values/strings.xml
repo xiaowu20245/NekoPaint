@@ -492,6 +492,8 @@
     <string name="ai_assistant_test_success">连接成功 · %1$s 响应正常</string>
     <string name="ai_assistant_test_latency">%1$d ms</string>
     <string name="ai_assistant_test_failed">连接失败：%1$s</string>
+    <string name="ai_assistant_confirm_title">确认 AI 配置变更</string>
+    <string name="ai_assistant_confirm_action">继续</string>
     <string name="ai_assistant_save">保存配置</string>
     <string name="ai_assistant_saving">保存中…</string>
     <string name="ai_assistant_saved">配置已保存</string>

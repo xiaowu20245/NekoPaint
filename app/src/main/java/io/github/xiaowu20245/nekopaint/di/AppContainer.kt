@@ -89,6 +89,8 @@ class AppContainer(context: Context) {
     // 大模型响应可能超过普通请求的 15 秒读取超时，单独放宽到 60 秒。
     val aiOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
         .readTimeout(NetworkConfig.AiReadTimeoutSeconds, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .build()
 
     // Manager 首次拉取节点映射时可能需要访问远程源，单独放宽读取超时。
@@ -100,6 +102,7 @@ class AppContainer(context: Context) {
         client = aiOkHttpClient,
         json = json,
         sessionIdProvider = clientIdStore::getOrCreate,
+        consentProvider = aiAssistantStore::currentHttpConsent,
     )
 
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)

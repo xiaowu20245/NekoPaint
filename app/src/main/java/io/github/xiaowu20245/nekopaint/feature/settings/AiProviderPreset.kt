@@ -2,7 +2,6 @@ package io.github.xiaowu20245.nekopaint.feature.settings
 
 import androidx.annotation.StringRes
 import io.github.xiaowu20245.nekopaint.R
-import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 
 /** 兼容 OpenAI 协议的常用服务商预设。 */
 enum class AiProviderPreset(
@@ -42,14 +41,6 @@ enum class AiProviderPreset(
         labelRes = R.string.ai_assistant_provider_ollama,
     ),
     ;
-
-    fun toConfig(currentKey: String): AiAssistantConfig = AiAssistantConfig(
-        providerId = id,
-        baseUrl = baseUrl,
-        apiKey = currentKey,
-        textModel = textModel,
-        visionModel = visionModel,
-    )
 
     companion object {
         fun fromId(id: String): AiProviderPreset? = entries.firstOrNull { it.id == id }
