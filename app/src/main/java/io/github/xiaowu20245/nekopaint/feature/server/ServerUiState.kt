@@ -58,6 +58,17 @@ data class ServerCardUi(
 }
 
 /**
+ * 服务状态刷新的展示策略。
+ *
+ * 后台轮询只有在“从未得到任何结果”时才显示检测中；一旦已经在线或离线，
+ * 静默刷新必须保留当前徽章，否则每个轮询周期都会在“检测中/离线”之间闪烁。
+ */
+internal object ServerRefreshPolicy {
+    fun showTesting(card: ServerCardUi?, silent: Boolean): Boolean =
+        !silent || (card != null && card.snapshot == null && card.error == null)
+}
+
+/**
  * Merges a persisted profile into the existing card state.
  *
  * When the endpoint changes, errors and snapshots belong to the old endpoint

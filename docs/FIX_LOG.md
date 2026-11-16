@@ -711,3 +711,15 @@ git diff --check
 - **手工验收**：注入含 `widget` 对象/`items` 数组旧候选的 profile；列表显示“1 项可选”，详情高级仅显示标量“文本”；点击保存后 profile 中结构化候选被清理，`api.json` 的 `widget`/`items` 原结构和类型保持不变；无 FATAL。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 41 节）；86 suites / 460 tests、lint、assemble、diff check 与本地一致；B25-01～B25-04 为非阻塞低优先级残余。
 - 第 6 批 commit 已提交为 `fix: 保护工作流非标量输入不被字符串化`（`dd6e900`）。
+
+### 36. 服务页离线徽章高频闪烁修复（已复审 APPROVED）
+
+- **原因**：服务页 5 秒静默轮询在卡片尚无 snapshot 时仍把 `error` 清空并置 `isTesting=true`，导致“离线→检测中→离线”周期闪烁；`LaunchedEffect` 又把 `state.activeCard?.error` 作为 key，错误变化会反复重启轮询循环；另有 id 变化时的重复立即探测。
+- **修复**：
+  - 新增 `ServerRefreshPolicy.showTesting()`：手动刷新始终显示检测中；静默刷新只有“从未得到任何结果”（snapshot=null 且 error=null）才显示检测中，已在线/已离线卡片保持原徽章。
+  - `ServerViewModel.refreshActive()` 跳过 `InvalidConfig`，避免无效地址自动重试；`refreshProfile()` 改用统一策略，不再清空已失败卡片的 error。
+  - `ServerScreen` 的轮询 `LaunchedEffect` 移除 `error` key 和重复的立即刷新 effect，仅在 active id/endpoint/lifecycle 变化时重启；循环内 `refreshActive()` 读取最新状态。
+  - 新增 `ServerRefreshPolicyTest` 覆盖手动/首次静默/离线/在线/缺失卡片。
+- **验证**：87 suites / 465 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **手工验收**：API 37 模拟器 `emulator-5554`，active 服务器 `127.0.0.2:8188` 离线；连续 10 次 uiautomator 采样（约 22 秒）状态徽章始终为“离线”，未再出现“检测中/离线”交替。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 42 节）；87 suites / 465 tests、lint、assemble、diff check 与本地一致；S1-01～S1-03 为非阻塞低优先级残余。

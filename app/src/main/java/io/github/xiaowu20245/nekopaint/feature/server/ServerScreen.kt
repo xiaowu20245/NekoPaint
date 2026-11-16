@@ -138,21 +138,14 @@ fun ServerScreen() {
         lifecycleOwner,
         state.activeCard?.profile?.id,
         state.activeCard?.profile?.endpointKey,
-        state.activeCard?.error,
     ) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (state.activeCard?.error == ServerError.InvalidConfig) {
-                return@repeatOnLifecycle
-            }
             delay(250)
             while (isActive) {
                 viewModel.refreshActive()
                 delay(5_000)
             }
         }
-    }
-    LaunchedEffect(state.activeCard?.profile?.id) {
-        state.activeCard?.let { viewModel.refreshCard(it.profile.id) }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

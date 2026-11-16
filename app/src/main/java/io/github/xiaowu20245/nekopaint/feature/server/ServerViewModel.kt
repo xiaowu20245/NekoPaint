@@ -70,7 +70,10 @@ class ServerViewModel(
 
     fun refreshActive() {
         val card = _uiState.value.activeCard ?: return
-        if (!card.isTesting) refreshCard(card.profile.id, silent = true)
+        if (card.isTesting) return
+        // InvalidConfig 不自动重试，避免无效地址每 5 秒发一次请求。
+        if (card.error == ServerError.InvalidConfig) return
+        refreshCard(card.profile.id, silent = true)
     }
 
     fun refreshCard(id: String, silent: Boolean = false) {
@@ -109,8 +112,9 @@ class ServerViewModel(
         }
         val generation = probes.start(profile.id, profile.endpointKey) ?: return
         val card = _uiState.value.cards.firstOrNull { it.profile.id == profile.id }
-        // 静默刷新保留徽章与按钮状态；只有手动刷新或首次无数据时才显示“检测中”。
-        val showTesting = !silent || card?.snapshot == null
+        // 静默刷新保留徽章与按钮状态；只有手动刷新或首次探测（尚无结果）才显示“检测中”。
+        // 已经失败过的卡片不能在每次后台轮询时清空 error，否则会与“离线”标志来回闪烁。
+        val showTesting = ServerRefreshPolicy.showTesting(card, silent)
         if (showTesting) {
             _uiState.update { state ->
                 state.copy(
