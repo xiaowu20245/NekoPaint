@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.feature.server
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.ServerStats
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +64,26 @@ class ServerRefreshPolicyTest {
     @Test
     fun missingCardDoesNotEnterTestingDuringSilentRefresh() {
         assertFalse(ServerRefreshPolicy.showTesting(null, silent = true))
+    }
+
+    @Test
+    fun testingRemainingTimeHonorsMinimumVisibleDuration() {
+        assertEquals(
+            600L,
+            ServerRefreshPolicy.remainingTestingMs(
+                startedAt = 1_000L,
+                now = 1_200L,
+                minimumMs = 800L,
+            ),
+        )
+        assertEquals(
+            0L,
+            ServerRefreshPolicy.remainingTestingMs(
+                startedAt = 1_000L,
+                now = 2_000L,
+                minimumMs = 800L,
+            ),
+        )
     }
 
     private fun card(

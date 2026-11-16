@@ -724,3 +724,15 @@ git diff --check
 - **手工验收**：API 37 模拟器 `emulator-5554`，active 服务器 `127.0.0.2:8188` 离线；连续 10 次 uiautomator 采样（约 22 秒）状态徽章始终为“离线”，未再出现“检测中/离线”交替。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 42 节）；87 suites / 465 tests、lint、assemble、diff check 与本地一致；S1-01～S1-03 为非阻塞低优先级残余。
 - 本次修复 commit 已提交为 `fix: 稳定服务页离线徽章刷新`（`af9696e`）。
+
+### 37. 检测中最短展示时长补充（已复审 APPROVED）
+
+- **问题**：即使后台轮询不再反复清空离线状态，首次/手动探测遇到连接立即失败时，“检测中”只出现几十毫秒就被“离线”替换，看起来仍像闪烁。
+- **修复**：
+  - `ServerRefreshPolicy` 增加 `MIN_TESTING_VISIBLE_MS = 1200` 和 `remainingTestingMs()`。
+  - `ServerViewModel.refreshProfile()` 在网络结果返回后，如果本次显示“检测中”，先补足最短 1.2 秒再应用成功/失败状态；连接本身较慢时不额外延迟。
+  - 保留上一轮策略：后台轮询在已有在线/离线结果时不进入“检测中”，只在首次无结果或手动刷新时展示。
+  - `ServerRefreshPolicyTest` 增加最短展示剩余时间用例。
+- **验证**：87 suites / 466 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **手工验收**：API 37 模拟器离线服务器手动刷新；截图像素采样显示徽章背景从 danger 色切到 warning（检测中）并持续 4 帧，约 1.2 秒后才回到 danger（离线），不再瞬时闪一下。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 43 节）；87 suites / 466 tests、lint、assemble、diff check 与本地一致；S2-01～S2-03 为非阻塞低优先级残余。

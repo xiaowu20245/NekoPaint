@@ -64,8 +64,16 @@ data class ServerCardUi(
  * 静默刷新必须保留当前徽章，否则每个轮询周期都会在“检测中/离线”之间闪烁。
  */
 internal object ServerRefreshPolicy {
+    const val MIN_TESTING_VISIBLE_MS = 1_200L
+
     fun showTesting(card: ServerCardUi?, silent: Boolean): Boolean =
         !silent || (card != null && card.snapshot == null && card.error == null)
+
+    fun remainingTestingMs(
+        startedAt: Long,
+        now: Long,
+        minimumMs: Long = MIN_TESTING_VISIBLE_MS,
+    ): Long = (startedAt + minimumMs - now).coerceAtLeast(0L)
 }
 
 /**

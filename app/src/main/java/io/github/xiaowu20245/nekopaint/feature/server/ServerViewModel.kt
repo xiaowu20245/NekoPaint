@@ -17,6 +17,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.StagedAvatar
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -115,6 +116,7 @@ class ServerViewModel(
         // 静默刷新保留徽章与按钮状态；只有手动刷新或首次探测（尚无结果）才显示“检测中”。
         // 已经失败过的卡片不能在每次后台轮询时清空 error，否则会与“离线”标志来回闪烁。
         val showTesting = ServerRefreshPolicy.showTesting(card, silent)
+        val testingStartedAt = System.currentTimeMillis()
         if (showTesting) {
             _uiState.update { state ->
                 state.copy(
@@ -130,40 +132,52 @@ class ServerViewModel(
         }
         viewModelScope.launch {
             try {
-                repository.check(config)
-                .onSuccess { snapshot ->
-                    if (!probes.isCurrent(profile.id, generation)) return@onSuccess
-                    _uiState.update { state ->
-                        state.copy(
-                            cards = state.cards.map {
-                                if (it.profile.id == profile.id) {
-                                    it.copy(
-                                        isTesting = false,
-                                        snapshot = snapshot,
-                                        error = null,
-                                        lastUpdatedAt = snapshot.checkedAt,
-                                    )
-                                } else {
-                                    it
-                                }
-                            },
-                        )
-                    }
+                val result = repository.check(config)
+                if (showTesting) {
+                    // 连接失败可能几十毫秒就返回；给“检测中”一个最短可见时间，
+                    // 避免徽章只闪一下就被“离线”覆盖。
+                    val remaining = ServerRefreshPolicy.remainingTestingMs(
+                        startedAt = testingStartedAt,
+                        now = System.currentTimeMillis(),
+                    )
+                    if (remaining > 0) delay(remaining)
                 }
-                .onFailure { throwable ->
-                    if (!probes.isCurrent(profile.id, generation)) return@onFailure
-                    _uiState.update { state ->
-                        state.copy(
-                            cards = state.cards.map {
-                                if (it.profile.id == profile.id) {
-                                    it.copy(isTesting = false, error = throwable.toServerError())
-                                } else {
-                                    it
-                                }
-                            },
-                        )
+                if (!probes.isCurrent(profile.id, generation)) return@launch
+                result
+                    .onSuccess { snapshot ->
+                        _uiState.update { state ->
+                            state.copy(
+                                cards = state.cards.map {
+                                    if (it.profile.id == profile.id) {
+                                        it.copy(
+                                            isTesting = false,
+                                            snapshot = snapshot,
+                                            error = null,
+                                            lastUpdatedAt = snapshot.checkedAt,
+                                        )
+                                    } else {
+                                        it
+                                    }
+                                },
+                            )
+                        }
                     }
-                }
+                    .onFailure { throwable ->
+                        _uiState.update { state ->
+                            state.copy(
+                                cards = state.cards.map {
+                                    if (it.profile.id == profile.id) {
+                                        it.copy(
+                                            isTesting = false,
+                                            error = throwable.toServerError(),
+                                        )
+                                    } else {
+                                        it
+                                    }
+                                },
+                            )
+                        }
+                    }
             } finally {
                 probes.finish(profile.id, profile.endpointKey)
             }
