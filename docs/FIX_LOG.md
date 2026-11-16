@@ -660,3 +660,21 @@ git diff --check
 - 允许提交第 4 批 commit 并进入第 5 批 CR-007。
 - 低优先级残余 B19-01～B19-04：同 identity cache 失效时在途 refresh、draft/delete best-effort、新建 profile 旧缓存目录、集成测试缺口，不阻塞本批。
 - 第 4 批 commit 已提交为 `fix: 隔离服务器地址变更后的缓存身份`。
+
+### 33. 第 5 批 CR-007 修复（工作区，待最终复审）
+
+> 状态：源码/测试已通过独立复审批次验收（APPROVED，`docs/FIX_REVIEW.md` 第 38 节），准备提交。
+
+- **B20-01～B20-04（CR-007 主体）**：新增 `AtomicFileWriter`（同目录唯一临时文件 + fsync + 原子替换 + 失败保留原文件/清理临时文件）；`TaskStore`、`HistoryStore`、`HistoryAutoSaver`、`ModelCatalogStore`、`PromptLexiconRepository`、`WorkflowRepository` 写盘改用原子写；为任务/历史/模型目录增加 Mutex。
+- **B20-05/B21-03**：新增 `TaskPersistenceQueue` 合并进度快照；single-flight drain、flush、仅新 key 淘汰、writer 失败重试一次并回调日志、shutdown 强制落盘；TaskManager 身份切换前后各 flush 一次，`MainActivity.onStop` 调用 `TaskManager.flushPending()`。
+- **B21-01/B22-02**：抽取 `WorkflowTemplateStore`，用单一 Mutex 串行化 list/get/update/repair/rename/copy/delete/saveCompatibility/reanalyze/refreshAll；copy/refresh 全程持锁，避免重入。
+- **B21-02/B22-01**：`readProfile` 在 sourceHash 不一致时内存重建检测字段、合并兼容候选值并标记 `repairRequired=true`，不再隐藏写回；普通保存经 `WorkflowRepairFlag` 三态 OR 保留标记，只有 `repairTemplate()` 能清除；普通保存与提交都调用 `WorkflowCandidateSafety`。
+- **B22-03/B23-03**：队列 drain 区分普通/强制 flush；普通 drain 保留旧 generation 条目而不是丢弃，身份切换/关闭时强制落盘；writer 连续失败通过 `onWriteError` 记录 `AppLog`。
+- **B22-04/B23-02**：新增 `WorkflowRepairFlowTest`（hash mismatch 普通保存保留标记、修复清除、修复失败保留、候选值/预设合并、只读/类型/未知候选拒绝、并发 update/repair/copy/refresh）、`JsonStorePersistenceTest`（History/ModelCatalog round-trip、legacy 迁移、损坏文件、原子失败保留、并发保存）、`WorkflowCandidateSafetyTest`、`TaskPersistenceQueueTest` 扩展、`AtomicFileWriterTest` 失败注入/并发写。
+- **B23-01**：新增 `WorkflowCandidateSafety`：校验空/重复/不一致 id、只读选中、只读翻转、类型/分组变化、未知候选、INT/FLOAT/BOOLEAN 标量值；普通保存和提交前使用同一校验，失败不写 profile。
+- **B23-04**：`AtomicFileWriter` 增加可注入 move seam，覆盖“已有目标文件 + move 失败内容不变 + 临时文件清理”；并发写同目标测试；Windows 下 move 增加有限重试。
+- **B23-05**：修复合并仅迁移类型/分组/classType 兼容且值可解析的候选；primary prompt 必须可编辑且为文本类型；预设条目按 id/语义解析后清理失效/只读/类型不兼容项，activePreset 同步失效。
+- **测试与验证**：84 suites / 432 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 38 节），独立统计与本轮一致；B24-01～B24-04 为低优先级残余，不阻塞本批。
+- **手工验收**：模拟器 `emulator-5554`（API 28）注入 sourceHash 不一致模板后，列表显示“需修复”且快捷运行按钮 `enabled=false`；详情页显示修复横幅、修复按钮可用、提交生成按钮 `enabled=false`；点击“修复并保存”后横幅消失、profile `repairRequired=false` 且 sourceHash 与 api.json 一致、提交生成恢复可用；全程无 FATAL。
+- **测试缺口/限制**：TaskManager 完整集成测试仍无法在无 Android Context/真实依赖下构造；关闭落盘由 `TaskPersistenceQueue.shutdown()`、scope cancel、身份切换双 flush 测试及 `MainActivity.onStop` 手工冒烟覆盖。`HistoryStore/ModelCatalogStore` 通过 internal 临时目录构造测试，生产仍使用 Context 构造。

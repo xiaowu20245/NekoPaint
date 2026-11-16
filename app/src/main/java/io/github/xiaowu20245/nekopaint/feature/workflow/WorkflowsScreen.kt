@@ -235,7 +235,8 @@ fun WorkflowsScreen(
                             busy = state.busyTemplateId == template.id,
                             running = state.runningTemplateId == template.id,
                             quickRunBlocked = state.runningTemplateId != null &&
-                                state.runningTemplateId != template.id,
+                                state.runningTemplateId != template.id ||
+                                template.repairRequired,
                             onClick = { onOpenTemplate(template.id) },
                             onQuickRun = { count -> viewModel.quickRun(template.id, count) },
                             onRename = {
@@ -368,6 +369,7 @@ private fun WorkflowCard(
     } ?: 0
     val hasMissingNodes = template.missingNodeTypes.isNotEmpty()
     val statusPillLabel = when {
+        template.repairRequired -> stringResource(R.string.workflow_repair_short)
         hasMissingNodes -> stringResource(
             R.string.workflow_missing_nodes,
             template.missingNodeTypes.size,

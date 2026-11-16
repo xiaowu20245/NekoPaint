@@ -135,6 +135,15 @@ class WorkflowsViewModel(
                 }
                 return@launch
             }
+            if (baseTemplate.repairRequired) {
+                _uiState.update {
+                    it.copy(
+                        runningTemplateId = null,
+                        errorRes = R.string.workflow_repair_required,
+                    )
+                }
+                return@launch
+            }
 
             var successCount = 0
             var lastTemplate: WorkflowTemplate = baseTemplate

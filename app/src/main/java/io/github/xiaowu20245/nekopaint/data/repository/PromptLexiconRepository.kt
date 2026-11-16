@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.data.repository
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptLexiconEntry
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptLexiconParser
@@ -231,8 +232,7 @@ class PromptLexiconRepository(
             file.delete()
             return
         }
-        file.parentFile?.mkdirs()
-        file.writeText(json.encodeToString(stored))
+        AtomicFileWriter.writeText(file, json.encodeToString(stored))
     }
 
     private fun queryDisplayName(uri: Uri): String? =

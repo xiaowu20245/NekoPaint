@@ -1,6 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import android.content.Context
+import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
@@ -72,14 +73,7 @@ class HistoryAutoSaver(
         while (keys.size > MAX_SAVED_KEYS) {
             keys.remove(keys.first())
         }
-        file.parentFile?.mkdirs()
-        val temp = File(file.parentFile, "$AUTO_SAVE_FILE.tmp")
-        temp.writeText(json.encodeToString(keys.toList()))
-        if (file.exists()) file.delete()
-        if (!temp.renameTo(file)) {
-            temp.copyTo(file, overwrite = true)
-            temp.delete()
-        }
+        AtomicFileWriter.writeText(file, json.encodeToString(keys.toList()))
     }
 
     private companion object {

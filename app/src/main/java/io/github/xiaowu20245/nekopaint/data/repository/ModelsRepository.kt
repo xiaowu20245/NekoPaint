@@ -2,11 +2,14 @@ package io.github.xiaowu20245.nekopaint.data.repository
 
 import android.content.Context
 import io.github.xiaowu20245.nekopaint.core.common.AppLog
+import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ModelListParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -16,14 +19,25 @@ import java.io.File
 /**
  * 模型目录缓存，按服务器隔离。键是 ComfyUI 目录名（checkpoints/loras/vae...）。
  */
-class ModelCatalogStore(
-    context: Context,
+class ModelCatalogStore private constructor(
+    private val rootDir: File,
+    private val legacyDir: File,
     private val json: Json,
 ) {
 
-    private val filesDir = context.applicationContext.filesDir
-    private val rootDir = File(filesDir, "servers")
-    private val legacyDir = File(filesDir, "models")
+    constructor(context: Context, json: Json) : this(
+        rootDir = File(context.applicationContext.filesDir, "servers"),
+        legacyDir = File(context.applicationContext.filesDir, "models"),
+        json = json,
+    )
+
+    internal constructor(filesDir: File, json: Json) : this(
+        rootDir = File(filesDir, "servers"),
+        legacyDir = File(filesDir, "models"),
+        json = json,
+    )
+
+    private val mutex = Mutex()
 
     suspend fun load(serverId: String): Map<String, List<String>> = withContext(Dispatchers.IO) {
         val file = fileFor(serverId)
@@ -35,14 +49,11 @@ class ModelCatalogStore(
 
     suspend fun save(serverId: String, catalog: Map<String, List<String>>) =
         withContext(Dispatchers.IO) {
-            val file = fileFor(serverId)
-            file.parentFile?.mkdirs()
-            val temp = File(file.parentFile, "catalog.json.tmp")
-            temp.writeText(json.encodeToString(catalog))
-            if (file.exists()) file.delete()
-            if (!temp.renameTo(file)) {
-                temp.copyTo(file, overwrite = true)
-                temp.delete()
+            mutex.withLock {
+                AtomicFileWriter.writeText(
+                    target = fileFor(serverId),
+                    text = json.encodeToString(catalog),
+                )
             }
         }
 

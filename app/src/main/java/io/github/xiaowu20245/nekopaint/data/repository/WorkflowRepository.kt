@@ -19,12 +19,15 @@ import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagExpander
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -74,42 +77,30 @@ class WorkflowRepository(
 ) {
 
     private val appContext = context.applicationContext
-    private val rootDir = File(appContext.filesDir, "workflows")
+    private val templateStore = WorkflowTemplateStore(
+        rootDir = File(appContext.filesDir, "workflows"),
+        json = json,
+    )
+    private val refreshMutex = Mutex()
 
     private var lastCompatibilityServerId: String? = null
     private var lastCompatibilityRefreshAt = 0L
 
-    suspend fun listTemplates(): List<WorkflowTemplate> = withContext(Dispatchers.IO) {
-        ensureRoot()
-        rootDir.listFiles()
-            .orEmpty()
-            .filter { it.isDirectory }
-            .mapNotNull { dir -> readProfile(dir) }
-            .sortedByDescending { it.importedAt }
-    }
+    suspend fun listTemplates(): List<WorkflowTemplate> = templateStore.listTemplates()
 
-    suspend fun getTemplate(id: String): WorkflowTemplate? = withContext(Dispatchers.IO) {
-        readProfile(File(rootDir, id))
-    }
+    suspend fun getTemplate(id: String): WorkflowTemplate? = templateStore.getTemplate(id)
 
-    suspend fun updateTemplate(template: WorkflowTemplate) = withContext(Dispatchers.IO) {
-        val dir = File(rootDir, template.id)
-        if (!dir.exists()) error("Template not found")
-        writeProfile(dir, template)
-    }
+    suspend fun updateTemplate(template: WorkflowTemplate) = templateStore.updateTemplate(template)
+
+    /**
+     * Rebuilds detection-derived fields from api.json while preserving user
+     * metadata. This is the only write path allowed to clear repairRequired.
+     */
+    suspend fun repairTemplate(id: String): Result<WorkflowTemplate> =
+        templateStore.repairTemplate(id, loadCatalog())
 
     suspend fun renameTemplate(id: String, newName: String): Result<Unit> =
-        withContext(Dispatchers.IO) {
-            val trimmed = newName.trim()
-            if (trimmed.isEmpty()) {
-                return@withContext Result.failure(IllegalArgumentException("名称不能为空"))
-            }
-            runCatching {
-                val dir = File(rootDir, id)
-                val template = readProfile(dir) ?: error("找不到工作流模板")
-                writeProfile(dir, template.copy(name = trimmed))
-            }
-        }
+        templateStore.renameTemplate(id, newName)
 
     /**
      * 复制模板目录和参数配置，生成新的模板 ID。
@@ -117,35 +108,11 @@ class WorkflowRepository(
      * 复制名称自动追加“副本”，重名时继续加序号，避免列表出现两个同名模板。
      */
     suspend fun copyTemplate(id: String): Result<WorkflowTemplate> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val sourceDir = File(rootDir, id)
-                val source = readProfile(sourceDir) ?: error("找不到工作流模板")
-                val raw = readApiJson(id) ?: error("找不到工作流 JSON")
-                val existingNames = listTemplates().map { it.name }.toSet()
-                val copyName = buildCopyName(source.name, existingNames)
-                val copied = source.copy(
-                    id = UUID.randomUUID().toString(),
-                    name = copyName,
-                    importedAt = System.currentTimeMillis(),
-                )
-                saveTemplate(copied, raw)
-                copied
-            }
-        }
+        templateStore.copyTemplate(id)
 
-    private fun buildCopyName(baseName: String, existingNames: Set<String>): String =
-        buildCopyTemplateName(baseName, existingNames)
+    suspend fun deleteTemplate(id: String) = templateStore.deleteTemplate(id)
 
-    suspend fun deleteTemplate(id: String) = withContext(Dispatchers.IO) {
-        File(rootDir, id).deleteRecursively()
-        Unit
-    }
-
-    suspend fun readApiJson(id: String): String? = withContext(Dispatchers.IO) {
-        val file = File(File(rootDir, id), "api.json")
-        if (file.exists()) file.readText() else null
-    }
+    suspend fun readApiJson(id: String): String? = templateStore.readApiJson(id)
 
     /**
      * 上传图片到 ComfyUI 的 input 目录，返回可直接写入 LoadImage.image 的引用。
@@ -252,7 +219,7 @@ class WorkflowRepository(
                         candidates = detection.candidates,
                         compatibility = compatibility,
                     )
-                    saveTemplate(template, raw)
+                    templateStore.saveTemplate(template, raw)
                     WorkflowImportResult.Success(template)
                 }
             }
@@ -291,45 +258,19 @@ class WorkflowRepository(
     suspend fun saveCompatibility(
         templateId: String,
         analyzed: WorkflowTemplate,
-    ): WorkflowTemplate? = withContext(Dispatchers.IO) {
-        val dir = File(rootDir, templateId)
-        val stored = readProfile(dir) ?: return@withContext null
-        val updated = stored.copy(
-            missingNodeTypes = analyzed.missingNodeTypes,
-            catalogChecked = analyzed.catalogChecked,
-            compatibility = analyzed.compatibility,
-        )
-        if (updated != stored) writeProfile(dir, updated)
-        updated
-    }
+    ): WorkflowTemplate? = templateStore.saveCompatibility(templateId, analyzed)
 
     /**
      * 节点安装/重启后重新拉取 object_info 并保存缺失节点结果。
      *
      * 服务器尚未恢复或工作流文件不可读时返回 null，避免把“无法检查”误存成“没有缺失”。
      */
-    suspend fun reanalyzeAndSave(templateId: String): WorkflowTemplate? =
-        withContext(Dispatchers.IO) {
-            val dir = File(rootDir, templateId)
-            val template = readProfile(dir) ?: return@withContext null
-            val raw = readApiJson(templateId) ?: return@withContext null
-            val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
-                ?: return@withContext null
-            val catalog = loadCatalog() ?: return@withContext null
-            val detection = ParameterDetector.detect(parsed.graph, catalog)
-            val compatibility = WorkflowCompatibilityAnalyzer.analyze(
-                graph = parsed.graph,
-                catalog = catalog,
-                missingNodeTypes = detection.missingNodeTypes,
-            )
-            val updated = template.copy(
-                missingNodeTypes = detection.missingNodeTypes,
-                catalogChecked = detection.catalogChecked,
-                compatibility = compatibility,
-            )
-            writeProfile(dir, updated)
-            updated
-        }
+    suspend fun reanalyzeAndSave(templateId: String): WorkflowTemplate? {
+        val template = templateStore.getTemplate(templateId) ?: return null
+        if (template.repairRequired) return template
+        val catalog = loadCatalog() ?: return null
+        return templateStore.reanalyzeAndSave(templateId, catalog)
+    }
 
     /**
      * 切换服务器后批量刷新所有模板的兼容性。
@@ -339,42 +280,21 @@ class WorkflowRepository(
      */
     suspend fun refreshAllCompatibility(): List<WorkflowTemplate>? =
         withContext(Dispatchers.IO) {
-            val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
-            val now = System.currentTimeMillis()
-            if (serverId != null &&
-                serverId == lastCompatibilityServerId &&
-                now - lastCompatibilityRefreshAt < COMPATIBILITY_REFRESH_GUARD_MS
-            ) {
-                return@withContext listTemplates()
-            }
-            val catalog = loadCatalog() ?: return@withContext null
-            ensureRoot()
-            val refreshed = rootDir.listFiles()
-                .orEmpty()
-                .filter { it.isDirectory }
-                .mapNotNull { dir ->
-                    val template = readProfile(dir) ?: return@mapNotNull null
-                    val raw = readApiJson(template.id) ?: return@mapNotNull template
-                    val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
-                        ?: return@mapNotNull template
-                    val detection = ParameterDetector.detect(parsed.graph, catalog)
-                    val compatibility = WorkflowCompatibilityAnalyzer.analyze(
-                        graph = parsed.graph,
-                        catalog = catalog,
-                        missingNodeTypes = detection.missingNodeTypes,
-                    )
-                    val updated = template.copy(
-                        missingNodeTypes = detection.missingNodeTypes,
-                        catalogChecked = detection.catalogChecked,
-                        compatibility = compatibility,
-                    )
-                    if (updated != template) writeProfile(dir, updated)
-                    updated
+            refreshMutex.withLock {
+                val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+                val now = System.currentTimeMillis()
+                if (serverId != null &&
+                    serverId == lastCompatibilityServerId &&
+                    now - lastCompatibilityRefreshAt < COMPATIBILITY_REFRESH_GUARD_MS
+                ) {
+                    return@withLock templateStore.listTemplates()
                 }
-                .sortedByDescending { it.importedAt }
-            lastCompatibilityServerId = serverId
-            lastCompatibilityRefreshAt = now
-            refreshed
+                val catalog = loadCatalog() ?: return@withLock null
+                val refreshed = templateStore.refreshAllCompatibility(catalog)
+                lastCompatibilityServerId = serverId
+                lastCompatibilityRefreshAt = now
+                refreshed
+            }
         }
 
     suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
@@ -406,6 +326,22 @@ class WorkflowRepository(
         template: WorkflowTemplate,
         selected: List<ParameterCandidate>,
     ): WorkflowSubmitResult = withContext(Dispatchers.IO) {
+        val stored = templateStore.getTemplate(template.id)
+        if (WorkflowRepairFlag.blocksSubmit(template, stored)) {
+            return@withContext WorkflowSubmitResult.Error("请先修复工作流模板并保存")
+        }
+        val safetyError = runCatching {
+            WorkflowCandidateSafety.validate(
+                template.candidates,
+                stored?.candidates.orEmpty(),
+            )
+            WorkflowCandidateSafety.validate(selected)
+        }.exceptionOrNull()
+        if (safetyError != null) {
+            return@withContext WorkflowSubmitResult.Error(
+                safetyError.message ?: "候选参数视图无效",
+            )
+        }
         val config = runCatching { serverConfigStore.config.first() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.NoServer
         val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
@@ -522,57 +458,6 @@ class WorkflowRepository(
         return runCatching {
             NodeCatalog(apiFactory.create(config).objectInfo())
         }.getOrNull()
-    }
-
-    private fun saveTemplate(template: WorkflowTemplate, rawJson: String) {
-        val dir = File(rootDir, template.id)
-        dir.mkdirs()
-        File(dir, "api.json").writeText(rawJson)
-        writeProfile(dir, template)
-    }
-
-    private fun writeProfile(dir: File, template: WorkflowTemplate) {
-        File(dir, "profile.json").writeText(
-            json.encodeToString(WorkflowTemplate.serializer(), template),
-        )
-    }
-
-    private suspend fun readProfile(dir: File): WorkflowTemplate? {
-        val file = File(dir, "profile.json")
-        if (!file.exists()) return null
-        val template = runCatching {
-            json.decodeFromString(WorkflowTemplate.serializer(), file.readText())
-        }.getOrNull() ?: return null
-
-        // 分析器升级后，读取旧模板时按当前版本重算分类与能力标签，避免必须重新导入。
-        val compatibility = template.compatibility
-        if (compatibility != null &&
-            compatibility.analyzerVersion < WorkflowCompatibilityAnalyzer.CURRENT_VERSION
-        ) {
-            val rawFile = File(dir, "api.json")
-            val raw = runCatching { rawFile.readText() }.getOrNull()
-            val parsed = raw?.let {
-                WorkflowParser.parse(it) as? WorkflowParseResult.Success
-            }
-            if (parsed != null) {
-                val refreshed = WorkflowCompatibilityAnalyzer.analyze(
-                    graph = parsed.graph,
-                    catalog = null,
-                    missingNodeTypes = template.missingNodeTypes,
-                ).copy(
-                    issues = compatibility.issues,
-                    catalogChecked = compatibility.catalogChecked,
-                )
-                val updated = template.copy(compatibility = refreshed)
-                writeProfile(dir, updated)
-                return updated
-            }
-        }
-        return template
-    }
-
-    private fun ensureRoot() {
-        if (!rootDir.exists()) rootDir.mkdirs()
     }
 
     private fun queryFileMeta(uri: Uri): Pair<String?, Long?> {

@@ -318,6 +318,42 @@ fun WorkflowDetailScreen(
                         )
                     }
 
+                    if (template.repairRequired) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 4.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.workflow_repair_required),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                state.repairError?.let { message ->
+                                    Text(
+                                        text = stringResource(
+                                            R.string.workflow_repair_failed,
+                                            message,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                Button(
+                                    onClick = viewModel::repairTemplate,
+                                    enabled = !state.repairing,
+                                ) {
+                                    Text(stringResource(R.string.workflow_repair_action))
+                                }
+                            }
+                        }
+                    }
+
                     // 仅参数列表区域可左右滑动切换简单 / 高级模式。
                     HorizontalPager(
                         state = pagerState,
@@ -1828,7 +1864,8 @@ private fun StickyBatchBottomBar(
     onStepBatch: (Int) -> Unit,
     onSubmit: () -> Unit,
 ) {
-    val submitEnabled = !submitting && !saving && template.selectedCount > 0
+    val submitEnabled = !submitting && !saving &&
+    !template.repairRequired && template.selectedCount > 0
     val hasActiveCustomPreset = template.activePresetId != null
     val batchDecLabel = stringResource(R.string.workflow_batch_dec)
     val batchIncLabel = stringResource(R.string.workflow_batch_inc)

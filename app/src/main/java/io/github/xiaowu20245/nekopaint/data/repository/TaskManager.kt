@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
+import io.github.xiaowu20245.nekopaint.core.common.AppLog
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
@@ -15,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -97,6 +99,14 @@ class TaskManager(
     private var identityGeneration = 0L
 
     private val stateMutex = Mutex()
+    private val taskPersistenceQueue = TaskPersistenceQueue(
+        scope = scope,
+        isCurrent = ::isCurrent,
+        writer = { serverId, record -> taskStore.update(serverId, record) },
+        onWriteError = { serverId, record, throwable ->
+            AppLog.w("task persist failed: $serverId/${record.promptId}", throwable)
+        },
+    )
 
     private val currentIdentity: ServerIdentity?
         get() = currentSnapshot?.identity
@@ -135,6 +145,7 @@ class TaskManager(
                         return@collectLatest
                     }
                     val previous = currentSnapshot?.identity
+                    taskPersistenceQueue.flush()
                     var blockReason: String? = null
                     val generation = stateMutex.withLock {
                         identityGeneration += 1
@@ -164,6 +175,9 @@ class TaskManager(
                         }
                         identityGeneration
                     }
+                    // 第一次 flush 之后的并发入队仍可能带旧 generation；切换 token 后
+                    // 再强制落盘一次，确保旧服务器最后一批快照不会滞留。
+                    taskPersistenceQueue.flush()
                     if (identity == null) return@collectLatest
                     if (blockReason != null) {
                         // Same id but a different/unknown endpoint means legacy
@@ -247,6 +261,24 @@ class TaskManager(
         _loadingMoreHistory.value = false
         historyLimit = HISTORY_PAGE_SIZE
         historyFetched = false
+    }
+
+    /**
+     * Flushes queued task snapshots without stopping the manager scope.
+     * 宿主进入后台时调用，缩小进程被回收时最后状态丢失的窗口。
+     */
+    fun flushPending() {
+        scope.launch { taskPersistenceQueue.flush() }
+    }
+
+    /**
+     * Flushes the final task snapshots and stops the manager scope.
+     *
+     * Android 无法保证进程死亡回调；正常生命周期退出时应由宿主显式调用。
+     */
+    suspend fun shutdown() {
+        taskPersistenceQueue.shutdown()
+        scope.cancel()
     }
 
     fun refresh() {
@@ -773,14 +805,11 @@ class TaskManager(
         }
         updated?.let { record ->
             // 任务记录从创建起就带 serverId；旧数据兜底到默认服务器。
-            // 事件更新可能排队到异步写盘；写盘前再次确认身份未切换。
             val identity = currentSnapshot?.identity
             val generation = identityGeneration
             val serverId = record.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID }
-            scope.launch {
-                if (identity != null && isCurrent(identity, generation)) {
-                    taskStore.update(serverId, record)
-                }
+            if (identity != null) {
+                taskPersistenceQueue.enqueue(serverId, record, identity, generation)
             }
         }
     }

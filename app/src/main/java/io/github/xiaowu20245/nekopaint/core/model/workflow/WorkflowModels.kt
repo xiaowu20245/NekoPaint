@@ -182,6 +182,7 @@ data class WorkflowTemplate(
     val presets: List<WorkflowPreset> = emptyList(),
     val activePresetId: String? = null,
     val promptTagGroups: List<PromptTagGroup> = emptyList(),
+    val repairRequired: Boolean = false,
 ) {
     val selectedCandidates: List<ParameterCandidate>
         get() = candidates.filter { it.selected && !it.readOnly }

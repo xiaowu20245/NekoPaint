@@ -1,9 +1,12 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import android.content.Context
+import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -16,14 +19,25 @@ import java.io.File
  * 服务器历史仍是最终事实来源；这里只保存最近一次成功拉取的结果，
  * 让 App 重启或临时离线时仍能打开历史列表。图片本身由 Coil 缓存。
  */
-class HistoryStore(
-    context: Context,
+class HistoryStore private constructor(
+    private val rootDir: File,
+    private val legacyDir: File,
     private val json: Json,
 ) {
 
-    private val filesDir = context.applicationContext.filesDir
-    private val rootDir = File(filesDir, "servers")
-    private val legacyDir = File(filesDir, "history")
+    constructor(context: Context, json: Json) : this(
+        rootDir = File(context.applicationContext.filesDir, "servers"),
+        legacyDir = File(context.applicationContext.filesDir, "history"),
+        json = json,
+    )
+
+    internal constructor(filesDir: File, json: Json) : this(
+        rootDir = File(filesDir, "servers"),
+        legacyDir = File(filesDir, "history"),
+        json = json,
+    )
+
+    private val mutex = Mutex()
 
     suspend fun load(serverId: String): List<HistoryEntry> = withContext(Dispatchers.IO) {
         val file = fileFor(serverId)
@@ -54,14 +68,12 @@ class HistoryStore(
     }
 
     suspend fun save(serverId: String, entries: List<HistoryEntry>) = withContext(Dispatchers.IO) {
-        val file = fileFor(serverId)
-        file.parentFile?.mkdirs()
-        val temp = File(file.parentFile, "history.json.tmp")
-        temp.writeText(json.encodeToString(entries.take(MAX_HISTORY_ARCHIVE_ENTRIES)))
-        if (file.exists()) file.delete()
-        if (!temp.renameTo(file)) {
-            temp.copyTo(file, overwrite = true)
-            temp.delete()
+        mutex.withLock {
+            val file = fileFor(serverId)
+            AtomicFileWriter.writeText(
+                target = file,
+                text = json.encodeToString(entries.take(MAX_HISTORY_ARCHIVE_ENTRIES)),
+            )
         }
     }
 

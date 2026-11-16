@@ -194,6 +194,10 @@
     <string name="workflow_invalid_int">请输入整数</string>
     <string name="workflow_invalid_float">请输入小数</string>
     <string name="workflow_out_of_range">超出允许范围</string>
+    <string name="workflow_repair_required">模板文件与分析结果不一致，需要修复后才能提交或快捷运行</string>
+    <string name="workflow_repair_short">需修复</string>
+    <string name="workflow_repair_action">修复并保存</string>
+    <string name="workflow_repair_failed">修复失败：%1$s</string>
     <string name="workflow_invalid_enum">请选择有效选项</string>
     <string name="workflow_node_error_item">节点 %1$s：%2$s</string>
     <string name="generate_description">调整参数并提交任务，实时查看进度。</string>

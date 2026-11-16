@@ -1,9 +1,12 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import android.content.Context
+import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -16,11 +19,14 @@ class TaskStore(
     private val filesDir = context.applicationContext.filesDir
     private val rootDir = File(filesDir, "servers")
     private val legacyDir = File(filesDir, "tasks")
+    private val mutex = Mutex()
 
     suspend fun save(serverId: String, record: TaskRecord) = withContext(Dispatchers.IO) {
-        val dir = dirFor(serverId)
-        if (!dir.exists()) dir.mkdirs()
-        write(serverId, record)
+        mutex.withLock {
+            val dir = dirFor(serverId)
+            if (!dir.exists()) dir.mkdirs()
+            write(serverId, record)
+        }
     }
 
     suspend fun get(serverId: String, promptId: String): TaskRecord? = withContext(Dispatchers.IO) {
@@ -33,15 +39,18 @@ class TaskStore(
     }
 
     suspend fun update(serverId: String, record: TaskRecord) = withContext(Dispatchers.IO) {
-        val dir = dirFor(serverId)
-        if (!dir.exists()) dir.mkdirs()
-        write(serverId, record)
+        mutex.withLock {
+            val dir = dirFor(serverId)
+            if (!dir.exists()) dir.mkdirs()
+            write(serverId, record)
+        }
     }
 
     private fun write(serverId: String, record: TaskRecord) {
         val scoped = if (record.serverId.isBlank()) record.copy(serverId = serverId) else record
-        File(dirFor(serverId), "${record.promptId}.json").writeText(
-            json.encodeToString(TaskRecord.serializer(), scoped),
+        AtomicFileWriter.writeText(
+            target = File(dirFor(serverId), "${record.promptId}.json"),
+            text = json.encodeToString(TaskRecord.serializer(), scoped),
         )
     }
 

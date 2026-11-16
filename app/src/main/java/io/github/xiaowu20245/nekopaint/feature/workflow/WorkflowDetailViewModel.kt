@@ -81,6 +81,8 @@ data class WorkflowDetailUiState(
     val rawJsonVisible: Boolean = false,
     val rawJson: String? = null,
     val checkingNodes: Boolean = false,
+    val repairing: Boolean = false,
+    val repairError: String? = null,
     @param:StringRes val errorRes: Int? = null,
 ) {
     val visibleCandidates: List<ParameterCandidate>
@@ -756,6 +758,34 @@ class WorkflowDetailViewModel(
                     compatibility = updated.compatibility,
                 ),
             )
+        }
+    }
+
+    fun repairTemplate() {
+        val state = _uiState.value
+        if (state.repairing) return
+        val template = state.template ?: return
+        _uiState.update { it.copy(repairing = true, repairError = null) }
+        viewModelScope.launch {
+            repository.repairTemplate(template.id)
+                .onSuccess { repaired ->
+                    _uiState.update {
+                        it.copy(
+                            template = repaired,
+                            dirty = false,
+                            repairing = false,
+                            repairError = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            repairing = false,
+                            repairError = error.message ?: "修复工作流失败",
+                        )
+                    }
+                }
         }
     }
 
