@@ -692,3 +692,4 @@ git diff --check
 - **C20 修复**：`listAll` 不再用 hashed 目录名冒充空 serverId；`list(serverId)` 过滤内容 serverId 不一致的记录；`get` 拒绝内容 serverId 与请求不一致；legacy 迁移增加锁，避免并发 rename/copy 竞争；新增旧 UUID 文件可读、旧异常文件名不回退、serverId 不一致过滤、hashed 目录空 serverId 不复用目录名 4 个测试。
 - **限制**：未在模拟器伪造 ComfyUI 返回恶意 promptId；路径穿越防护由纯函数 + 临时目录 TaskStore 测试覆盖，未做真实服务器联调。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 40 节）；86 suites / 446 tests、lint、assemble、diff check 与本地一致；C21-01～C21-04 为非阻塞低优先级残余。
+- CR-019 补充 commit 已提交为 `fix: 安全处理任务记录文件名`（`78c474a`）。
