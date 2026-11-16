@@ -736,3 +736,4 @@ git diff --check
 - **验证**：87 suites / 466 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - **手工验收**：API 37 模拟器离线服务器手动刷新；截图像素采样显示徽章背景从 danger 色切到 warning（检测中）并持续 4 帧，约 1.2 秒后才回到 danger（离线），不再瞬时闪一下。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 43 节）；87 suites / 466 tests、lint、assemble、diff check 与本地一致；S2-01～S2-03 为非阻塞低优先级残余。
+- 本次补充 commit 已提交为 `fix: 延长检测中状态的最短展示时间`（`23143a0`）。
