@@ -710,3 +710,4 @@ git diff --check
 - **验证**：86 suites / 460 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - **手工验收**：注入含 `widget` 对象/`items` 数组旧候选的 profile；列表显示“1 项可选”，详情高级仅显示标量“文本”；点击保存后 profile 中结构化候选被清理，`api.json` 的 `widget`/`items` 原结构和类型保持不变；无 FATAL。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 41 节）；86 suites / 460 tests、lint、assemble、diff check 与本地一致；B25-01～B25-04 为非阻塞低优先级残余。
+- 第 6 批 commit 已提交为 `fix: 保护工作流非标量输入不被字符串化`（`dd6e900`）。
