@@ -678,3 +678,4 @@ git diff --check
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 38 节），独立统计与本轮一致；B24-01～B24-04 为低优先级残余，不阻塞本批。
 - **手工验收**：模拟器 `emulator-5554`（API 28）注入 sourceHash 不一致模板后，列表显示“需修复”且快捷运行按钮 `enabled=false`；详情页显示修复横幅、修复按钮可用、提交生成按钮 `enabled=false`；点击“修复并保存”后横幅消失、profile `repairRequired=false` 且 sourceHash 与 api.json 一致、提交生成恢复可用；全程无 FATAL。
 - **测试缺口/限制**：TaskManager 完整集成测试仍无法在无 Android Context/真实依赖下构造；关闭落盘由 `TaskPersistenceQueue.shutdown()`、scope cancel、身份切换双 flush 测试及 `MainActivity.onStop` 手工冒烟覆盖。`HistoryStore/ModelCatalogStore` 通过 internal 临时目录构造测试，生产仍使用 Context 构造。
+- 第 5 批 commit 已提交为 `fix: 原子化工作流与任务持久化`（`5ce9d23`）。
