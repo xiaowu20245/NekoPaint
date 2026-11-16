@@ -693,3 +693,20 @@ git diff --check
 - **限制**：未在模拟器伪造 ComfyUI 返回恶意 promptId；路径穿越防护由纯函数 + 临时目录 TaskStore 测试覆盖，未做真实服务器联调。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 40 节）；86 suites / 446 tests、lint、assemble、diff check 与本地一致；C21-01～C21-04 为非阻塞低优先级残余。
 - CR-019 补充 commit 已提交为 `fix: 安全处理任务记录文件名`（`78c474a`）。
+
+### 35. 第 6 批 CR-014（已复审 APPROVED）
+
+> 范围：高级模式把对象/数组等非标量输入当字符串编辑/写回，破坏工作流 JSON 类型。
+
+- **ParameterDetector**：只有非 `JsonNull` 的 `JsonPrimitive` 才生成候选；对象/数组输入直接跳过，已知输入（如 `ckpt_name`）和上游提示词/尺寸解析同样要求标量。
+- **WorkflowParser.scalarText()**：对象/数组返回 `null`，不再 `toString()`；JsonNull 也返回 null。
+- **WorkflowJsonApplier**：
+  - 写入前要求目标输入存在且为原始标量；对象/数组/JsonNull/连线/缺失输入均抛 `WorkflowApplyException`，不新增字段、不写字符串。
+  - `UNKNOWN` 按原始标量类型写回：字符串→字符串、布尔→布尔、数字→Long/Double；解析失败抛异常。
+  - 新增 `safeCandidates(rawJson, candidates)` 安全视图，只保留原始输入为标量的候选，不修改候选值。
+- **WorkflowTemplateStore.readProfile**：读取旧 profile 后用 `safeCandidates` 过滤结构化候选，只影响内存不自动写回；api.json 缺失/不可解析时 fail-closed，候选置空并 `repairRequired=true`。
+- **WorkflowRepository.submitSelected**：读取 api.json 后对模板候选和 selected 再做一次 `safeCandidates` 过滤，过滤后为空返回“没有可提交的标量参数”；api.json 缺失仍返回明确错误。
+- **测试**：ParameterDetectorTest 对象/数组/已知输入/上游标量；WorkflowJsonApplierTest 对象/数组拒绝、UNKNOWN 字符串/数字/布尔类型保留、非法值/缺失输入拒绝、safeCandidates 过滤；WorkflowParserTest scalarText；WorkflowRepairFlowTest 旧 profile 结构化候选内存过滤 + 不改写 profile、api 缺失 fail-closed。
+- **验证**：86 suites / 460 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **手工验收**：注入含 `widget` 对象/`items` 数组旧候选的 profile；列表显示“1 项可选”，详情高级仅显示标量“文本”；点击保存后 profile 中结构化候选被清理，`api.json` 的 `widget`/`items` 原结构和类型保持不变；无 FATAL。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 41 节）；86 suites / 460 tests、lint、assemble、diff check 与本地一致；B25-01～B25-04 为非阻塞低优先级残余。

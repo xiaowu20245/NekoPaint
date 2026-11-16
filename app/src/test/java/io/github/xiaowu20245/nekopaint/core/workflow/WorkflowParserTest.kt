@@ -32,6 +32,24 @@ class WorkflowParserTest {
         assertEquals(WorkflowParseResult.UiFormat, result)
     }
 
+    @Test
+    fun scalarTextOnlyReturnsPrimitiveContents() {
+        assertEquals("hello", kotlinx.serialization.json.JsonPrimitive("hello").scalarText())
+        assertEquals(null, kotlinx.serialization.json.JsonNull.scalarText())
+        assertEquals(
+            null,
+            kotlinx.serialization.json.buildJsonObject {
+                put("a", kotlinx.serialization.json.JsonPrimitive(1))
+            }.scalarText(),
+        )
+        assertEquals(
+            null,
+            kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive(1))
+            }.scalarText(),
+        )
+    }
+
     companion object {
         val SAMPLE_API = """
             {

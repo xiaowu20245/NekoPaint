@@ -127,8 +127,5 @@ fun JsonElement.asNodeLink(nodeIds: Set<String>): Pair<String, Int>? {
     return sourceId to outputSlot
 }
 
-fun JsonElement.scalarText(): String? = when (this) {
-    is JsonPrimitive -> contentOrNull
-    is JsonObject -> toString()
-    is JsonArray -> toString()
-}
+fun JsonElement.scalarText(): String? =
+    (this as? JsonPrimitive)?.contentOrNull

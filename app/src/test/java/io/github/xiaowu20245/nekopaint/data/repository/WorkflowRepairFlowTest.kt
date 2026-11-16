@@ -314,17 +314,72 @@ class WorkflowRepairFlowTest {
         assertTrue(File(root, "${copies.single().id}/api.json").exists())
     }
 
+    @Test
+    fun readProfileFiltersStructuredCandidatesWithoutWritingBack() = runTest {
+        val store = WorkflowTemplateStore(root, json)
+        val structured = ParameterCandidate(
+            id = "1:widget",
+            nodeId = "1",
+            inputName = "widget",
+            label = "widget",
+            type = ParameterType.UNKNOWN,
+            group = ParameterGroup.ADVANCED,
+            value = """{"nested":1}""",
+            defaultValue = """{"nested":1}""",
+            selected = true,
+            classType = "CustomNode",
+        )
+        val scalar = ParameterCandidate(
+            id = "1:seed",
+            nodeId = "1",
+            inputName = "seed",
+            label = "种子",
+            type = ParameterType.INT,
+            group = ParameterGroup.SAMPLING,
+            value = "1",
+            defaultValue = "1",
+            selected = true,
+            classType = "CustomNode",
+        )
+        store.saveTemplate(
+            template(id = "t1", candidates = listOf(scalar, structured), raw = STRUCTURED_API),
+            STRUCTURED_API,
+        )
+
+        val view = store.getTemplate("t1")!!
+
+        assertEquals(listOf("1:seed"), view.candidates.map { it.id })
+        // 读取阶段只影响内存视图，不自动改写 profile.json。
+        assertTrue(readStored("t1").candidates.any { it.id == "1:widget" })
+    }
+
+    @Test
+    fun missingApiJsonFailsClosedWithoutCandidates() = runTest {
+        val store = WorkflowTemplateStore(root, json)
+        store.saveTemplate(
+            template(id = "t1", candidates = detectedCandidates(API_V1)),
+            API_V1,
+        )
+        File(root, "t1/api.json").delete()
+
+        val view = store.getTemplate("t1")!!
+
+        assertTrue(view.candidates.isEmpty())
+        assertTrue(view.repairRequired)
+    }
+
     private fun template(
         id: String,
         candidates: List<ParameterCandidate> = emptyList(),
         primaryPromptCandidateId: String? = null,
         presets: List<WorkflowPreset> = emptyList(),
         activePresetId: String? = null,
+        raw: String = API_V1,
     ) = WorkflowTemplate(
         id = id,
         name = "template",
         sourceFileName = "api.json",
-        sourceHash = API_V1.sha256(),
+        sourceHash = raw.sha256(),
         importedAt = 1L,
         nodeCount = 6,
         reachableNodeCount = 6,
@@ -363,6 +418,16 @@ class WorkflowRepairFlowTest {
               "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "bad", "clip": ["2", 1]}},
               "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
               "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "test", "images": ["1", 0]}}
+            }
+        """.trimIndent()
+
+        val STRUCTURED_API = """
+            {
+              "1": {"class_type": "CustomNode", "inputs": {
+                "seed": 1, "text": "hello",
+                "widget": {"nested": 1}, "items": [1, 2, 3]
+              }},
+              "2": {"class_type": "SaveImage", "inputs": {"filename_prefix": "test", "images": ["1", 0]}}
             }
         """.trimIndent()
     }

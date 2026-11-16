@@ -40,6 +40,65 @@ class ParameterDetectorTest {
     }
 
     @Test
+    fun skipsStructuredObjectAndArrayInputs() {
+        val raw = """
+            {
+              "1": {"class_type": "CustomNode", "inputs": {
+                "text": "hello", "count": 3, "enabled": true,
+                "widget": {"nested": 1}, "items": [1, 2, 3],
+                "model": ["2", 0]
+              }},
+              "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "model"}},
+              "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x", "images": ["1", 0]}}
+            }
+        """.trimIndent()
+        val graph = (WorkflowParser.parse(raw) as WorkflowParseResult.Success).graph
+
+        val candidates = ParameterDetector.detect(graph, catalog = null).candidates
+
+        assertEquals(
+            setOf("text", "count", "enabled"),
+            candidates.filter { it.nodeId == "1" }.map { it.inputName }.toSet(),
+        )
+        assertTrue(candidates.none { it.inputName == "widget" || it.inputName == "items" })
+    }
+
+    @Test
+    fun knownInputsAlsoRequireScalarValues() {
+        val raw = """
+            {
+              "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": {"bad": true}}},
+              "2": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x", "images": ["1", 0]}}
+            }
+        """.trimIndent()
+        val graph = (WorkflowParser.parse(raw) as WorkflowParseResult.Success).graph
+
+        val candidates = ParameterDetector.detect(graph, catalog = null).candidates
+
+        assertTrue(candidates.none { it.id == "1:ckpt_name" })
+    }
+
+    @Test
+    fun upstreamSizeAndPromptRequireScalarSources() {
+        val raw = """
+            {
+              "1": {"class_type": "CustomConfig", "inputs": {"value": {"nested": 1}}},
+              "2": {"class_type": "EmptyLatentImage", "inputs": {"width": ["1", 0], "height": 512, "batch_size": 1}},
+              "3": {"class_type": "CLIPTextEncode", "inputs": {"text": ["1", 0], "clip": ["4", 0]}},
+              "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "model"}},
+              "5": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x", "images": ["2", 0]}},
+              "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "y", "images": ["3", 0]}}
+            }
+        """.trimIndent()
+        val graph = (WorkflowParser.parse(raw) as WorkflowParseResult.Success).graph
+
+        val candidates = ParameterDetector.detect(graph, catalog = null).candidates
+
+        assertTrue(candidates.none { it.inputName == "width" && it.nodeId == "1" })
+        assertTrue(candidates.any { it.readOnly && it.id == "3:text" })
+    }
+
+    @Test
     fun nonReadOnlyPromptFallbackIsMarkedReadOnly() {
         val raw = """
             {

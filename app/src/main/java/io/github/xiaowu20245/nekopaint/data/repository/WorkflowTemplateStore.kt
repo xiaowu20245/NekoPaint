@@ -8,6 +8,7 @@ import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import kotlinx.coroutines.Dispatchers
@@ -302,7 +303,8 @@ internal class WorkflowTemplateStore(
     private fun readProfile(dir: File): WorkflowTemplate? {
         val template = readStoredProfile(dir) ?: return null
         val raw = File(dir, "api.json").takeIf { it.exists() }?.readText()
-        if (raw != null && raw.sha256() != template.sourceHash) {
+            ?: return template.copy(candidates = emptyList(), repairRequired = true)
+        if (raw.sha256() != template.sourceHash) {
             val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
             if (parsed != null) {
                 val detection = ParameterDetector.detect(parsed.graph, null)
@@ -349,12 +351,13 @@ internal class WorkflowTemplateStore(
                     repairRequired = true,
                 )
             }
+            // api.json 不可解析时 fail-closed：不展示/提交旧 profile 的候选。
+            return template.copy(candidates = emptyList(), repairRequired = true)
         }
-        if (template.repairRequired ||
-            raw == null ||
-            raw.sha256() != template.sourceHash
-        ) {
-            return template.copy(repairRequired = true)
+
+        val safeCandidates = WorkflowJsonApplier.safeCandidates(raw, template.candidates)
+        if (template.repairRequired) {
+            return template.copy(candidates = safeCandidates, repairRequired = true)
         }
 
         // 分析器升级后，读取旧模板时按当前版本重算分类与能力标签，避免必须重新导入。
@@ -373,10 +376,13 @@ internal class WorkflowTemplateStore(
                     catalogChecked = compatibility.catalogChecked,
                 )
                 // 只返回刷新后的视图，不隐藏写回；显式保存/修复路径负责持久化。
-                return template.copy(compatibility = refreshed)
+                return template.copy(
+                    candidates = safeCandidates,
+                    compatibility = refreshed,
+                )
             }
         }
-        return template
+        return template.copy(candidates = safeCandidates)
     }
 
     private fun readStoredProfile(dir: File): WorkflowTemplate? {

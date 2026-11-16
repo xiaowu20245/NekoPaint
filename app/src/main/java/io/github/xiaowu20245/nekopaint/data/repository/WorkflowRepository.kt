@@ -330,18 +330,6 @@ class WorkflowRepository(
         if (WorkflowRepairFlag.blocksSubmit(template, stored)) {
             return@withContext WorkflowSubmitResult.Error("请先修复工作流模板并保存")
         }
-        val safetyError = runCatching {
-            WorkflowCandidateSafety.validate(
-                template.candidates,
-                stored?.candidates.orEmpty(),
-            )
-            WorkflowCandidateSafety.validate(selected)
-        }.exceptionOrNull()
-        if (safetyError != null) {
-            return@withContext WorkflowSubmitResult.Error(
-                safetyError.message ?: "候选参数视图无效",
-            )
-        }
         val config = runCatching { serverConfigStore.config.first() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.NoServer
         val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
@@ -349,12 +337,24 @@ class WorkflowRepository(
         val raw = readApiJson(template.id)
             ?: return@withContext WorkflowSubmitResult.Error("找不到工作流 JSON")
 
-        if (selected.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("没有选中任何参数")
+        // 旧 profile、快捷运行和历史重试都可能携带结构化候选；最终提交前统一过滤。
+        val safeCandidates = WorkflowJsonApplier.safeCandidates(raw, template.candidates)
+        val safeSelected = WorkflowJsonApplier.safeCandidates(raw, selected)
+        val safetyError = runCatching {
+            WorkflowCandidateSafety.validate(safeCandidates, stored?.candidates.orEmpty())
+            WorkflowCandidateSafety.validate(safeSelected)
+        }.exceptionOrNull()
+        if (safetyError != null) {
+            return@withContext WorkflowSubmitResult.Error(
+                safetyError.message ?: "候选参数视图无效",
+            )
+        }
+        if (safeSelected.isEmpty()) {
+            return@withContext WorkflowSubmitResult.Error("没有可提交的标量参数")
         }
 
         // 提示词里的 #标签组 在提交前展开，历史记录也保存展开后的值。
-        val expandedSelected = selected.map { candidate ->
+        val expandedSelected = safeSelected.map { candidate ->
             if (candidate.group == ParameterGroup.PROMPT) {
                 candidate.copy(
                     value = PromptTagExpander.expand(

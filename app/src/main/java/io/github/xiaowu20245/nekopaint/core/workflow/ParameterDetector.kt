@@ -10,6 +10,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowDetection
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowGraph
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowNode
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -81,22 +82,24 @@ object ParameterDetector {
                     node.classType == "CLIPTextEncode" && inputName == "text" -> {
                         val role = promptRoles[node.id] ?: roleFromTitle(node.title)
                         if (link == null) {
-                            add(
-                                buildCandidate(
-                                    classType = node.classType,
-                                    nodeId = node.id,
-                                    inputName = inputName,
-                                    label = role.label(),
-                                    type = ParameterType.MULTILINE_TEXT,
-                                    group = ParameterGroup.PROMPT,
-                                    value = value,
-                                    constraints = ParameterConstraints(),
-                                    source = BindingSource.DIRECT,
-                                    confidence = DetectionConfidence.HIGH,
-                                    selected = true,
-                                    catalog = catalog,
-                                ),
-                            )
+                            if (value.isScalarInput()) {
+                                add(
+                                    buildCandidate(
+                                        classType = node.classType,
+                                        nodeId = node.id,
+                                        inputName = inputName,
+                                        label = role.label(),
+                                        type = ParameterType.MULTILINE_TEXT,
+                                        group = ParameterGroup.PROMPT,
+                                        value = value,
+                                        constraints = ParameterConstraints(),
+                                        source = BindingSource.DIRECT,
+                                        confidence = DetectionConfidence.HIGH,
+                                        selected = true,
+                                        catalog = catalog,
+                                    ),
+                                )
+                            }
                         } else {
                             val source = resolvePromptSource(graph, link.first)
                             if (source != null) {
@@ -202,6 +205,7 @@ object ParameterDetector {
             for ((inputName, value) in node.inputs) {
                 if (inputName in blockedInputs) continue
                 if (value.asNodeLink(graph.nodes.keys) != null) continue
+                if (!value.isScalarInput()) continue
                 if (node.classType == "CLIPTextEncode" && inputName == "text") continue
 
                 val known = knownInput(node.classType, inputName, stageLabels[node.id], node.title)
@@ -525,7 +529,10 @@ object ParameterDetector {
                     else -> if (node.inputs.containsKey("value")) "value" else "text"
                 }
                 val value = node.inputs[inputName]
-                if (value != null && value.asNodeLink(graph.nodes.keys) == null) {
+                if (value != null &&
+                    value.asNodeLink(graph.nodes.keys) == null &&
+                    value.isScalarInput()
+                ) {
                     val score = when {
                         node.classType.startsWith("WeiLin") -> 3000
                         node.classType == "CR Text" -> 2000
@@ -556,7 +563,7 @@ object ParameterDetector {
             val preferred = listOf("value", "width", "height", "int", "float", "text")
             for (name in preferred + node.inputs.keys) {
                 val value = node.inputs[name] ?: continue
-                if (value.asNodeLink(graph.nodes.keys) == null) {
+                if (value.asNodeLink(graph.nodes.keys) == null && value.isScalarInput()) {
                     return UpstreamScalar(node.id, name, value)
                 }
             }
@@ -656,4 +663,7 @@ object ParameterDetector {
             else -> ParameterType.UNKNOWN
         }
     }
+
+    private fun JsonElement.isScalarInput(): Boolean =
+        this is JsonPrimitive && this !is JsonNull
 }
