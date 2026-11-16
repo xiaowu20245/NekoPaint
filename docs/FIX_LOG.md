@@ -503,3 +503,20 @@ git diff --check
 - 允许提交第 3 批 commit 并进入第 4 批 CR-006。
 - 低优先级残余（不阻塞）：B9-01（A→B→A 快速回切时旧检测结果短暂写入，5 秒轮询自愈）、B9-02（缺 ViewModel 级检测回写测试）、B8-03（WebSocket 完整状态机测试）、B8-06（host/port 双错无直接 ViewModel 测试）、B8-07（`activeServerId`/`config` 分读）。
 - 第 3 批 commit 已提交为 `fix: 完善服务器地址校验与连接异常边界`。
+
+### 23. 原复审 Agent 最终确认
+
+- 出具第 20 节初审的原复审 Agent 对 HEAD `4ecbe9d` 复核：**APPROVED**，第 20 节阻塞项 B8-01/B8-08 已闭合。
+- 独立验证：72 suites / 362 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- 确认 B8-01 保存后直接探测新 profile、`mergeServerCard` 清理旧 endpoint 状态、ServerScreen 轮询 key 包含 endpointKey。
+- 确认 B8-08 的 `ServerProbeTracker` generation 机制会丢弃旧在途检测结果，且不再回写 profile。
+- 低优先级残余（不阻塞）：B9-01、B9-02、B8-03、B8-06、B8-07。
+- 允许第 3 批进入第 4 批 CR-006。
+
+### 24. 指定复审会话最终确认
+
+- 用户指定的复审会话对 HEAD `4ecbe9d` 独立复核：**APPROVED**，报告追加于 `docs/FIX_REVIEW.md` 第 24 节。
+- 独立验证：72 suites / 362 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- 确认 B8-01、B8-08 原始路径闭合；B8-02/B8-04/B8-05/B8-06 保持有效。
+- 关键残余仍为 B9-01、B9-02、B8-03、B8-06、B8-07，均低优先级、不阻塞。
+- 允许第 3 批正式关闭并进入第 4 批 CR-006。
