@@ -723,3 +723,4 @@ git diff --check
 - **验证**：87 suites / 465 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - **手工验收**：API 37 模拟器 `emulator-5554`，active 服务器 `127.0.0.2:8188` 离线；连续 10 次 uiautomator 采样（约 22 秒）状态徽章始终为“离线”，未再出现“检测中/离线”交替。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 42 节）；87 suites / 465 tests、lint、assemble、diff check 与本地一致；S1-01～S1-03 为非阻塞低优先级残余。
+- 本次修复 commit 已提交为 `fix: 稳定服务页离线徽章刷新`（`af9696e`）。
