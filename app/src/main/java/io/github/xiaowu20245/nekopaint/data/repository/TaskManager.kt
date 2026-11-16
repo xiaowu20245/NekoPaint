@@ -8,17 +8,22 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.core.network.ComfyEvent
+import io.github.xiaowu20245.nekopaint.core.network.ComfyEventEnvelope
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -82,38 +87,140 @@ class TaskManager(
 
     private var historyLimit = HISTORY_PAGE_SIZE
 
+    @Volatile
+    private var currentSnapshot: ServerIdentitySnapshot? = null
+
+    private val blockedIdentities =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    @Volatile
+    private var identityGeneration = 0L
+
+    private val stateMutex = Mutex()
+
+    private val currentIdentity: ServerIdentity?
+        get() = currentSnapshot?.identity
+
     init {
         scope.launch {
             _localClientId.value = runCatching { clientIdStore.getOrCreate() }.getOrNull()
         }
         scope.launch {
-            serverConfigStore.activeServerId
-                .distinctUntilChanged()
-                .collectLatest { serverId ->
-                    refreshJob?.cancel()
-                    _refreshing.value = false
-                    _tasks.value = emptyList()
-                    _history.value = emptyList()
-                    _queue.value = null
-                    _progress.value = emptyMap()
-                    executedNodeIds.clear()
-                    _queueError.value = null
-                    _historyError.value = null
-                    _hasMoreHistory.value = false
-                    _loadingMoreHistory.value = false
-                    historyLimit = HISTORY_PAGE_SIZE
-                    historyFetched = false
-                    if (serverId == null) return@collectLatest
+            combine(
+                serverConfigStore.activeServer,
+                serverConfigStore.cacheIdentities,
+            ) { profile, cache -> profile to cache }
+                .collectLatest { (profile, cache) ->
+                    val snapshot = profile?.let {
+                        ServerIdentitySnapshot(
+                            identity = ServerIdentity(it.id, it.endpointKey),
+                            config = it.toConfig(),
+                        )
+                    }
+                    val identity = snapshot?.identity
+                    if (identity == currentSnapshot?.identity) {
+                        stateMutex.withLock {
+                            currentSnapshot = snapshot
+                            if (identity != null) {
+                                val cached = cache[identity.serverId]
+                                if (cached == null || cached != identity.endpointKey) {
+                                    blockedIdentities += identity.cacheKey()
+                                    _queueError.value =
+                                        "服务器缓存身份未知，请重新添加服务器"
+                                    _historyError.value =
+                                        "服务器缓存身份未知，请重新添加服务器"
+                                }
+                            }
+                        }
+                        return@collectLatest
+                    }
+                    val previous = currentSnapshot?.identity
+                    var blockReason: String? = null
+                    val generation = stateMutex.withLock {
+                        identityGeneration += 1
+                        currentSnapshot = snapshot
+                        clearIsolationState()
+                        if (identity != null) {
+                            val persistedEndpoint = cache[identity.serverId]
+                            val cacheUnknown = persistedEndpoint == null
+                            if (cacheUnknown || persistedEndpoint != identity.endpointKey) {
+                                blockedIdentities += identity.cacheKey()
+                            }
+                            val endpointChangedWithSameId =
+                                previous != null &&
+                                    previous.serverId == identity.serverId &&
+                                    previous.endpointKey != identity.endpointKey
+                            if (endpointChangedWithSameId ||
+                                blockedIdentities.contains(identity.cacheKey())
+                            ) {
+                                blockReason = if (cacheUnknown) {
+                                    "服务器缓存身份未知，请重新添加服务器"
+                                } else {
+                                    "服务器地址已变化，请重新添加服务器"
+                                }
+                                _queueError.value = blockReason
+                                _historyError.value = blockReason
+                            }
+                        }
+                        identityGeneration
+                    }
+                    if (identity == null) return@collectLatest
+                    if (blockReason != null) {
+                        // Same id but a different/unknown endpoint means legacy
+                        // data or a caller bypassed replaceServerEndpoint.
+                        return@collectLatest
+                    }
 
-                    _tasks.value = runCatching { taskStore.list(serverId) }
-                        .getOrDefault(emptyList())
-                    _history.value = runCatching { historyStore.load(serverId) }
-                        .getOrDefault(emptyList())
+                    val serverId = identity.serverId
+                    val tasks = try {
+                        taskStore.list(serverId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    val history = try {
+                        historyStore.load(serverId)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    stateMutex.withLock {
+                        if (currentSnapshot?.identity == identity &&
+                            identityGeneration == generation
+                        ) {
+                            _tasks.value = tasks
+                            _history.value = history
+                        }
+                    }
                     refresh()
                 }
         }
         scope.launch {
-            webSocketManager.events.collect { event -> handleEvent(event) }
+            webSocketManager.events.collect { envelope ->
+                stateMutex.withLock {
+                    if (!webSocketManager.isCurrentConnection(
+                            envelope.connectionToken,
+                            envelope.socketToken,
+                        )
+                    ) {
+                        return@withLock
+                    }
+                    val identity = currentSnapshot?.identity ?: return@withLock
+                    if (!TaskEventGuard.accepts(
+                            envelope.endpointKey,
+                            identity,
+                            blockedIdentities,
+                        )
+                    ) {
+                        return@withLock
+                    }
+                    if (isCurrent(identity, identityGeneration)) {
+                        handleEvent(envelope.event)
+                    }
+                }
+            }
         }
         scope.launch {
             // 重连成功后主动校准一次，避免断线期间的状态丢失。
@@ -124,76 +231,130 @@ class TaskManager(
         webSocketManager.start()
     }
 
+    private fun clearIsolationState() {
+        refreshJob?.cancel()
+        _refreshing.value = false
+        _tasks.value = emptyList()
+        _history.value = emptyList()
+        _queue.value = null
+        _queueRemaining.value = 0
+        _progress.value = emptyMap()
+        executedNodeIds.clear()
+        _queueError.value = null
+        _historyError.value = null
+        _actionError.value = null
+        _hasMoreHistory.value = false
+        _loadingMoreHistory.value = false
+        historyLimit = HISTORY_PAGE_SIZE
+        historyFetched = false
+    }
+
     fun refresh() {
         if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
-            val serverId = serverConfigStore.activeServerId.first()
-                ?: return@launch
-            val config = serverConfigStore.config.first()
+            val snapshot = currentSnapshot ?: return@launch
+            val identity = snapshot.identity
+            if (isBlocked(identity)) return@launch
+            val generation = identityGeneration
+            val serverId = identity.serverId
+            val config = snapshot.config
             if (!RemoteRefreshPolicy.shouldRefreshRemotely(config)) {
-                reloadTasks(serverId)
-                _queueError.value = "服务器配置无效，已暂停远程刷新"
-                _historyError.value = "服务器配置无效，已暂停远程刷新"
-                _refreshing.value = false
+                if (!isCurrent(identity, generation)) return@launch
+                reloadTasks(serverId, identity, generation)
+                withCurrentState(identity, generation) {
+                    _queueError.value = "服务器配置无效，已暂停远程刷新"
+                    _historyError.value = "服务器配置无效，已暂停远程刷新"
+                    _refreshing.value = false
+                }
                 return@launch
             }
-            _refreshing.value = true
-            reloadTasks(serverId)
-            queueRepository.queue()
+            if (withCurrentState(identity, generation) { _refreshing.value = true } == null) {
+                return@launch
+            }
+            reloadTasks(serverId, identity, generation)
+            queueRepository.queue(config)
                 .onSuccess { snapshot ->
-                    _queue.value = snapshot
-                    _queueError.value = null
-                    syncTasksWithQueue(snapshot)
-                    // 队列快照到达后才知道工作流节点总数，重算一次总进度。
-                    refreshOverallProgress()
-                }
-                .onFailure { throwable ->
-                    // 失败时保留上次队列，界面据此标记为过期。
-                    _queueError.value = throwable.message ?: "无法刷新队列"
-                }
-            queueRepository.history(historyLimit + 1)
-                .onSuccess { fetched ->
-                    val hasMore = fetched.size > historyLimit
-                    val entries = (if (hasMore) fetched.take(historyLimit) else fetched)
-                        .map { entry -> entry.copy(serverId = serverId) }
-                    val previous = _history.value
-                    val merged = mergeHistory(previous, entries)
-                    historyFetched = true
-                    _history.value = merged
-                    _hasMoreHistory.value = hasMore
-                    _historyError.value = null
-                    syncTasksWithHistory(entries)
-                    // 只有内容变化时才写盘，避免每 5 秒轮询都重复写。
-                    if (previous != merged) {
-                        historyStore.save(serverId, merged)
+                    withCurrentState(identity, generation) {
+                        _queue.value = snapshot
+                        _queueError.value = null
+                        syncTasksWithQueue(snapshot)
+                        // 队列快照到达后才知道工作流节点总数，重算一次总进度。
+                        refreshOverallProgress()
                     }
-                    // 自动保存设置开启时，补齐历史中尚未保存到相册的 output 图片。
-                    scope.launch { historyAutoSaver.saveNew(serverId, merged) }
                 }
                 .onFailure { throwable ->
-                    _historyError.value = throwable.message ?: "无法刷新历史"
+                    withCurrentState(identity, generation) {
+                        // 失败时保留上次队列，界面据此标记为过期。
+                        _queueError.value = throwable.message ?: "无法刷新队列"
+                    }
                 }
-            _refreshing.value = false
+            queueRepository.history(historyLimit + 1, config)
+                .onSuccess { fetched ->
+                    withCurrentState(identity, generation) {
+                        val hasMore = fetched.size > historyLimit
+                        val entries = (if (hasMore) fetched.take(historyLimit) else fetched)
+                            .map { entry -> entry.copy(serverId = serverId) }
+                        val previous = _history.value
+                        val merged = mergeHistory(previous, entries)
+                        historyFetched = true
+                        _history.value = merged
+                        _hasMoreHistory.value = hasMore
+                        _historyError.value = null
+                        syncTasksWithHistory(entries)
+                        // 只有内容变化时才写盘，避免每 5 秒轮询都重复写。
+                        if (previous != merged) {
+                            historyStore.save(serverId, merged)
+                        }
+                        // 自动保存设置开启时，补齐历史中尚未保存到相册的 output 图片。
+                        scope.launch { historyAutoSaver.saveNew(serverId, merged) }
+                    }
+                }
+                .onFailure { throwable ->
+                    withCurrentState(identity, generation) {
+                        _historyError.value = throwable.message ?: "无法刷新历史"
+                    }
+                }
+            withCurrentState(identity, generation) {
+                _refreshing.value = false
+            }
         }
     }
 
     fun interrupt(promptId: String) {
         scope.launch {
-            queueRepository.interrupt(promptId)
+            val snapshot = currentSnapshot ?: return@launch
+            val identity = snapshot.identity
+            if (isBlocked(identity)) return@launch
+            val generation = identityGeneration
+            if (!isCurrent(identity, generation)) return@launch
+            queueRepository.interrupt(promptId, snapshot.config)
                 .onFailure { throwable ->
-                    _actionError.value = throwable.message ?: "服务器拒绝了中断请求"
+                    withCurrentState(identity, generation) {
+                        _actionError.value = throwable.message ?: "服务器拒绝了中断请求"
+                    }
                 }
-            refresh()
+            if (isCurrent(identity, generation)) {
+                refresh()
+            }
         }
     }
 
     fun deletePending(promptId: String) {
         scope.launch {
-            queueRepository.deletePending(promptId)
+            val snapshot = currentSnapshot ?: return@launch
+            val identity = snapshot.identity
+            if (isBlocked(identity)) return@launch
+            val generation = identityGeneration
+            if (!isCurrent(identity, generation)) return@launch
+            queueRepository.deletePending(promptId, snapshot.config)
                 .onFailure { throwable ->
-                    _actionError.value = throwable.message ?: "服务器拒绝了删除请求"
+                    withCurrentState(identity, generation) {
+                        _actionError.value = throwable.message ?: "服务器拒绝了删除请求"
+                    }
                 }
-            refresh()
+            if (isCurrent(identity, generation)) {
+                refresh()
+            }
         }
     }
 
@@ -204,78 +365,162 @@ class TaskManager(
     fun loadMoreHistory() {
         if (_loadingMoreHistory.value) return
         scope.launch {
-            _loadingMoreHistory.value = true
-            val serverId = serverConfigStore.activeServerId.first()
-            if (serverId == null) {
-                _loadingMoreHistory.value = false
+            val snapshot = currentSnapshot ?: return@launch
+            val identity = snapshot.identity
+            if (isBlocked(identity)) return@launch
+            val generation = identityGeneration
+            val config = snapshot.config
+            if (withCurrentState(identity, generation) {
+                    _loadingMoreHistory.value = true
+                } == null
+            ) {
                 return@launch
             }
+            val serverId = identity.serverId
             val newLimit = historyLimit + HISTORY_PAGE_STEP
-            queueRepository.history(newLimit + 1)
+            queueRepository.history(newLimit + 1, config)
                 .onSuccess { fetched ->
-                    val hasMore = fetched.size > newLimit
-                    val entries = (if (hasMore) fetched.take(newLimit) else fetched)
-                        .map { entry -> entry.copy(serverId = serverId) }
-                    historyLimit = newLimit
-                    val merged = mergeHistory(_history.value, entries)
-                    _history.value = merged
-                    _hasMoreHistory.value = hasMore
-                    _historyError.value = null
-                    syncTasksWithHistory(entries)
-                    historyStore.save(serverId, merged)
-                    scope.launch { historyAutoSaver.saveNew(serverId, merged) }
+                    withCurrentState(identity, generation) {
+                        val hasMore = fetched.size > newLimit
+                        val entries = (if (hasMore) fetched.take(newLimit) else fetched)
+                            .map { entry -> entry.copy(serverId = serverId) }
+                        historyLimit = newLimit
+                        val merged = mergeHistory(_history.value, entries)
+                        _history.value = merged
+                        _hasMoreHistory.value = hasMore
+                        _historyError.value = null
+                        syncTasksWithHistory(entries)
+                        historyStore.save(serverId, merged)
+                        scope.launch { historyAutoSaver.saveNew(serverId, merged) }
+                    }
                 }
                 .onFailure { throwable ->
-                    _historyError.value = throwable.message ?: "无法加载更多历史"
+                    withCurrentState(identity, generation) {
+                        _historyError.value = throwable.message ?: "无法加载更多历史"
+                    }
                 }
-            _loadingMoreHistory.value = false
+            withCurrentState(identity, generation) {
+                _loadingMoreHistory.value = false
+            }
         }
     }
 
     suspend fun deleteHistory(promptIds: Collection<String>): Result<Unit> {
         if (promptIds.isEmpty()) return Result.success(Unit)
-        val result = queueRepository.deleteHistory(promptIds.toList())
+        val snapshot = currentSnapshot
+            ?: return Result.failure(IllegalStateException("未配置服务器"))
+        val identity = snapshot.identity
+        if (isBlocked(identity)) {
+            return Result.failure(IllegalStateException("服务器地址已变化，请重新添加服务器"))
+        }
+        val generation = identityGeneration
+        if (!isCurrent(identity, generation)) {
+            return Result.failure(IllegalStateException("服务器已切换"))
+        }
+        val result = queueRepository.deleteHistory(promptIds.toList(), snapshot.config)
         result.onSuccess {
-            val serverId = serverConfigStore.activeServerId.first()
-            _history.update { entries ->
-                entries.filterNot { it.promptId in promptIds }
-            }
-            _historyError.value = null
-            if (serverId != null) {
-                historyStore.save(serverId, _history.value)
+            val applied = withCurrentState(identity, generation) {
+                _history.update { entries ->
+                    entries.filterNot { it.promptId in promptIds }
+                }
+                _historyError.value = null
+                historyStore.save(identity.serverId, _history.value)
+                true
+            } ?: false
+            if (!applied) {
+                // The user switched servers while the remote call was in
+                // flight. Update the old server's archive, never the new one.
+                scope.launch {
+                    val stored = runCatching { historyStore.load(identity.serverId) }
+                        .getOrDefault(emptyList())
+                    historyStore.save(
+                        identity.serverId,
+                        stored.filterNot { it.promptId in promptIds },
+                    )
+                }
             }
         }.onFailure { throwable ->
-            _historyError.value = throwable.message ?: "删除历史失败"
+            withCurrentState(identity, generation) {
+                _historyError.value = throwable.message ?: "删除历史失败"
+            }
         }
         return result
     }
 
     suspend fun clearHistory(): Result<Unit> {
-        val result = queueRepository.clearHistory()
+        val snapshot = currentSnapshot
+            ?: return Result.failure(IllegalStateException("未配置服务器"))
+        val identity = snapshot.identity
+        if (isBlocked(identity)) {
+            return Result.failure(IllegalStateException("服务器地址已变化，请重新添加服务器"))
+        }
+        val generation = identityGeneration
+        if (!isCurrent(identity, generation)) {
+            return Result.failure(IllegalStateException("服务器已切换"))
+        }
+        val result = queueRepository.clearHistory(snapshot.config)
         result.onSuccess {
-            val serverId = serverConfigStore.activeServerId.first()
-            _history.value = emptyList()
-            _hasMoreHistory.value = false
-            historyLimit = HISTORY_PAGE_SIZE
-            _historyError.value = null
-            if (serverId != null) {
-                historyStore.save(serverId, emptyList())
+            val applied = withCurrentState(identity, generation) {
+                _history.value = emptyList()
+                _hasMoreHistory.value = false
+                historyLimit = HISTORY_PAGE_SIZE
+                _historyError.value = null
+                historyStore.save(identity.serverId, emptyList())
+                true
+            } ?: false
+            if (!applied) {
+                // Do not clear the newly active server's local history.
+                scope.launch {
+                    historyStore.save(identity.serverId, emptyList())
+                }
             }
         }.onFailure { throwable ->
-            _historyError.value = throwable.message ?: "清空历史失败"
+            withCurrentState(identity, generation) {
+                _historyError.value = throwable.message ?: "清空历史失败"
+            }
         }
         return result
     }
 
-    private suspend fun reloadTasks(serverId: String) {
+    private suspend fun <T> withCurrentState(
+        identity: ServerIdentity,
+        generation: Long,
+        block: suspend () -> T,
+    ): T? = stateMutex.withLock {
+        if (isCurrent(identity, generation)) block() else null
+    }
+
+    private fun isBlocked(identity: ServerIdentity): Boolean =
+        blockedIdentities.contains(identity.cacheKey())
+
+    private fun ServerIdentity.cacheKey(): String = "$serverId|$endpointKey"
+
+    private fun isCurrent(identity: ServerIdentity, generation: Long): Boolean =
+        TaskRequestGuard.isCurrent(
+            token = TaskRequestToken(identity, generation),
+            currentIdentity = currentIdentity,
+            currentGeneration = identityGeneration,
+        )
+
+    private suspend fun reloadTasks(
+        serverId: String,
+        identity: ServerIdentity,
+        generation: Long,
+    ) {
         val stored = runCatching { taskStore.list(serverId) }.getOrNull() ?: return
-        _tasks.update { current ->
-            val currentById = current.associateBy { it.promptId }
-            stored.map { record ->
-                val live = currentById[record.promptId]
-                // 内存中的状态可能比磁盘文件更新，取更靠后的状态但保留新提交的任务。
-                if (live != null && statusRank(live.status) >= statusRank(record.status)) live else record
-            }.sortedByDescending { it.submittedAt }
+        withCurrentState(identity, generation) {
+            _tasks.update { current ->
+                val currentById = current.associateBy { it.promptId }
+                stored.map { record ->
+                    val live = currentById[record.promptId]
+                    // 内存中的状态可能比磁盘文件更新，取更靠后的状态但保留新提交的任务。
+                    if (live != null && statusRank(live.status) >= statusRank(record.status)) {
+                        live
+                    } else {
+                        record
+                    }
+                }.sortedByDescending { it.submittedAt }
+            }
         }
     }
 
@@ -528,8 +773,15 @@ class TaskManager(
         }
         updated?.let { record ->
             // 任务记录从创建起就带 serverId；旧数据兜底到默认服务器。
+            // 事件更新可能排队到异步写盘；写盘前再次确认身份未切换。
+            val identity = currentSnapshot?.identity
+            val generation = identityGeneration
             val serverId = record.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID }
-            scope.launch { taskStore.update(serverId, record) }
+            scope.launch {
+                if (identity != null && isCurrent(identity, generation)) {
+                    taskStore.update(serverId, record)
+                }
+            }
         }
     }
 

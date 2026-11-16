@@ -570,6 +570,9 @@
     <string name="server_delete">删除</string>
     <string name="server_delete_confirm_title">删除这个服务器？</string>
     <string name="server_delete_confirm_message">只会删除本地配置“%1$s”，不会影响电脑上的 ComfyUI。</string>
+    <string name="server_endpoint_change_title">服务器地址已变化</string>
+    <string name="server_endpoint_change_message">“%1$s”将改为新地址“%2$s”。旧主机的任务、历史和模型缓存不会带到新地址，旧记录会保留为归档主机。</string>
+    <string name="server_endpoint_change_confirm">创建并切换</string>
     <string name="server_not_checked">未检测</string>
     <string name="server_expand">展开</string>
     <string name="server_collapse">收起</string>
@@ -578,6 +581,7 @@
     <string name="error_invalid_host">地址格式无效：不能包含空格、斜杠、#、?、反斜杠或不完整 IPv6 方括号</string>
     <string name="error_invalid_port">端口必须在 1–65535 之间</string>
     <string name="error_invalid_config">服务器配置无效，请编辑地址或端口</string>
+    <string name="error_cache_identity_unknown">服务器缓存身份未知，请删除后重新添加服务器</string>
     <string name="error_unreachable">无法连接。请确认 ComfyUI 已启动、手机与电脑在同一网络，并检查防火墙是否放行端口。</string>
     <string name="error_timeout">连接超时。请检查 IP、端口和防火墙。</string>
     <string name="error_http">服务器返回错误，请查看 ComfyUI 控制台。</string>

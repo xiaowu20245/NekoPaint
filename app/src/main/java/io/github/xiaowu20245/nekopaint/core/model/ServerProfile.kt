@@ -32,9 +32,10 @@ data class ServerProfile(
 
     private fun normalizedHost(): String {
         val value = host.trim().lowercase().removeSuffix(".")
-        return when (value) {
-            "localhost", "::1", "[::1]" -> "127.0.0.1"
-            else -> value
+        val unbracketed = value.removePrefix("[").removeSuffix("]")
+        return when (unbracketed) {
+            "localhost", "::1" -> "127.0.0.1"
+            else -> unbracketed
         }
     }
 

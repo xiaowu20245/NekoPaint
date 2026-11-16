@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
+import io.github.xiaowu20245.nekopaint.core.model.ArchivedServer
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
@@ -138,9 +139,11 @@ class HistoryViewModel(
     private val serverState = combine(
         serverConfigStore.servers,
         serverConfigStore.activeServerId,
-    ) { servers, activeId ->
+        serverConfigStore.archivedServers,
+    ) { servers, activeId, archived ->
         ServerState(
             servers = servers,
+            archived = archived,
             activeId = activeId
                 ?: servers.firstOrNull()?.id
                 ?: ServerConfigStore.DEFAULT_SERVER_ID,
@@ -220,8 +223,10 @@ class HistoryViewModel(
         val operation = controls.operation
         val edit = controls.edit
         val custom = controls.custom
-        val hosts = buildHosts(
-            servers = servers,
+        val hosts = HistoryHostBuilder.build(
+            servers = servers.servers,
+            archivedServers = servers.archived,
+            activeId = servers.activeId,
             entries = state.entries,
             tasks = state.tasks,
         )
@@ -277,64 +282,6 @@ class HistoryViewModel(
             archivedTasks.value = runCatching { taskStore.listAll() }
                 .getOrDefault(emptyList())
         }
-    }
-
-    private fun buildHosts(
-        servers: ServerState,
-        entries: List<HistoryEntry>,
-        tasks: List<TaskRecord>,
-    ): List<HistoryHost> {
-        val profiles = servers.servers
-        val activeProfile = profiles.firstOrNull { it.id == servers.activeId }
-        val activeEndpoint = activeProfile?.endpointKey
-
-        // 同一地址的多个配置归为一个主机组，避免同一台电脑重复出现在筛选里。
-        val groups = LinkedHashMap<String, MutableList<ServerProfile>>()
-        profiles.forEach { profile ->
-            groups.getOrPut(profile.endpointKey) { mutableListOf() } += profile
-        }
-
-        val hosts = groups.map { (endpoint, members) ->
-            val active = endpoint == activeEndpoint
-            val primary = if (active) {
-                members.firstOrNull { it.id == servers.activeId } ?: members.first()
-            } else {
-                members.first()
-            }
-            HistoryHost(
-                id = endpoint,
-                name = primary.name,
-                active = active,
-                serverIds = members.map { it.id }.toSet(),
-                aliasNames = members.map { it.name },
-                aliasCount = members.size,
-            )
-        }.toMutableList()
-
-        val knownIds = profiles.map { it.id }.toSet()
-        val unknownIds = LinkedHashSet<String>()
-        entries.mapTo(unknownIds) { it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } }
-        tasks.mapTo(unknownIds) { it.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID } }
-        unknownIds.removeAll(knownIds)
-        unknownIds.forEach { id ->
-            val fallbackName = if (id == ServerConfigStore.DEFAULT_SERVER_ID) {
-                DEFAULT_HOST_NAME
-            } else {
-                id.take(8)
-            }
-            hosts += HistoryHost(
-                id = "server:$id",
-                name = fallbackName,
-                active = id == servers.activeId,
-                serverIds = setOf(id),
-                aliasNames = listOf(fallbackName),
-            )
-        }
-
-        return hosts.sortedWith(
-            compareByDescending<HistoryHost> { it.active }
-                .thenBy { it.name.lowercase() },
-        )
     }
 
     private fun HistoryEntry.withHostId(): HistoryEntry =
@@ -588,6 +535,7 @@ class HistoryViewModel(
 
     private data class ServerState(
         val servers: List<ServerProfile>,
+        val archived: List<ArchivedServer>,
         val activeId: String,
     )
 
@@ -633,8 +581,6 @@ class HistoryViewModel(
     )
 
     companion object {
-        private const val DEFAULT_HOST_NAME = "本机 ComfyUI"
-
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 HistoryViewModel(

@@ -1,6 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
+import io.github.xiaowu20245.nekopaint.core.model.ArchivedServer
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.privacy.SensitiveHostProvider
 import kotlinx.coroutines.CancellationException
@@ -9,6 +10,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -22,9 +25,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ServerSensitiveHostProvider(
     servers: Flow<List<ServerProfile>>,
     scope: CoroutineScope,
+    archivedServers: Flow<List<ArchivedServer>> = flowOf(emptyList()),
 ) : SensitiveHostProvider {
 
-    constructor(store: ServerConfigStore, scope: CoroutineScope) : this(store.servers, scope)
+    constructor(store: ServerConfigStore, scope: CoroutineScope) :
+        this(store.servers, scope, store.archivedServers)
 
     private val hosts = MutableStateFlow<Set<String>>(emptySet())
     private val ready = CompletableDeferred<Unit>()
@@ -32,9 +37,10 @@ class ServerSensitiveHostProvider(
     init {
         scope.launch {
             try {
-                servers.collect { profiles ->
-                    hosts.value = profiles
-                        .map { it.host.trim() }
+                combine(servers, archivedServers) { current, archived ->
+                    current.map { it.host.trim() } + archived.map { it.host.trim() }
+                }.collect { values ->
+                    hosts.value = values
                         .filter { it.isNotBlank() }
                         .toSet()
                     if (!ready.isCompleted) ready.complete(Unit)

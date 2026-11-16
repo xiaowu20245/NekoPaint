@@ -8,6 +8,7 @@ enum class ServerError(@param:StringRes val messageRes: Int) {
     InvalidHost(R.string.error_invalid_host),
     InvalidPort(R.string.error_invalid_port),
     InvalidConfig(R.string.error_invalid_config),
+    CacheIdentityUnknown(R.string.error_cache_identity_unknown),
     Unreachable(R.string.error_unreachable),
     Timeout(R.string.error_timeout),
     Http(R.string.error_http),

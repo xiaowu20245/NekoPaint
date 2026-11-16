@@ -1,6 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
+import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
@@ -18,60 +19,74 @@ class QueueRepository(
     private val serverConfigStore: ServerConfigStore,
 ) {
 
-    suspend fun queue(): Result<QueueSnapshot> = withContext(Dispatchers.IO) {
+    suspend fun queue(config: ServerConfig? = null): Result<QueueSnapshot> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
-            QueueMapper.toQueueSnapshot(apiFactory.create(config).queue())
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            QueueMapper.toQueueSnapshot(apiFactory.create(resolved).queue())
         }
     }
 
-    suspend fun history(maxItems: Int = 50): Result<List<HistoryEntry>> = withContext(Dispatchers.IO) {
+    suspend fun history(
+        maxItems: Int = 50,
+        config: ServerConfig? = null,
+    ): Result<List<HistoryEntry>> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
             QueueMapper.toHistoryEntries(
-                dto = apiFactory.create(config).history(maxItems),
-                baseUrl = ServerEndpointValidator.require(config).baseUrl,
+                dto = apiFactory.create(resolved).history(maxItems),
+                baseUrl = ServerEndpointValidator.require(resolved).baseUrl,
             )
         }
     }
 
-    suspend fun interrupt(promptId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun interrupt(
+        promptId: String,
+        config: ServerConfig? = null,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
-            val response = apiFactory.create(config).interrupt(
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(resolved).interrupt(
                 InterruptRequestDto(promptId = promptId),
             )
             if (!response.isSuccessful) error("HTTP ${response.code()}")
         }
     }
 
-    suspend fun deletePending(promptId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun deletePending(
+        promptId: String,
+        config: ServerConfig? = null,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
-            val response = apiFactory.create(config).updateQueue(
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(resolved).updateQueue(
                 QueueOperationDto(delete = listOf(promptId)),
             )
             if (!response.isSuccessful) error("HTTP ${response.code()}")
         }
     }
 
-    suspend fun deleteHistory(promptId: String): Result<Unit> =
-        deleteHistory(listOf(promptId))
+    suspend fun deleteHistory(
+        promptId: String,
+        config: ServerConfig? = null,
+    ): Result<Unit> = deleteHistory(listOf(promptId), config)
 
-    suspend fun deleteHistory(promptIds: List<String>): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun deleteHistory(
+        promptIds: List<String>,
+        config: ServerConfig? = null,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
-            val response = apiFactory.create(config).updateHistory(
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(resolved).updateHistory(
                 HistoryOperationDto(delete = promptIds),
             )
             if (!response.isSuccessful) error("HTTP ${response.code()}")
         }
     }
 
-    suspend fun clearHistory(): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun clearHistory(config: ServerConfig? = null): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val config = serverConfigStore.config.first() ?: error("未配置服务器")
-            val response = apiFactory.create(config).updateHistory(
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(resolved).updateHistory(
                 HistoryOperationDto(clear = true),
             )
             if (!response.isSuccessful) error("HTTP ${response.code()}")

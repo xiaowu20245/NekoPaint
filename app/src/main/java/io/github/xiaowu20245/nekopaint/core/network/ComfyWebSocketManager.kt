@@ -44,8 +44,7 @@ data class NodeProgress(
     val state: String?,
 )
 
-sealed interface ComfyEvent {
-    data class Status(val queueRemaining: Int) : ComfyEvent
+sealed interface ComfyEvent {    data class Status(val queueRemaining: Int) : ComfyEvent
     data class ExecutionStart(val promptId: String) : ComfyEvent
     data class ExecutionCached(val promptId: String, val nodes: List<String>) : ComfyEvent
     data class Executing(val promptId: String, val nodeId: String?) : ComfyEvent
@@ -77,6 +76,13 @@ sealed interface ComfyEvent {
     data class Interrupted(val promptId: String) : ComfyEvent
 }
 
+data class ComfyEventEnvelope(
+    val endpointKey: String,
+    val connectionToken: Long,
+    val socketToken: Long,
+    val event: ComfyEvent,
+)
+
 class ComfyWebSocketManager(
     private val client: OkHttpClient,
     private val json: Json,
@@ -88,10 +94,16 @@ class ComfyWebSocketManager(
     private val _connection = MutableStateFlow(ComfyConnectionState.Disconnected)
     val connection: StateFlow<ComfyConnectionState> = _connection.asStateFlow()
 
-    private val _events = MutableSharedFlow<ComfyEvent>(extraBufferCapacity = 128)
-    val events: SharedFlow<ComfyEvent> = _events.asSharedFlow()
+    private val _events = MutableSharedFlow<ComfyEventEnvelope>(extraBufferCapacity = 128)
+    val events: SharedFlow<ComfyEventEnvelope> = _events.asSharedFlow()
 
     private val eventParser = ComfyEventParser(json)
+
+    @Volatile
+    private var connectionToken: Long = 0L
+
+    @Volatile
+    private var socketToken: Long = 0L
 
     private var job: Job? = null
     private var socket: WebSocket? = null
@@ -100,6 +112,7 @@ class ComfyWebSocketManager(
         if (job?.isActive == true) return
         job = scope.launch {
             serverConfigStore.config.collectLatest { config ->
+                val token = ++connectionToken
                 socket?.close(1000, null)
                 socket = null
                 if (config == null) {
@@ -111,12 +124,17 @@ class ComfyWebSocketManager(
                     _connection.value = ComfyConnectionState.InvalidConfig
                     return@collectLatest
                 }
-                connectLoop(endpoint)
+                connectLoop(endpoint, token)
             }
         }
     }
 
+    fun isCurrentConnection(token: Long, socket: Long): Boolean =
+        token == connectionToken && socket == socketToken
+
     fun stop() {
+        connectionToken++
+        socketToken++
         job?.cancel()
         job = null
         socket?.close(1000, null)
@@ -124,9 +142,10 @@ class ComfyWebSocketManager(
         _connection.value = ComfyConnectionState.Disconnected
     }
 
-    private suspend fun connectLoop(endpoint: ServerEndpoint) {
+    private suspend fun connectLoop(endpoint: ServerEndpoint, token: Long) {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive) {
+            val attemptToken = ++socketToken
             _connection.value = ComfyConnectionState.Connecting
             val clientId = try {
                 clientIdStore.getOrCreate()
@@ -143,13 +162,19 @@ class ComfyWebSocketManager(
 
             val listener = object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (token != connectionToken || attemptToken != socketToken) return
                     backoffMs = 1_000L
                     _connection.value = ComfyConnectionState.Connected
                     connected.complete(Unit)
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    eventParser.parse(text)?.let { _events.tryEmit(it) }
+                    if (token != connectionToken || attemptToken != socketToken) return
+                    eventParser.parse(text)?.let {
+                        _events.tryEmit(
+                            ComfyEventEnvelope(endpoint.endpointKey, token, attemptToken, it),
+                        )
+                    }
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
@@ -161,10 +186,12 @@ class ComfyWebSocketManager(
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (token != connectionToken || attemptToken != socketToken) return
                     closed.complete(Unit)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (token != connectionToken || attemptToken != socketToken) return
                     closed.complete(Unit)
                 }
             }

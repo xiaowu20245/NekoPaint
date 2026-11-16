@@ -520,3 +520,143 @@ git diff --check
 - 确认 B8-01、B8-08 原始路径闭合；B8-02/B8-04/B8-05/B8-06 保持有效。
 - 关键残余仍为 B9-01、B9-02、B8-03、B8-06、B8-07，均低优先级、不阻塞。
 - 允许第 3 批正式关闭并进入第 4 批 CR-006。
+
+---
+
+## 第 4 批：CR-006 编辑服务器地址的缓存身份隔离
+
+> 修复日期：2026-11-16
+> 分支：`fix/security-data-correctness`
+> 基于：第 3 批提交 `4ecbe9d`（复审记录 `57f2e04`）
+> 状态：已实现并完成 B11～B18 复审修复与独立复核；**APPROVED**（`docs/FIX_REVIEW.md` 第 33 节）。第 4 批 commit 已提交。
+
+### 25. 范围与修改
+
+- 地址变化（scheme/host/port）生成新 `serverId`；只改名称/头像沿用原 id。
+- 旧主机归档为 `ArchivedServer`，旧缓存目录不迁移、不删除。
+- DataStore 同一 `edit` 替换/删除 profile、写入归档和 activeId。
+- TaskManager 以 `ServerIdentity(serverId, endpointKey)` 作为缓存身份。
+- History 主机分组使用归档名称；AI host 脱敏集合包含归档 host。
+- 地址变化确认 UI；头像 staged 保存/回滚。
+
+新增生产文件：
+
+- `core/model/ServerEditPlanner.kt`
+- `core/model/ArchivedServer.kt`
+- `core/datastore/ServerConfigReplacement.kt`
+- `data/repository/ServerIsolationCoordinator.kt`
+- `data/repository/TaskRequestGuard.kt`
+- `data/repository/TaskEventGuard.kt`
+- `feature/history/HistoryHostBuilder.kt`
+
+修改生产文件：
+
+- `core/model/ServerProfile.kt`
+- `core/datastore/ServerConfigStore.kt`
+- `core/network/ComfyWebSocketManager.kt`
+- `core/network/ServerEndpointValidator.kt`
+- `data/repository/QueueRepository.kt`
+- `data/repository/ServerRepository.kt`
+- `data/repository/ServerSensitiveHostProvider.kt`
+- `data/repository/ServerAvatarStore.kt`
+- `data/repository/TaskManager.kt`
+- `feature/history/HistoryViewModel.kt`
+- `feature/server/ServerUiState.kt`
+- `feature/server/ServerViewModel.kt`
+- `feature/server/ServerScreen.kt`
+- `res/values/strings.xml`
+- `DECISIONS.md`（D-063）
+
+新增测试：
+
+- `core/model/ServerEditPlannerTest.kt`
+- `core/datastore/ServerConfigReplacementTest.kt`
+- `data/repository/ServerIsolationCoordinatorTest.kt`
+- `data/repository/TaskRequestGuardTest.kt`
+- `data/repository/TaskEventGuardTest.kt`
+- `feature/history/HistoryHostBuilderTest.kt`
+- `data/repository/ServerSensitiveHostProviderTest.kt`（归档 host 用例）
+
+### 26. 实现说明
+
+- `ServerEditPlanner` 只比较规范化 `endpointKey`；scheme/host/port 变化要求新 UUID。
+- `ServerProfile.endpointKey` 对所有 IPv6 去方括号，`localhost`/`::1` 统一到 `127.0.0.1`。
+- `ArchivedServer` 只保存 id、名称、地址、归档时间，不含凭据。
+- `ServerConfigReplacementPlanner` 纯逻辑负责替换、删除、activeId 和归档 upsert；`ServerConfigStore` 在同一事务写入 servers/archived/active/cache 身份映射。
+- `replaceServerEndpoint` 校验持久化 old endpoint、new id 冲突；失败返回 `Result.failure`，不再误报成功。
+- `saveServer` 拒绝已存在 id 的 endpoint 变化和已归档 id 复活；移除未使用的 `save(config)` 兼容入口。
+- `ServerViewModel` 地址变化弹确认框；确认生成新 UUID，取消不保存；头像先 stage 并备份旧文件，配置保存成功后才 commit；失败 rollback 并保留 draft/旧头像。
+- `TaskManager` 使用 `ServerIdentitySnapshot(identity, config)`、`cache_identities_json` 持久化身份、`blockedIdentities` 集合、`TaskRequestGuard`/generation、`TaskEventGuard`、`stateMutex`；旧在途请求/旧 WebSocket 事件不能写新身份。
+- `HistoryHostBuilder` 当前 profile 按 endpoint 分组；归档 id 独立只读组、始终 `active=false`，优先归档名称，无归档回退短 id。
+- `ServerSensitiveHostProvider` 合并当前和归档 host。
+
+### 27. 测试与构建结果
+
+实际执行：
+
+```text
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:lintDebug --no-daemon
+.\gradlew.bat :app:assembleDebug
+git diff --check
+```
+
+结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `:app:testDebugUnitTest --rerun-tasks` | **通过**：78 个测试套件，392 tests，0 failures，0 errors |
+| `:app:lintDebug --no-daemon` | **通过**：0 errors / 9 warnings / 3 hints |
+| `:app:assembleDebug` | **成功** |
+| `git diff --check` | **通过**（仅 LF/CRLF 提示） |
+
+新增测试数：30（第 4 批新增；第 3 批基线 362）。
+
+### 28. 手工验收
+
+模拟器 `emulator-5554`：
+
+1. 添加 `http://127.0.0.1:8188` 并连接成功。
+2. 编辑 host 为 `127.0.0.2` 保存：显示地址变化确认框；确认后卡片显示新地址并自动探测。
+3. 读取 `server_config.preferences_pb`：新 profile id 与旧 id 不同，旧 id 出现在 `archived_servers_json`，旧 host `127.0.0.1` 保留。
+4. 再次编辑为 `127.0.0.3` 并取消：配置仍为 `127.0.0.2`，DataStore 没有 `127.0.0.3`。
+5. 只修改名称：不出现地址变化确认框，server id 保持不变。
+6. 临时 instrumentation 测试已删除，测试 APK 已卸载。
+
+### 29. 已知限制与未解决项
+
+- 未在模拟器制造旧主机的任务/历史/模型缓存后再替换地址；缓存隔离由 identity/token 逻辑、DataStore 归档检查和纯逻辑测试覆盖。
+- `ServerConfigStore` 的真实 DataStore 事务未做 JVM 集成测试；使用 `ServerConfigReplacementPlanner` 测试 + 手工 DataStore 检查，不声称已做事务级 JVM 测试。
+- 头像文件操作依赖 Android `Uri`/文件系统，未新增完整 JVM 集成测试；已补 staged 失败恢复逻辑。
+- 旧版本升级前已发生同 id endpoint 变化且没有 `cache_identities` 的用户，无法在首次启动识别旧缓存；之后保存/替换开始记录身份。
+- 归档元数据目前只增不减；历史清空是否清理归档仍待产品策略。
+- B9-01/B9-02、B8-03/B8-06/B8-07 等第 3 批低优先级残余仍保留。
+- TaskManager 完整集成测试、头像并发测试、`handleEvent` 旧事件测试仍为已知测试缺口。
+
+### 30. 复审修复 B11～B15
+
+- **B11-01～B11-08**：TaskRequestToken/generation、QueueRepository 显式 config、删除/清空历史使用捕获 serverId、activeId stale 修复、saveServer endpoint 守卫、归档 History active=false、队列状态清理。
+- **B12-01～B12-06**：ServerIdentitySnapshot 绑定 identity+config；`stateMutex`/`withCurrentState` 原子检查+写回；staged 头像备份/回滚；stale activeId 测试。
+- **B13-01～B13-06**：持久化 `cache_identities_json` + blockedIdentities set；stateMutex 覆盖 refresh/loadMore/delete/clear/reloadTasks；restoreTarget Result/rollback 观察；stale activeId 测试。
+- **B14-01～B14-05**：ComfyEventEnvelope + TaskEventGuard；移除无条件 seed；restore 失败受控、compress false 检查；cache identity 只在 save/replace/delete 更新。
+- **B15-01～B15-06**：WebSocket connectionToken 丢弃旧 socket 事件；identity 加载在锁内确认；commitStaged/rollback 结果观察；无 cache identity 的旧 profile fail-closed；saveServer 修复 stale activeId。
+- 当前验证：78 suites / 392 tests / 0 failures；lint 0 errors / 9 warnings / 3 hints；assemble 成功；`git diff --check` 通过。
+
+### 31. 复审修复 B16～B17
+
+- **B16-01/B17-04**：`ComfyEventEnvelope` 携带 connectionToken + socketToken；连接循环每次重连递增 socketToken，旧 socket 的 onMessage/onOpen/onClosed/onFailure 全部校验；TaskManager 在 stateMutex 内先校验连接 token 和 socket token，再校验 endpoint/blocked。
+- **B16-02/B17-02**：identity 切换、cache blocked 计算、状态清理合并到同一个 stateMutex 块；本地缓存加载后校验 identity + generation；updateTask 异步写盘前校验 token。
+- **B16-03/B17-03**：commitStaged 检查 File.delete 结果并返回 Result；setAvatar/commitProfile 观察 commit/rollback 失败；restoreTarget 使用 ATOMIC_MOVE + fallback；writeBitmap/stageBitmap 失败删除 partial；avatarMutex 串行化所有头像 stage/save/rollback/commit。
+- **B16-04**：新增 `ServerError.CacheIdentityUnknown` 与文案；ViewModel 区分缓存身份错误和头像错误。
+- **B17-01**：saveServer 校验 cache identity 的值必须等于当前持久化 endpoint，避免改名/头像时把旧缓存 map 从 A 盖章成 B。
+- **B17-05/B17-06**：无 cache map 的旧 profile 全部 fail-closed、测试缺口仍记录为低优先级。
+- **B18-01～B18-03**：`commitProfile` 成功 cleanup 和 `delete(profile)` 纳入 avatarMutex；同 identity cache 缺失/清空也加入 blocked；`saveServer` 拒绝孤立 cache map；restoreTarget fallback 使用临时文件+rename；writeBitmap 异常删除 partial；cleanup 失败保留在最终卡片状态；`stop()` 递增 token。
+- 当前验证：78 suites / 392 tests / 0 failures；lint 0 errors / 9 warnings / 3 hints；assemble 成功；`git diff --check` 通过。
+
+### 32. 独立复审结论
+
+- 第 4 批 CR-006 B18 修复后独立复审：**APPROVED**（`docs/FIX_REVIEW.md` 第 33 节）。
+- 独立验证：78 suites / 392 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- 允许提交第 4 批 commit 并进入第 5 批 CR-007。
+- 低优先级残余 B19-01～B19-04：同 identity cache 失效时在途 refresh、draft/delete best-effort、新建 profile 旧缓存目录、集成测试缺口，不阻塞本批。
+- 第 4 批 commit 已提交为 `fix: 隔离服务器地址变更后的缓存身份`。

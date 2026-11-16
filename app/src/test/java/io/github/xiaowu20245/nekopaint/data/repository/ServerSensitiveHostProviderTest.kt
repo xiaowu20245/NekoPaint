@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
+import io.github.xiaowu20245.nekopaint.core.model.ArchivedServer
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -120,5 +121,26 @@ class ServerSensitiveHostProviderTest {
         )
 
         assertFalse(provider.awaitReady())
+    }
+
+    @Test
+    fun includesArchivedHostsAndRemovesThemWhenArchiveChanges() = runTest {
+        val servers = MutableStateFlow(
+            listOf(ServerProfile(id = "one", host = "comfy.local")),
+        )
+        val archived = MutableStateFlow(
+            listOf(ArchivedServer(id = "old", name = "旧主机", host = "old.local")),
+        )
+        val provider = ServerSensitiveHostProvider(
+            servers = servers,
+            scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
+            archivedServers = archived,
+        )
+
+        assertTrue(provider.awaitReady())
+        assertEquals(setOf("comfy.local", "old.local"), provider.hosts())
+
+        archived.value = emptyList()
+        assertEquals(setOf("comfy.local"), provider.hosts())
     }
 }

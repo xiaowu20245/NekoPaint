@@ -19,18 +19,20 @@ class ServerRepository(
 ) {
 
     val servers = store.servers
+    val archivedServers = store.archivedServers
     val activeServerId = store.activeServerId
     val activeServer = store.activeServer
 
     suspend fun loadConfig(): ServerConfig? = store.config.first()
 
-    suspend fun saveConfig(config: ServerConfig) {
-        store.save(config)
-    }
-
-    suspend fun saveServer(profile: ServerProfile, activate: Boolean = false) {
+    suspend fun saveServer(profile: ServerProfile, activate: Boolean = false): Result<Unit> =
         store.saveServer(profile, activate)
-    }
+
+    suspend fun replaceServerEndpoint(
+        oldProfile: ServerProfile,
+        newProfile: ServerProfile,
+        activate: Boolean,
+    ): Result<Unit> = store.replaceServerEndpoint(oldProfile, newProfile, activate)
 
     suspend fun deleteServer(id: String) {
         store.deleteServer(id)

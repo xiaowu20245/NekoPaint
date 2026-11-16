@@ -1,6 +1,7 @@
 package io.github.xiaowu20245.nekopaint.core.network
 
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
@@ -18,6 +19,14 @@ data class ServerEndpoint(
     val port: Int,
     val baseUrl: String,
 ) {
+    val endpointKey: String
+        get() = ServerProfile(
+            id = "",
+            scheme = scheme,
+            host = host,
+            port = port,
+        ).endpointKey
+
     /**
      * Builds the HTTP(S) URL used by OkHttp for the WebSocket upgrade.
      *

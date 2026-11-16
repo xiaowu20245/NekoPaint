@@ -103,6 +103,7 @@ data class ServerUiState(
     val formSaving: Boolean = false,
     val formSnapshot: ConnectionSnapshot? = null,
     val formError: ServerError? = null,
+    val pendingEndpointChange: PendingEndpointChange? = null,
 ) {
     val activeCard: ServerCardUi?
         get() = cards.firstOrNull { it.isActive }
@@ -113,3 +114,10 @@ data class ServerUiState(
     val isFormBusy: Boolean
         get() = formTesting || formSaving
 }
+
+data class PendingEndpointChange(
+    val oldProfile: ServerProfile,
+    val newProfile: ServerProfile,
+    val activate: Boolean,
+    val formTargetId: String?,
+)

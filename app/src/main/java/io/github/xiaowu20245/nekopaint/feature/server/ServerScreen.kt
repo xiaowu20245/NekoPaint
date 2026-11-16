@@ -249,6 +249,32 @@ fun ServerScreen() {
         }
     }
 
+    state.pendingEndpointChange?.let { pending ->
+        AlertDialog(
+            onDismissRequest = viewModel::cancelEndpointChange,
+            title = { Text(stringResource(R.string.server_endpoint_change_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.server_endpoint_change_message,
+                        pending.oldProfile.name,
+                        pending.newProfile.host,
+                    ),
+                )
+            },
+            confirmButton = {
+                Button(onClick = viewModel::confirmEndpointChange) {
+                    Text(stringResource(R.string.server_endpoint_change_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelEndpointChange) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+
     deleteTarget?.let { profile ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },

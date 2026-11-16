@@ -7,12 +7,15 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerEditPlan
+import io.github.xiaowu20245.nekopaint.core.model.ServerEditPlanner
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.network.InvalidServerConfigException
 import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 import io.github.xiaowu20245.nekopaint.data.repository.InvalidComfyResponseException
 import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
+import io.github.xiaowu20245.nekopaint.data.repository.StagedAvatar
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +23,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import retrofit2.HttpException
 import java.net.ConnectException
@@ -36,6 +41,7 @@ class ServerViewModel(
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
     private val probes = ServerProbeTracker()
+    private val avatarMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -180,6 +186,7 @@ class ServerViewModel(
                 formSaving = false,
                 formSnapshot = null,
                 formError = null,
+                pendingEndpointChange = null,
             )
         }
     }
@@ -195,6 +202,7 @@ class ServerViewModel(
                 formSaving = false,
                 formSnapshot = null,
                 formError = null,
+                pendingEndpointChange = null,
             )
         }
     }
@@ -214,6 +222,7 @@ class ServerViewModel(
                 formSaving = false,
                 formSnapshot = null,
                 formError = null,
+                pendingEndpointChange = null,
             )
         }
     }
@@ -263,13 +272,47 @@ class ServerViewModel(
             ?.profile
             ?: return
         viewModelScope.launch {
-            avatarStore.saveBitmap(serverId, bitmap)
-                .onSuccess { path ->
-                    repository.saveServer(
-                        profile = profile.copy(avatarUri = path),
-                        activate = false,
-                    )
+            avatarMutex.withLock {
+            val staged = avatarStore.stageBitmap(serverId, bitmap).getOrElse {
+                markAvatarFailure(serverId)
+                return@withLock
+            }
+            repository.saveServer(
+                profile = profile.copy(avatarUri = staged.uri),
+                activate = false,
+            ).onSuccess {
+                avatarStore.commitStaged(staged).onFailure {
+                    markAvatarFailure(serverId)
                 }
+            }.onFailure { error ->
+                val failure = if (error.message?.contains("缓存身份") == true) {
+                    ServerError.CacheIdentityUnknown
+                } else {
+                    ServerError.AvatarFailed
+                }
+                avatarStore.rollbackStaged(staged).onFailure {
+                    markAvatarFailure(serverId, failure)
+                }
+                markAvatarFailure(serverId, failure)
+            }
+            }
+        }
+    }
+
+    private fun markAvatarFailure(
+        serverId: String,
+        error: ServerError = ServerError.AvatarFailed,
+    ) {
+        _uiState.update { state ->
+            state.copy(
+                cards = state.cards.map { card ->
+                    if (card.profile.id == serverId) {
+                        card.copy(error = error)
+                    } else {
+                        card
+                    }
+                },
+            )
         }
     }
 
@@ -301,40 +344,111 @@ class ServerViewModel(
         if (_uiState.value.formSaving) return
         val state = _uiState.value
         val editingId = state.editingId
+        val oldProfile = editingId?.let { id ->
+            state.cards.firstOrNull { it.profile.id == id }?.profile
+        }
         val baseProfile = ServerProfile.fromConfig(
             config = config,
             id = editingId ?: state.formTargetId ?: UUID.randomUUID().toString(),
         )
-        val originalAvatar = state.cards
-            .firstOrNull { it.profile.id == baseProfile.id }
-            ?.profile
-            ?.avatarUri
         val formTargetId = state.formTargetId
-        val activate = editingId == null || state.activeCard?.profile?.id == baseProfile.id
+        val activate = editingId == null || state.activeCard?.profile?.id == editingId
+        if (oldProfile != null && ServerEditPlanner.plan(oldProfile, config) == ServerEditPlan.NEW_ID) {
+            _uiState.update {
+                it.copy(
+                    formError = null,
+                    pendingEndpointChange = PendingEndpointChange(
+                        oldProfile = oldProfile,
+                        newProfile = baseProfile.copy(id = UUID.randomUUID().toString()),
+                        activate = activate,
+                        formTargetId = formTargetId,
+                    ),
+                )
+            }
+            return
+        }
+        commitProfile(
+            oldProfile = oldProfile,
+            baseProfile = baseProfile,
+            activate = activate,
+            formTargetId = formTargetId,
+        )
+    }
+
+    fun confirmEndpointChange() {
+        val pending = _uiState.value.pendingEndpointChange ?: return
+        _uiState.update { it.copy(pendingEndpointChange = null) }
+        commitProfile(
+            oldProfile = pending.oldProfile,
+            baseProfile = pending.newProfile,
+            activate = pending.activate,
+            formTargetId = pending.formTargetId,
+        )
+    }
+
+    fun cancelEndpointChange() {
+        if (_uiState.value.pendingEndpointChange == null) return
+        _uiState.update { it.copy(pendingEndpointChange = null) }
+        cancelForm()
+    }
+
+    private fun commitProfile(
+        oldProfile: ServerProfile?,
+        baseProfile: ServerProfile,
+        activate: Boolean,
+        formTargetId: String?,
+    ) {
+        val endpointChanged = oldProfile != null && oldProfile.id != baseProfile.id
         _uiState.update { it.copy(formSaving = true, formError = null) }
         viewModelScope.launch {
+            avatarMutex.withLock {
+            var stagedAvatar: StagedAvatar? = null
             runCatching {
-                val formAvatar = config.avatarUri
-                val resolvedAvatar = when {
-                    formAvatar == null -> null
-                    avatarStore.isDraft(formAvatar) -> {
-                        avatarStore.commitDraft(baseProfile.id, formAvatar).getOrElse {
-                            avatarStore.deleteDraft(formTargetId ?: baseProfile.id)
-                            originalAvatar
+                val formAvatar = baseProfile.avatarUri
+                val isDraft = formAvatar != null && avatarStore.isDraft(formAvatar)
+                val staged = if (formAvatar != null && (endpointChanged || isDraft)) {
+                    avatarStore.stageForSave(baseProfile.id, formAvatar, isDraft)
+                        .getOrElse { error ->
+                            throw AvatarPreparationException(
+                                "无法准备服务器头像",
+                                error,
+                            )
                         }
-                    }
-
-                    else -> formAvatar
+                } else {
+                    null
                 }
+                stagedAvatar = staged
+                val resolvedAvatar = staged?.uri ?: formAvatar
                 val profile = baseProfile.copy(avatarUri = resolvedAvatar)
-                repository.saveServer(profile, activate = activate)
-                if (resolvedAvatar == null) {
-                    avatarStore.delete(baseProfile.id)
+                if (endpointChanged) {
+                    repository.replaceServerEndpoint(
+                        oldProfile = requireNotNull(oldProfile),
+                        newProfile = profile,
+                        activate = activate,
+                    ).getOrThrow()
+                } else {
+                    repository.saveServer(profile, activate = activate).getOrThrow()
                 }
                 profile
             }.onSuccess { profile ->
+                // Config is durable now; avatar cleanup stays inside the same
+                // mutex so a following setAvatar cannot race with old deletes.
+                val cleanupFailed = stagedAvatar?.let {
+                    avatarStore.commitStaged(it).isFailure
+                } ?: false
+                if (profile.avatarUri == null) {
+                    avatarStore.delete(profile.id)
+                }
+                if (endpointChanged) {
+                    avatarStore.delete(oldProfile.id)
+                }
                 _uiState.update { state ->
-                    val existingCard = state.cards.firstOrNull { it.profile.id == profile.id }
+                    val cardsWithoutOld = if (endpointChanged) {
+                        state.cards.filterNot { it.profile.id == oldProfile.id }
+                    } else {
+                        state.cards
+                    }
+                    val existingCard = cardsWithoutOld.firstOrNull { it.profile.id == profile.id }
                     val updatedCard = (existingCard ?: ServerCardUi(
                         profile = profile,
                         isActive = activate,
@@ -347,9 +461,9 @@ class ServerViewModel(
                         lastUpdatedAt = null,
                     )
                     val cards = if (existingCard == null) {
-                        state.cards + updatedCard
+                        cardsWithoutOld + updatedCard
                     } else {
-                        state.cards.map { card ->
+                        cardsWithoutOld.map { card ->
                             if (card.profile.id == profile.id) updatedCard else card
                         }
                     }
@@ -360,7 +474,12 @@ class ServerViewModel(
                         editingId = null,
                         formTargetId = null,
                         formSnapshot = null,
-                        formError = null,
+                        formError = if (cleanupFailed) {
+                            ServerError.AvatarFailed
+                        } else {
+                            null
+                        },
+                        pendingEndpointChange = null,
                         expandedId = profile.id,
                     )
                 }
@@ -368,10 +487,27 @@ class ServerViewModel(
                 // the newly saved endpoint directly so a corrected config can
                 // recover without waiting for another UI event.
                 refreshProfile(profile, silent = true)
-            }.onFailure {
-                _uiState.update {
-                    it.copy(formSaving = false, formError = ServerError.Unknown)
+            }.onFailure { error ->
+                stagedAvatar?.let { staged ->
+                    avatarStore.rollbackStaged(staged).onFailure {
+                        _uiState.update { state ->
+                            state.copy(formError = ServerError.AvatarFailed)
+                        }
+                    }
                 }
+                _uiState.update {
+                    it.copy(
+                        formSaving = false,
+                        formError = when {
+                            error is AvatarPreparationException -> ServerError.AvatarFailed
+                            error.message?.contains("缓存身份") == true ->
+                                ServerError.CacheIdentityUnknown
+                            else -> ServerError.Unknown
+                        },
+                        pendingEndpointChange = null,
+                    )
+                }
+            }
             }
         }
     }
@@ -385,8 +521,10 @@ class ServerViewModel(
 
     fun delete(profile: ServerProfile) {
         viewModelScope.launch {
-            repository.deleteServer(profile.id)
-            avatarStore.delete(profile.id)
+            avatarMutex.withLock {
+                repository.deleteServer(profile.id)
+                avatarStore.delete(profile.id)
+            }
             _uiState.update {
                 if (it.expandedId == profile.id) it.copy(expandedId = null) else it
             }
@@ -479,3 +617,8 @@ class ServerViewModel(
         }
     }
 }
+
+private class AvatarPreparationException(
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
