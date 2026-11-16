@@ -679,3 +679,16 @@ git diff --check
 - **手工验收**：模拟器 `emulator-5554`（API 28）注入 sourceHash 不一致模板后，列表显示“需修复”且快捷运行按钮 `enabled=false`；详情页显示修复横幅、修复按钮可用、提交生成按钮 `enabled=false`；点击“修复并保存”后横幅消失、profile `repairRequired=false` 且 sourceHash 与 api.json 一致、提交生成恢复可用；全程无 FATAL。
 - **测试缺口/限制**：TaskManager 完整集成测试仍无法在无 Android Context/真实依赖下构造；关闭落盘由 `TaskPersistenceQueue.shutdown()`、scope cancel、身份切换双 flush 测试及 `MainActivity.onStop` 手工冒烟覆盖。`HistoryStore/ModelCatalogStore` 通过 internal 临时目录构造测试，生产仍使用 Context 构造。
 - 第 5 批 commit 已提交为 `fix: 原子化工作流与任务持久化`（`5ce9d23`）。
+
+### 34. 第 5 批补充 CR-019（已复审 APPROVED）
+
+> 计划中第 5 批包含 CR-007 与 CR-019；前一批只提交了 CR-007，本轮补 CR-019。独立复审见 `docs/FIX_REVIEW.md` 第 40 节。
+
+- **SafeFileNames**：新增 `data/repository/SafeFileNames.kt`。合法 `[A-Za-z0-9_-]{1,64}` 原样保留；已是 `sha256_<64 hex>`（71 字符）直接返回，避免二次哈希；空值、`.`、`..`、路径分隔符、冒号、空白、控制字符、中文、超长值统一哈希为固定 71 字符。
+- **TaskStore**：`get/write/update/list/listAll` 全部通过安全文件名定位；`serverId` 目录名和 `promptId` 文件名都应用安全函数；原始 `promptId`/`serverId` 仍保存在 JSON 内容中，读取不从文件名反推；保存前用 `canonicalFile` 校验目标仍在 `rootDir` 内。合法 UUID/default 文件名不迁移；异常旧文件名不做路径回退读取。
+- **TaskStore 测试 seam**：新增 internal 构造（临时 `filesDir`），生产 Context 构造不变。
+- **新增测试**：`SafeFileNamesTest`（安全值原样、恶意值哈希、固定长度、稳定性/不同值不碰撞、已哈希不二次哈希）；`TaskStorePathTest`（合法 round-trip、`../../evil` 不越界且内容保留原值、恶意 serverId 哈希、list 从内容取 promptId、legacy default 迁移、损坏/非 JSON 文件忽略）。
+- **验证**：86 suites / 442 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **C20 修复**：`listAll` 不再用 hashed 目录名冒充空 serverId；`list(serverId)` 过滤内容 serverId 不一致的记录；`get` 拒绝内容 serverId 与请求不一致；legacy 迁移增加锁，避免并发 rename/copy 竞争；新增旧 UUID 文件可读、旧异常文件名不回退、serverId 不一致过滤、hashed 目录空 serverId 不复用目录名 4 个测试。
+- **限制**：未在模拟器伪造 ComfyUI 返回恶意 promptId；路径穿越防护由纯函数 + 临时目录 TaskStore 测试覆盖，未做真实服务器联调。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 40 节）；86 suites / 446 tests、lint、assemble、diff check 与本地一致；C21-01～C21-04 为非阻塞低优先级残余。
