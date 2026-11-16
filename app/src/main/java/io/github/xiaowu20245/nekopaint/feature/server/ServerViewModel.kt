@@ -8,6 +8,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
+import io.github.xiaowu20245.nekopaint.core.network.InvalidServerConfigException
+import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 import io.github.xiaowu20245.nekopaint.data.repository.InvalidComfyResponseException
 import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
@@ -33,7 +35,7 @@ class ServerViewModel(
 
     private val _uiState = MutableStateFlow(ServerUiState())
     val uiState: StateFlow<ServerUiState> = _uiState.asStateFlow()
-    private val refreshingIds = mutableSetOf<String>()
+    private val probes = ServerProbeTracker()
 
     init {
         viewModelScope.launch {
@@ -43,10 +45,8 @@ class ServerViewModel(
                 _uiState.update { state ->
                     val existing = state.cards.associateBy { it.profile.id }
                     val cards = servers.map { profile ->
-                        existing[profile.id]?.copy(
-                            profile = profile,
-                            isActive = profile.id == activeId,
-                        ) ?: ServerCardUi(
+                        mergeServerCard(
+                            existing = existing[profile.id],
                             profile = profile,
                             isActive = profile.id == activeId,
                         )
@@ -69,26 +69,64 @@ class ServerViewModel(
 
     fun refreshCard(id: String, silent: Boolean = false) {
         val card = _uiState.value.cards.firstOrNull { it.profile.id == id } ?: return
-        if (card.isTesting || !refreshingIds.add(id)) return
+        refreshProfile(card.profile, silent)
+    }
+
+    /**
+     * Probes the given profile directly instead of reading [_uiState.cards].
+     *
+     * This matters after saving: DataStore's `combine` may not have merged the
+     * new profile into the UI state yet, and probing the old invalid profile
+     * would leave `InvalidConfig` stuck on the card.
+     */
+    private fun refreshProfile(profile: ServerProfile, silent: Boolean) {
+        val config = profile.toConfig()
+        if (ServerEndpointValidator.parse(config).isFailure) {
+            probes.invalidate(profile.id)
+            _uiState.update { state ->
+                state.copy(
+                    cards = state.cards.map {
+                        if (it.profile.id == profile.id) {
+                            it.copy(
+                                isTesting = false,
+                                snapshot = null,
+                                error = ServerError.InvalidConfig,
+                                lastUpdatedAt = null,
+                            )
+                        } else {
+                            it
+                        }
+                    },
+                )
+            }
+            return
+        }
+        val generation = probes.start(profile.id, profile.endpointKey) ?: return
+        val card = _uiState.value.cards.firstOrNull { it.profile.id == profile.id }
         // 静默刷新保留徽章与按钮状态；只有手动刷新或首次无数据时才显示“检测中”。
-        val showTesting = !silent || card.snapshot == null
+        val showTesting = !silent || card?.snapshot == null
         if (showTesting) {
             _uiState.update { state ->
                 state.copy(
                     cards = state.cards.map {
-                        if (it.profile.id == id) it.copy(isTesting = true, error = null) else it
+                        if (it.profile.id == profile.id) {
+                            it.copy(isTesting = true, error = null)
+                        } else {
+                            it
+                        }
                     },
                 )
             }
         }
         viewModelScope.launch {
             try {
-                repository.check(card.profile.toConfig())
+                repository.check(config)
                 .onSuccess { snapshot ->
+                    if (!probes.isCurrent(profile.id, generation)) return@onSuccess
                     _uiState.update { state ->
                         state.copy(
                             cards = state.cards.map {
-                                if (it.profile.id == id) {
+                                if (it.profile.id == profile.id) {
                                     it.copy(
                                         isTesting = false,
                                         snapshot = snapshot,
@@ -103,10 +141,11 @@ class ServerViewModel(
                     }
                 }
                 .onFailure { throwable ->
+                    if (!probes.isCurrent(profile.id, generation)) return@onFailure
                     _uiState.update { state ->
                         state.copy(
                             cards = state.cards.map {
-                                if (it.profile.id == id) {
+                                if (it.profile.id == profile.id) {
                                     it.copy(isTesting = false, error = throwable.toServerError())
                                 } else {
                                     it
@@ -116,7 +155,7 @@ class ServerViewModel(
                     }
                 }
             } finally {
-                refreshingIds.remove(id)
+                probes.finish(profile.id, profile.endpointKey)
             }
         }
     }
@@ -294,8 +333,28 @@ class ServerViewModel(
                 }
                 profile
             }.onSuccess { profile ->
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    val existingCard = state.cards.firstOrNull { it.profile.id == profile.id }
+                    val updatedCard = (existingCard ?: ServerCardUi(
+                        profile = profile,
+                        isActive = activate,
+                    )).copy(
+                        profile = profile,
+                        isActive = existingCard?.isActive == true || activate,
+                        isTesting = false,
+                        snapshot = null,
+                        error = null,
+                        lastUpdatedAt = null,
+                    )
+                    val cards = if (existingCard == null) {
+                        state.cards + updatedCard
+                    } else {
+                        state.cards.map { card ->
+                            if (card.profile.id == profile.id) updatedCard else card
+                        }
+                    }
+                    state.copy(
+                        cards = cards,
                         formSaving = false,
                         formMode = ServerFormMode.None,
                         editingId = null,
@@ -305,7 +364,10 @@ class ServerViewModel(
                         expandedId = profile.id,
                     )
                 }
-                refreshCard(profile.id)
+                // DataStore/combine may not have merged this profile yet. Probe
+                // the newly saved endpoint directly so a corrected config can
+                // recover without waiting for another UI event.
+                refreshProfile(profile, silent = true)
             }.onFailure {
                 _uiState.update {
                     it.copy(formSaving = false, formError = ServerError.Unknown)
@@ -335,17 +397,23 @@ class ServerViewModel(
         val form = _uiState.value.form
         val host = form.host.trim()
         val port = form.port.trim().toIntOrNull()
+        val validPort = port != null && port in 1..65535
+        val hostCheck = if (host.isNotEmpty()) {
+            ServerEndpointValidator.parse(
+                scheme = form.scheme,
+                rawHost = host,
+                port = port?.takeIf { it in 1..65535 } ?: ServerConfig.DEFAULT_PORT,
+            )
+        } else {
+            null
+        }
 
         val hostError = when {
             host.isEmpty() -> ServerError.EmptyHost
-            host.any { it.isWhitespace() } || host.contains('/') || host.contains("://") -> {
-                ServerError.InvalidHost
-            }
-
-            host.count { it == ':' } == 1 && !host.startsWith("[") -> ServerError.InvalidHost
+            hostCheck?.isFailure == true -> ServerError.InvalidHost
             else -> null
         }
-        val portError = if (port == null || port !in 1..65535) {
+        val portError = if (!validPort) {
             ServerError.InvalidPort
         } else {
             null
@@ -358,15 +426,23 @@ class ServerViewModel(
             )
         }
 
-        if (hostError != null || portError != null || port == null) {
+        if (hostError != null || portError != null) {
             return null
         }
 
+        val endpoint = ServerEndpointValidator.parse(form.scheme, host, port!!)
+            .getOrNull()
+            ?: run {
+                _uiState.update {
+                    it.copy(form = it.form.copy(hostError = ServerError.InvalidHost))
+                }
+                return null
+            }
         return ServerConfig(
             name = form.name.trim().ifEmpty { ServerConfig.DEFAULT_NAME },
-            scheme = form.scheme,
-            host = host,
-            port = port,
+            scheme = endpoint.scheme,
+            host = endpoint.displayHost,
+            port = endpoint.port,
             avatarUri = form.avatarUri,
         )
     }
@@ -378,6 +454,8 @@ class ServerViewModel(
     }
 
     private fun Throwable.toServerError(): ServerError = when (this) {
+        is InvalidServerConfigException -> ServerError.InvalidConfig
+
         is UnknownHostException,
         is ConnectException,
         is NoRouteToHostException,

@@ -73,7 +73,7 @@ class AiPrivacySanitizer(
         val CJK_PROSE_AFTER_FILE = Regex(
             """\.[A-Za-z0-9]{1,12}(?:\s+[\u4e00-\u9fff][^\s\\/]*)+$""",
         )
-        val URL = Regex("""https?://[^\s，。；;]+""")
+        val URL = Regex("""https?://[^\s，。；;"}]+""")
         val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
         val IPV6 = Regex("""(?<![\w])\[[0-9a-fA-F:]+\](?![\w])""")
         val IPV6_BARE = Regex(

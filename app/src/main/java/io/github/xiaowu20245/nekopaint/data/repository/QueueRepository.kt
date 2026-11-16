@@ -7,6 +7,7 @@ import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.HistoryOperationDto
 import io.github.xiaowu20245.nekopaint.core.network.InterruptRequestDto
 import io.github.xiaowu20245.nekopaint.core.network.QueueOperationDto
+import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 import io.github.xiaowu20245.nekopaint.data.mapper.QueueMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -29,7 +30,7 @@ class QueueRepository(
             val config = serverConfigStore.config.first() ?: error("未配置服务器")
             QueueMapper.toHistoryEntries(
                 dto = apiFactory.create(config).history(maxItems),
-                baseUrl = config.baseUrl,
+                baseUrl = ServerEndpointValidator.require(config).baseUrl,
             )
         }
     }

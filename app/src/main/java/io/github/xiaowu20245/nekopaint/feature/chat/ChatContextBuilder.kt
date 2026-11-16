@@ -189,6 +189,7 @@ class ChatContextBuilder(
         ComfyConnectionState.Connecting -> "连接中"
         ComfyConnectionState.Reconnecting -> "重连中"
         ComfyConnectionState.Disconnected -> "离线"
+        ComfyConnectionState.InvalidConfig -> "配置无效"
     }
 
     private fun modeLabel(mode: WorkflowMode?): String = when (mode) {

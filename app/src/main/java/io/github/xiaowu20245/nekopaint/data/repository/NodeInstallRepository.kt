@@ -133,7 +133,14 @@ class NodeInstallRepository(
                 )
             }
 
-            val manager = apiFactory.createManager(config)
+            val manager = runCatching { apiFactory.createManager(config) }.getOrElse { error ->
+                return@withContext Result.failure(
+                    IllegalStateException(
+                        "服务器配置无效：${error.message ?: "请检查地址"}",
+                        error,
+                    ),
+                )
+            }
             val versionResponse = runCatching { manager.version() }.getOrElse { error ->
                 return@withContext Result.failure(
                     IllegalStateException("无法连接 ComfyUI-Manager：${error.message ?: "网络错误"}"),
@@ -202,8 +209,22 @@ class NodeInstallRepository(
         }
         val config = currentConfig()
             ?: return@withContext Result.failure(IllegalStateException("请先配置服务器"))
-        val manager = apiFactory.createManager(config)
-        val comfyApi = apiFactory.create(config)
+        val manager = runCatching { apiFactory.createManager(config) }.getOrElse { error ->
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "服务器配置无效：${error.message ?: "请检查地址"}",
+                    error,
+                ),
+            )
+        }
+        val comfyApi = runCatching { apiFactory.create(config) }.getOrElse { error ->
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "服务器配置无效：${error.message ?: "请检查地址"}",
+                    error,
+                ),
+            )
+        }
 
         val queued = mutableListOf<String>()
         val failures = mutableListOf<String>()

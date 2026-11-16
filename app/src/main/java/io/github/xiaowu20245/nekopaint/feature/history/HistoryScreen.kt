@@ -257,8 +257,11 @@ fun HistoryScreen(
         selectedIds = emptySet()
     }
 
-    LaunchedEffect(lifecycleOwner) {
+    LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (state.connection == ComfyConnectionState.InvalidConfig) {
+                return@repeatOnLifecycle
+            }
             delay(250)
             while (isActive) {
                 viewModel.refresh()
@@ -530,6 +533,8 @@ fun HistoryScreen(
 
             val errorMessage = state.error
             val statusNotice = when {
+                state.connection == ComfyConnectionState.InvalidConfig ->
+                    stringResource(R.string.history_config_invalid)
                 errorMessage != null -> stringResource(R.string.history_error, errorMessage)
                 state.connection != ComfyConnectionState.Connected ->
                     stringResource(R.string.history_stale)

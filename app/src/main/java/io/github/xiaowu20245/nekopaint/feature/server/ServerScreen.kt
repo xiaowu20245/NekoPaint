@@ -134,8 +134,16 @@ fun ServerScreen() {
         }
     }
 
-    LaunchedEffect(lifecycleOwner) {
+    LaunchedEffect(
+        lifecycleOwner,
+        state.activeCard?.profile?.id,
+        state.activeCard?.profile?.endpointKey,
+        state.activeCard?.error,
+    ) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (state.activeCard?.error == ServerError.InvalidConfig) {
+                return@repeatOnLifecycle
+            }
             delay(250)
             while (isActive) {
                 viewModel.refreshActive()
@@ -681,6 +689,8 @@ private fun ServerStatusBadge(card: ServerCardUi) {
     val text = when {
         card.isTesting -> stringResource(R.string.server_checking)
         card.isOnline -> stringResource(R.string.server_online)
+        card.error == ServerError.InvalidConfig ->
+            stringResource(R.string.server_config_invalid_status)
         card.error != null -> stringResource(R.string.server_offline)
         else -> stringResource(R.string.server_not_checked)
     }

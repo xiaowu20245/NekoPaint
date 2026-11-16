@@ -343,3 +343,163 @@ git diff --check
 - 独立验证：66 suites / 330 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - 允许提交第 2 批 commit 并进入第 3 批 CR-017。
 - 上表 B5-05、B6-08 和 B7-01～B7-05 均为低优先级残余，不阻断本批；复审建议进入第 3 批前优先处理 B7-02。
+
+---
+
+## 第 3 批：CR-017 服务器地址校验与 WebSocket 异常边界
+
+> 修复日期：2026-11-15
+> 分支：`fix/security-data-correctness`
+> 基于：第 2 批提交 `9c8ad0e`
+> 状态：已实现并完成 B8 复审修复与独立复核；**APPROVED**（`docs/FIX_REVIEW.md` 第 22 节）。第 3 批 commit 已提交。
+
+### 15. 范围与修改
+
+本轮处理：
+
+- CR-017：服务器 host 严格校验、IPv6 规范化与端口校验。
+- 旧 DataStore 非法配置的 `InvalidConfig` 终止状态。
+- WebSocket URL/请求创建异常边界，非法配置不进入无限重连。
+- 非法配置下停止 Queue/History/Server 自动远程刷新，保留本地缓存。
+- `ComfyApiFactory` 非法 base URL 的受控异常与调用点审计。
+- 第 2 批复审建议的 B7-02：URL 正则 JSON 边界与 tool arguments 嵌套 JSON 测试。
+
+新增生产文件：
+
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/core/network/ServerEndpointValidator.kt`
+- `app/src/main/java/io/github/xiaowu20245/nekopaint/data/repository/RemoteRefreshPolicy.kt`
+
+修改生产文件：
+
+- `core/model/ServerConfig.kt`
+- `core/network/AiPrivacySanitizer.kt`
+- `core/network/ComfyApiFactory.kt`
+- `core/network/ComfyWebSocketManager.kt`
+- `data/repository/NodeInstallRepository.kt`
+- `data/repository/QueueRepository.kt`
+- `data/repository/TaskManager.kt`
+- `feature/chat/ChatContextBuilder.kt`
+- `feature/history/HistoryScreen.kt`
+- `feature/queue/QueueScreen.kt`
+- `feature/server/ServerError.kt`
+- `feature/server/ServerScreen.kt`
+- `feature/server/ServerUiState.kt`
+- `feature/server/ServerViewModel.kt`
+- `res/values/strings.xml`
+
+新增测试：
+
+- `core/network/ServerEndpointValidatorTest.kt`
+- `core/network/ComfyApiFactoryTest.kt`
+- `data/repository/RemoteRefreshPolicyTest.kt`
+- `feature/server/ServerFormTest.kt`（补充非法 host 和 IPv6 规范化）
+- `core/network/AiPrivacySanitizerTest.kt`（补充 URL JSON 边界）
+- `core/network/AiAssistantClientPrivacyTest.kt`（补充 tool arguments 嵌套 URL）
+
+### 16. 实现说明
+
+#### 16.1 地址校验与模型
+
+- 新增 `ServerEndpointValidator`，只接受 `http`/`https`、合法端口 `1..65535`、合法 IPv4/域名/IPv6。
+- 拒绝空白、`/`、`\`、`#`、`?`、`@`、userinfo、不完整或重复 IPv6 方括号、单冒号 host、非法 IPv4 octet。
+- 裸 IPv6（如 `::1`、`fe80::1`）规范化为方括号形式；已带方括号的地址保持可用。
+- `ServerConfig.baseUrl` 保留为显示/兼容字符串，但明确标注可能对旧配置非法；网络代码统一走 `ServerEndpointValidator.require`。
+- `ServerForm.toConfigOrNull()` 和 `ServerViewModel.validateForm()` 共用 validator；保存时写入规范化 host。
+- 新增 `ServerError.InvalidConfig` 和对应文案；服务器卡片显示可编辑的配置错误。
+
+#### 16.2 WebSocket 与 API 工厂
+
+- `ComfyConnectionState` 增加 `InvalidConfig`。
+- `ComfyWebSocketManager.start()` 在进入重连循环前校验配置；非法配置直接进入 `InvalidConfig`，关闭旧 socket，不启动退避重连。
+- URL 构造、`Request.Builder`、`newWebSocket` 全部包在异常边界内；`CancellationException` 原样传播；非法 URL 归类为 `InvalidConfig`，其他创建失败进入 `Reconnecting`。
+- 修正 OkHttp WebSocket URL 语义：`HttpUrl` 只接受 `http`/`https`，实际请求使用 `http(s)://host:port/ws?clientId=...`，不再把 `ws://` 字符串交给 `Request.Builder`。
+- 配置 Flow 变化后重新校验；修正配置可自动恢复连接。
+- `ComfyApiFactory.create(config)` / `createManager(config)` 先验证 endpoint，非法时抛 `InvalidServerConfigException`；`create(baseUrl)` 同样校验 scheme/host/port/根路径。
+- `NodeInstallRepository` 的 `createManager` / `create` 裸调用补 `runCatching`，返回受控 `Result.failure`。
+- `QueueRepository` 的 history image base URL 使用已验证 endpoint。
+
+#### 16.3 自动刷新与 UI
+
+- 新增 `RemoteRefreshPolicy`；`TaskManager.refresh()` 对非法配置只加载本地任务，不调用 `queue()` / `history()`。
+- 非法配置下设置受控错误，保留上次队列/历史缓存，不清空本地记录。
+- `QueueScreen` / `HistoryScreen` 在 `InvalidConfig` 时停止自动轮询；`ServerScreen` 在活动卡片为 `InvalidConfig` 时停止 5 秒探测。
+- `QueueScreen` 无缓存且配置非法时显示配置错误空状态，不再永久转圈。
+- `HistoryScreen` 显示配置无效/上次数据提示；`ChatContextBuilder` 连接状态增加“配置无效”。
+- 其他 `taskManager.refresh()` 调用点（WorkflowDetail、Settings、ChatTaskAction）统一经过带守卫入口。
+
+#### 16.4 B7-02
+
+- `AiPrivacySanitizer.URL` 正则增加 `"`、`}` 边界，避免 URL 位于 JSON 字符串值末尾时吞掉结束引号；不移除 IPv6 URL 的 `]`。
+- 新增 sanitizer 纯函数测试、IPv6 URL JSON 测试和实际客户端 tool arguments 嵌套 JSON 解析测试。
+
+### 17. 测试与构建结果
+
+实际执行：
+
+```text
+.\gradlew.bat :app:testDebugUnitTest --rerun-tasks
+.\gradlew.bat :app:lintDebug --no-daemon
+.\gradlew.bat :app:assembleDebug
+git diff --check
+```
+
+结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| `:app:testDebugUnitTest --rerun-tasks` | **通过**：72 个测试套件，362 tests，0 failures，0 errors |
+| `:app:lintDebug --no-daemon` | **通过**：0 errors / 9 warnings / 3 hints |
+| `:app:assembleDebug` | **成功** |
+| `git diff --check` | **通过**（仅 LF/CRLF 提示，无空白错误） |
+
+新增测试数：32（第 3 批新增；第 2 批基线 330）。
+
+### 18. 手工验收
+
+模拟器 `emulator-5554`（Medium_Phone_API_37.0）：
+
+1. 服务器表单输入 `foo#bar`：显示“地址格式无效…”，保存被拦截。
+2. 输入 `[::1`：显示同一错误，保存被拦截。
+3. 输入裸 `::1` 并保存：卡片地址显示 `http://[::1]:8188/`，连接成功（模拟器可访问本机 ComfyUI）。
+4. 通过临时 instrumentation 写入旧非法配置 `foo#bar` 后重启：
+   - App 不崩溃；
+   - 服务器卡片显示“服务器配置无效，请编辑地址或端口”；
+   - 队列页显示“配置无效”和配置错误空状态，不再永久转圈；
+   - 历史页保持本地展示并提示远程刷新已暂停；
+   - 未出现持续 WebSocket 重连。
+5. 将同一配置改为 `127.0.0.1:8188` 并保存：卡片无需手动刷新即自动进入探测，随后恢复在线；Queue/History 自动刷新恢复。
+6. 临时 instrumentation 测试文件已删除，测试 APK 已卸载；未纳入提交。
+
+### 19. 已知限制与未解决项
+
+- 真实 ComfyUI 只验证了模拟器可访问的 `127.0.0.1` / `::1`；未覆盖真实局域网 HTTPS、自签名证书和公网反向代理。
+- B7-03（参数标记后可能保留第二个路径）、B7-04（既有 suspend provider 的 `runCatching` 取消语义）、B7-05（损坏 `servers_json` 退化为空快照）仍为低优先级残余。
+- B5-05（ViewModel 文案硬编码）、B6-08（跨设置页只测 fake store）继续作为低优先级记录。
+- B8-03（`ComfyWebSocketManager` 状态机仍缺自动化测试；已补 `ComfyWebSocketUrlTest`）、B8-07（`TaskManager` 的 `activeServerId` 与 `config` 分开读取）仍为低优先级残余。
+- `ServerConfig.baseUrl` 仍保留给显示/旧测试；网络入口已迁移到 validator，但未来新增调用方仍需遵守该约束。
+- 非法配置的持久化注入使用临时 instrumentation；正式回归建议后续增加可复用的 androidTest 或 debug 诊断入口。
+
+### 20. 独立复审结论
+
+- 初次第 3 批复审：**CONDITIONAL**（`docs/FIX_REVIEW.md` 第 20 节）。核心问题是保存非法配置修正后，ServerScreen 的 `refreshCard()` 可能读取尚未合并的旧 profile，导致 `InvalidConfig` 卡住。
+- 已修复 B8-01，并处理 B8-02/B8-04/B8-05/B8-06；B8-03/B8-07 继续作为低优先级残余。
+- 修复后：72 suites / 362 tests / 0 failures；lint 0 errors / 9 warnings / 3 hints；assemble 成功；`git diff --check` 通过。
+- 等待 B8 修复后的独立复审。
+
+### 21. 第 3 批复审修复（B8-01～B8-08）
+
+- **B8-01**：`ServerViewModel.saveAndConnect()` 保存成功后直接更新卡片状态并调用 `refreshProfile(profile)`，不再依赖 `_uiState.cards` 已合并；`combine` 使用 `mergeServerCard()`，endpoint 变化时清除旧 `InvalidConfig`/snapshot/时间；`ServerScreen` 轮询 effect key 增加 profile id 和 `endpointKey`。新增 `ServerCardMergeTest` 覆盖旧错误清理和同 endpoint 错误保留。模拟器复验：非法配置改为合法地址保存后，卡片自动从“配置无效”进入探测，无需手动刷新；设置 adb reverse 后 5 秒内自动在线。
+- **B8-02**：`AiPrivacySanitizer.URL` 不再排除 `]`，IPv6 URL 可完整脱敏；新增 IPv6 URL JSON 测试。
+- **B8-04**：`HistoryDetailScreen` 在 `InvalidConfig` 时跳过 10 秒刷新循环。
+- **B8-05**：服务器折叠卡片对 `ServerError.InvalidConfig` 显示“配置无效”，不再统一显示“离线”。
+- **B8-06**：`validateForm()` 独立校验 host 和 port，host 非法时不因端口也非法而被吞掉。
+- **B8-08**：`ServerViewModel` 使用 `ServerProbeTracker` 维护每个 server id 的检测 generation；保存新 endpoint 时旧在途检测结果会被判定为过期并丢弃，不再回写旧 profile/snapshot/error。新增 `ServerProbeTrackerTest` 覆盖新 endpoint 使旧 generation 失效、重复同 endpoint 不重复启动、invalidate 丢弃在途结果和 finish 后允许重试。
+- **B8-03/B8-07**：新增 `ComfyWebSocketUrlTest` 覆盖 http/https upgrade URL、clientId 编码和非法 endpoint；`ComfyWebSocketManager` 完整状态机测试仍作为低优先级残余，B8-07 仍低优先级。
+
+### 22. 独立复审结论
+
+- 第 3 批 B8-08 修复后独立复审：**APPROVED**（`docs/FIX_REVIEW.md` 第 22 节）。
+- 独立验证：72 suites / 362 tests / 0 failures / 0 errors；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- 允许提交第 3 批 commit 并进入第 4 批 CR-006。
+- 低优先级残余（不阻塞）：B9-01（A→B→A 快速回切时旧检测结果短暂写入，5 秒轮询自愈）、B9-02（缺 ViewModel 级检测回写测试）、B8-03（WebSocket 完整状态机测试）、B8-06（host/port 双错无直接 ViewModel 测试）、B8-07（`activeServerId`/`config` 分读）。
+- 第 3 批 commit 已提交为 `fix: 完善服务器地址校验与连接异常边界`。

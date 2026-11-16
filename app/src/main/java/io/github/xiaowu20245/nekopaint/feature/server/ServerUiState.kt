@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.feature.server
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
+import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 
 data class ServerForm(
     val name: String = ServerConfig.DEFAULT_NAME,
@@ -19,11 +20,14 @@ data class ServerForm(
         if (trimmedHost.isEmpty() || parsedPort == null || parsedPort !in 1..65535) {
             return null
         }
+        val endpoint = ServerEndpointValidator.parse(scheme, trimmedHost, parsedPort)
+            .getOrNull()
+            ?: return null
         return ServerConfig(
             name = name.trim().ifEmpty { ServerConfig.DEFAULT_NAME },
-            scheme = scheme,
-            host = trimmedHost,
-            port = parsedPort,
+            scheme = endpoint.scheme,
+            host = endpoint.displayHost,
+            port = endpoint.port,
             avatarUri = avatarUri,
         )
     }
@@ -51,6 +55,34 @@ data class ServerCardUi(
 ) {
     val isOnline: Boolean
         get() = snapshot != null && error == null
+}
+
+/**
+ * Merges a persisted profile into the existing card state.
+ *
+ * When the endpoint changes, errors and snapshots belong to the old endpoint
+ * and must not survive; otherwise a corrected invalid configuration could keep
+ * showing `InvalidConfig` and keep the 5-second probe disabled.
+ */
+internal fun mergeServerCard(
+    existing: ServerCardUi?,
+    profile: ServerProfile,
+    isActive: Boolean,
+): ServerCardUi {
+    if (existing == null) {
+        return ServerCardUi(profile = profile, isActive = isActive)
+    }
+    if (existing.profile.endpointKey != profile.endpointKey) {
+        return existing.copy(
+            profile = profile,
+            isActive = isActive,
+            isTesting = false,
+            snapshot = null,
+            error = null,
+            lastUpdatedAt = null,
+        )
+    }
+    return existing.copy(profile = profile, isActive = isActive)
 }
 
 enum class ServerFormMode {

@@ -14,6 +14,13 @@ data class ServerConfig(
     val avatarUri: String? = null,
 ) {
 
+    /**
+     * Display/legacy URL built from the raw fields.
+     *
+     * This value may be invalid for old persisted profiles. Network code must
+     * validate through `ServerEndpointValidator.require(config)` instead of
+     * passing this string directly to Retrofit or OkHttp.
+     */
     val baseUrl: String
         get() {
             val normalizedHost = when {

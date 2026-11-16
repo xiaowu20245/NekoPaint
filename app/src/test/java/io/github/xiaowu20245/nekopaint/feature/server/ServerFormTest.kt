@@ -33,4 +33,18 @@ class ServerFormTest {
 
         assertEquals(config, form.toConfigOrNull())
     }
+
+    @Test
+    fun toConfigOrNull_rejectsInvalidHostCharacters() {
+        val form = ServerForm(host = "foo#bar", port = "8188")
+
+        assertNull(form.toConfigOrNull())
+    }
+
+    @Test
+    fun toConfigOrNull_normalizesBareIpv6() {
+        val form = ServerForm(host = "::1", port = "8188")
+
+        assertEquals("[::1]", form.toConfigOrNull()?.host)
+    }
 }

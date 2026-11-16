@@ -105,6 +105,22 @@ class AiPrivacySanitizerTest {
     }
 
     @Test
+    fun redactsUrlAtEndOfJsonStringWithoutBreakingJsonStructure() {
+        val result = sanitizer.sanitize("""{"url":"https://example.com/a"}""")
+
+        assertEquals("""{"url":"<链接>"}""", result)
+    }
+
+    @Test
+    fun redactsIpv6UrlInJsonWithoutLeakingPortOrPath() {
+        val result = sanitizer.sanitize(
+            """{"url":"http://[fe80::1]:8188/view?filename=secret.png"}""",
+        )
+
+        assertEquals("""{"url":"<链接>"}""", result)
+    }
+
+    @Test
     fun awaitReadyReturnsFalseWhenHostProviderFails() = runTest {
         val failing = object : SensitiveHostProvider {
             override fun hosts(): Set<String> = emptySet()

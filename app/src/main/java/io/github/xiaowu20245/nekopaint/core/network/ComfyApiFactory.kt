@@ -12,22 +12,26 @@ class ComfyApiFactory(
     private val json: Json,
 ) {
 
-    fun create(config: ServerConfig): ComfyApi = create(config.baseUrl)
+    fun create(config: ServerConfig): ComfyApi = retrofit(ServerEndpointValidator.require(config))
 
-    fun create(baseUrl: String): ComfyApi = retrofit(baseUrl).create(ComfyApi::class.java)
+    fun create(baseUrl: String): ComfyApi = retrofit(ServerEndpointValidator.requireBaseUrl(baseUrl))
 
     fun createManager(config: ServerConfig): ComfyManagerApi =
-        createManager(config.baseUrl)
+        retrofitManager(ServerEndpointValidator.require(config))
 
     fun createManager(baseUrl: String): ComfyManagerApi =
-        retrofit(baseUrl).create(ComfyManagerApi::class.java)
+        retrofitManager(ServerEndpointValidator.requireBaseUrl(baseUrl))
 
-    private fun retrofit(baseUrl: String): Retrofit {
-        require(baseUrl.endsWith("/")) { "baseUrl must end with '/'" }
-        return Retrofit.Builder()
-            .baseUrl(baseUrl)
+    private fun retrofit(endpoint: ServerEndpoint): ComfyApi =
+        retrofitBuilder(endpoint).create(ComfyApi::class.java)
+
+    private fun retrofitManager(endpoint: ServerEndpoint): ComfyManagerApi =
+        retrofitBuilder(endpoint).create(ComfyManagerApi::class.java)
+
+    private fun retrofitBuilder(endpoint: ServerEndpoint): Retrofit =
+        Retrofit.Builder()
+            .baseUrl(endpoint.baseUrl)
             .client(okHttpClient)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-    }
 }

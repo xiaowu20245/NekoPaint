@@ -34,6 +34,7 @@ enum class ComfyConnectionState {
     Connecting,
     Connected,
     Reconnecting,
+    InvalidConfig,
 }
 
 data class NodeProgress(
@@ -105,7 +106,12 @@ class ComfyWebSocketManager(
                     _connection.value = ComfyConnectionState.Disconnected
                     return@collectLatest
                 }
-                connectLoop(config.baseUrl)
+                val endpoint = ServerEndpointValidator.parse(config).getOrNull()
+                if (endpoint == null) {
+                    _connection.value = ComfyConnectionState.InvalidConfig
+                    return@collectLatest
+                }
+                connectLoop(endpoint)
             }
         }
     }
@@ -118,12 +124,20 @@ class ComfyWebSocketManager(
         _connection.value = ComfyConnectionState.Disconnected
     }
 
-    private suspend fun connectLoop(baseUrl: String) {
+    private suspend fun connectLoop(endpoint: ServerEndpoint) {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive) {
             _connection.value = ComfyConnectionState.Connecting
-            val clientId = clientIdStore.getOrCreate()
-            val wsUrl = baseUrl.toWebSocketUrl(clientId)
+            val clientId = try {
+                clientIdStore.getOrCreate()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                _connection.value = ComfyConnectionState.Reconnecting
+                delay(backoffMs + Random.nextLong(0, 500))
+                backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
+                continue
+            }
             val connected = CompletableDeferred<Unit>()
             val closed = CompletableDeferred<Unit>()
 
@@ -155,10 +169,25 @@ class ComfyWebSocketManager(
                 }
             }
 
-            val ws = client.newWebSocket(
-                Request.Builder().url(wsUrl).build(),
-                listener,
-            )
+            val ws = try {
+                client.newWebSocket(
+                    Request.Builder().url(endpoint.webSocketUrl(clientId)).build(),
+                    listener,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (invalid: InvalidServerConfigException) {
+                _connection.value = ComfyConnectionState.InvalidConfig
+                return
+            } catch (invalid: IllegalArgumentException) {
+                _connection.value = ComfyConnectionState.InvalidConfig
+                return
+            } catch (_: Throwable) {
+                _connection.value = ComfyConnectionState.Reconnecting
+                delay(backoffMs + Random.nextLong(0, 500))
+                backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
+                continue
+            }
             socket = ws
 
             try {
@@ -181,14 +210,5 @@ class ComfyWebSocketManager(
                 }
             }
         }
-    }
-
-    private fun String.toWebSocketUrl(clientId: String): String {
-        val wsBase = when {
-            startsWith("https://") -> "wss://" + removePrefix("https://")
-            startsWith("http://") -> "ws://" + removePrefix("http://")
-            else -> this
-        }
-        return wsBase + "ws?clientId=$clientId"
     }
 }

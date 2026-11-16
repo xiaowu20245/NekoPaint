@@ -129,6 +129,14 @@ class TaskManager(
         refreshJob = scope.launch {
             val serverId = serverConfigStore.activeServerId.first()
                 ?: return@launch
+            val config = serverConfigStore.config.first()
+            if (!RemoteRefreshPolicy.shouldRefreshRemotely(config)) {
+                reloadTasks(serverId)
+                _queueError.value = "服务器配置无效，已暂停远程刷新"
+                _historyError.value = "服务器配置无效，已暂停远程刷新"
+                _refreshing.value = false
+                return@launch
+            }
             _refreshing.value = true
             reloadTasks(serverId)
             queueRepository.queue()

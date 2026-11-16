@@ -74,6 +74,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryMetadataExtractor
 import io.github.xiaowu20245.nekopaint.feature.history.durationText
 import kotlinx.coroutines.delay
@@ -109,6 +110,9 @@ fun QueueScreen(
 
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (state.connection == ComfyConnectionState.InvalidConfig) {
+                return@repeatOnLifecycle
+            }
             delay(250)
             while (isActive) {
                 viewModel.refresh()
@@ -136,13 +140,21 @@ fun QueueScreen(
 
             if (state.queue == null) {
                 item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(strokeWidth = 2.dp)
+                    if (state.connection == ComfyConnectionState.InvalidConfig) {
+                        NekoEmptyState(
+                            icon = Icons.Outlined.Warning,
+                            title = stringResource(R.string.queue_config_invalid_title),
+                            subtitle = stringResource(R.string.queue_config_invalid_desc),
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(strokeWidth = 2.dp)
+                        }
                     }
                 }
             } else {
@@ -266,6 +278,7 @@ private fun QueueStatusHeader(
         ComfyConnectionState.Connecting -> stringResource(R.string.queue_connection_connecting) to MaterialTheme.colorScheme.tertiary
         ComfyConnectionState.Reconnecting -> stringResource(R.string.queue_connection_reconnecting) to MaterialTheme.colorScheme.tertiary
         ComfyConnectionState.Disconnected -> stringResource(R.string.queue_connection_disconnected) to MaterialTheme.colorScheme.error
+        ComfyConnectionState.InvalidConfig -> stringResource(R.string.queue_connection_invalid_config) to MaterialTheme.colorScheme.error
     }
 
     Card(
@@ -372,7 +385,9 @@ private fun QueueStatusHeader(
                 )
             }
 
-            if (connection != ComfyConnectionState.Connected) {
+            if (connection != ComfyConnectionState.Connected &&
+                connection != ComfyConnectionState.InvalidConfig
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -391,12 +406,14 @@ private fun QueueStatusHeader(
                 }
             }
 
-            error?.let { message ->
-                Text(
-                    text = stringResource(R.string.queue_error, message),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+            if (connection != ComfyConnectionState.InvalidConfig) {
+                error?.let { message ->
+                    Text(
+                        text = stringResource(R.string.queue_error, message),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }

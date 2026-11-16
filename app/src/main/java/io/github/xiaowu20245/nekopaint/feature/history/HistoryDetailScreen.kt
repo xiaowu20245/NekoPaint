@@ -73,6 +73,7 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
+import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -139,8 +140,11 @@ fun HistoryDetailScreen(
         }
     }
 
-    LaunchedEffect(lifecycleOwner) {
+    LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (state.connection == ComfyConnectionState.InvalidConfig) {
+                return@repeatOnLifecycle
+            }
             delay(250)
             viewModel.refresh()
             // 页面可见期间保持刷新，直到找到记录或用户离开。

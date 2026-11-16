@@ -201,6 +201,7 @@
     <string name="queue_connection_connecting">连接中…</string>
     <string name="queue_connection_reconnecting">重连中…</string>
     <string name="queue_connection_disconnected">未连接</string>
+    <string name="queue_connection_invalid_config">配置无效</string>
     <string name="queue_running">运行中</string>
     <string name="queue_pending">等待中</string>
     <string name="queue_remaining">队列剩余：%1$d</string>
@@ -221,6 +222,8 @@
     <string name="queue_realtime_unavailable">实时连接不可用，正在定时轮询</string>
     <string name="queue_empty_title">当前队列空闲</string>
     <string name="queue_empty_desc">没有正在运行或等待中的任务，随时可发起新生成</string>
+    <string name="queue_config_invalid_title">服务器配置无效</string>
+    <string name="queue_config_invalid_desc">请到服务器页编辑地址或端口。当前不会自动重连或远程刷新。</string>
     <string name="queue_rate_label">%1$.1f it/s</string>
     <string name="queue_eta_label">预估剩余 %1$s</string>
     <string name="queue_batch_info">批次 %1$d / %2$d</string>
@@ -275,6 +278,7 @@
     <string name="history_empty_desc">完成或失败的任务会出现在这里。</string>
     <string name="history_error">无法刷新历史：%1$s</string>
     <string name="history_stale">显示的是上次成功获取的数据</string>
+    <string name="history_config_invalid">服务器配置无效，已暂停远程刷新</string>
     <string name="history_refresh">刷新历史</string>
     <string name="history_status_success">成功</string>
     <string name="history_status_failed">失败</string>
@@ -520,6 +524,7 @@
     <string name="server_online">在线</string>
     <string name="server_offline">离线</string>
     <string name="server_checking">连接中…</string>
+    <string name="server_config_invalid_status">配置无效</string>
     <string name="server_latency">%1$d ms</string>
     <string name="server_avatar_failed">无法读取所选图片</string>
     <string name="server_choose_icon">选择图标</string>
@@ -570,8 +575,9 @@
     <string name="server_collapse">收起</string>
 
     <string name="error_empty_host">请输入服务器地址</string>
-    <string name="error_invalid_host">地址不能包含空格、斜杠或协议前缀</string>
+    <string name="error_invalid_host">地址格式无效：不能包含空格、斜杠、#、?、反斜杠或不完整 IPv6 方括号</string>
     <string name="error_invalid_port">端口必须在 1–65535 之间</string>
+    <string name="error_invalid_config">服务器配置无效，请编辑地址或端口</string>
     <string name="error_unreachable">无法连接。请确认 ComfyUI 已启动、手机与电脑在同一网络，并检查防火墙是否放行端口。</string>
     <string name="error_timeout">连接超时。请检查 IP、端口和防火墙。</string>
     <string name="error_http">服务器返回错误，请查看 ComfyUI 控制台。</string>

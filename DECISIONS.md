@@ -99,6 +99,7 @@
 | D-035 | UI 工作流只读展示 + 旁路/分组开关，按需生成 API 变体 | 提议（待评估，暂不实施） |
 | D-036 | 外部词库本地 JSON、AI Key 用 Keystore 加密、AI 走 OpenAI 兼容 chat/completions | 已接受（V1.0 设置方案 A 实施） |
 | D-037 | 历史参数回填使用一次性内存中转，不直接覆盖已保存模板 | 已接受（V1.0 队列历史重构实施） |
+| D-062 | 服务器地址严格校验；旧非法配置进入 InvalidConfig，暂停自动重连与远程刷新 | 已接受（第 3 批 CR-017 实施） |
 
 ---
 
@@ -2104,6 +2105,40 @@ AI 助手会把提示词、用户选择的图片、任务摘要、错误信息�
 - 公网明文 HTTP AI 地址不再可用。
 - 本地 Ollama 等回环 HTTP 仍可用，但需要风险确认。
 - 第三方数据处理仍取决于服务商自身隐私政策。
+
+---
+
+## D-062 服务器地址严格校验与 InvalidConfig 断连语义
+
+- 状态：**已接受**
+- 日期：2026-11-15
+- 来源：`docs/CODE_REVIEW.md` CR-017
+
+### 背景
+
+服务器表单只做少量字符检查，`ServerConfig.baseUrl` 直接拼接字符串，WebSocket URL 构造在异常边界外；旧 DataStore 中的非法地址可能导致启动崩溃或无限重连。OkHttp 的 `HttpUrl` 只接受 `http`/`https`，直接传 `ws://` 会在 `Request.Builder.url()` 抛出未捕获异常。
+
+### 决策
+
+- 服务器 scheme 只允许 `http`/`https`，端口必须为 `1..65535`。
+- host 使用 `HttpUrl` 严格校验，拒绝空白、路径分隔符、`#`、`?`、userinfo、非法 IPv4、单冒号 host 和不完整 IPv6 方括号。
+- 裸 IPv6（`::1`、`fe80::1`）兼容并规范化为方括号形式保存。
+- 旧非法配置不删除；服务器页显示 `InvalidConfig`，用户可编辑修正。
+- `InvalidConfig` 为终止状态：不进入退避重连，不进行 Queue/History/Server 自动远程刷新；本地任务/历史缓存保留。
+- 网络临时失败仍进入 `Reconnecting` 并退避；配置修正后自动恢复连接和刷新。
+- OkHttp WebSocket 请求使用 `http(s)://host:port/ws?clientId=...`；不把 `ws`/`wss` 字符串交给 `HttpUrl`。
+- 所有网络入口通过 `ServerEndpointValidator`，`ComfyApiFactory` 非法地址返回受控异常。
+
+### 影响
+
+- 以前能保存的异常 host 将被拒绝；这是阻止崩溃和误连接的预期变化。
+- 旧非法配置升级后需要用户手动编辑一次，但不会丢失配置或本地历史。
+- 新增 `ComfyConnectionState.InvalidConfig`，所有连接状态消费方需要处理该分支。
+
+### 复审条件
+
+- 若未来支持服务器路径前缀、IPv6 zone id、自签名 HTTPS 或代理地址，需要重新评估校验规则。
+- 若引入新的网络入口，必须复用 validator，不能直接使用 `ServerConfig.baseUrl`。
 
 ---
 

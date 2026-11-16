@@ -70,7 +70,7 @@ class AiAssistantClientPrivacyTest {
                             AiToolCall(
                                 id = "call_2",
                                 name = "inspect_file",
-                                arguments = """{"path":"C:\\Users\\alice\\secret.png","host":"comfy.local","cfg":7}""",
+                                arguments = """{"path":"C:\\Users\\alice\\secret.png","host":"comfy.local","cfg":7,"url":"https://example.com/a"}""",
                             ),
                         ),
                     ),
@@ -102,6 +102,8 @@ class AiAssistantClientPrivacyTest {
             assertFalse(toolArguments.contains("secret.png"))
             assertFalse(toolArguments.contains("comfy.local"))
             assertTrue(toolArguments.contains("\"cfg\":7"))
+            val nestedArguments = json.parseToJsonElement(toolArguments).jsonObject
+            assertEquals("<链接>", nestedArguments["url"]?.jsonPrimitive?.content)
         }
     }
 
