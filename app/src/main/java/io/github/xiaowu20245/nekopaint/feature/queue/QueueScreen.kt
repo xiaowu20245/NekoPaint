@@ -577,12 +577,11 @@ private fun RunningCard(
                     }
 
                     // 当前节点与步数进度（微观）
-                    val nodeLabel = progress?.currentNodeLabel
-                        ?: progress?.currentNode
-                        ?: stringResource(R.string.queue_node_unknown)
+                    val nodeLabel = progress?.currentNodeLabel ?: progress?.currentNode
                     val value = progress?.value
                     val max = progress?.max
 
+                    if (nodeLabel != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -640,6 +639,7 @@ private fun RunningCard(
                             color = MaterialTheme.colorScheme.secondary,
                             trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         )
+                    }
                     }
 
                     // Performance Metrics / ETA / Rate

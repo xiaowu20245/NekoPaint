@@ -2,6 +2,10 @@ package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -170,6 +174,65 @@ class TaskStorePathTest {
         val loaded = TaskStore(filesDir, json).listAll().single()
 
         assertEquals("", loaded.serverId)
+    }
+
+    @Test
+    fun requestedPromptFieldsSurviveRoundTrip() = runTest {
+        val store = TaskStore(filesDir, json)
+        val record = record("p1", "server-a").copy(
+            status = TaskStatus.UNKNOWN,
+            requestedAt = 11L,
+            requestedPromptId = "requested-p1",
+            statusUpdatedAt = 12L,
+            statusSource = TaskStatusSource.LOCAL.name,
+        )
+
+        store.save("server-a", record)
+        val loaded = store.get("server-a", "p1")
+
+        assertEquals(TaskStatus.UNKNOWN, loaded?.status)
+        assertEquals(11L, loaded?.requestedAt)
+        assertEquals("requested-p1", loaded?.requestedPromptId)
+        assertEquals(12L, loaded?.statusUpdatedAt)
+        assertEquals(TaskStatusSource.LOCAL.name, loaded?.statusSource)
+    }
+
+    @Test
+    fun deleteRemovesRecordAndMissingDeleteSucceeds() = runTest {
+        val store = TaskStore(filesDir, json)
+        store.save("server-a", record("p1", "server-a"))
+
+        assertTrue(store.delete("server-a", "p1").isSuccess)
+        assertEquals(null, store.get("server-a", "p1"))
+        assertTrue(store.delete("server-a", "missing").isSuccess)
+    }
+
+    @Test
+    fun concurrentUpdateAndDeleteDoNotCorruptRecord() = runTest {
+        val store = TaskStore(filesDir, json)
+        coroutineScope {
+            (1..24).map { index ->
+                async(Dispatchers.Default) {
+                    if (index % 2 == 0) {
+                        store.save("server-a", record("p1", "server-a"))
+                    } else {
+                        store.delete("server-a", "p1")
+                    }
+                }
+            }.awaitAll()
+        }
+
+        val loaded = store.get("server-a", "p1")
+        if (loaded != null) {
+            assertEquals("p1", loaded.promptId)
+        }
+        assertTrue(store.list("server-a").all { it.promptId == "p1" })
+        assertTrue(
+            File(filesDir, "servers/server-a/tasks")
+                .listFiles()
+                .orEmpty()
+                .none { it.name.endsWith(".tmp") },
+        )
     }
 
     private fun record(promptId: String, serverId: String) = TaskRecord(

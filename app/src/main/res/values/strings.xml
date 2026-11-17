@@ -214,7 +214,6 @@
     <string name="queue_interrupt_confirm">确定中断这个任务吗？</string>
     <string name="queue_delete_confirm">确定从队列删除这个等待任务吗？</string>
     <string name="queue_current_node">当前节点：%1$s</string>
-    <string name="queue_node_unknown">等待节点信息</string>
     <string name="queue_task_own">本机任务</string>
     <string name="queue_task_other">其他客户端</string>
     <string name="queue_interrupt_other_confirm">这是其他客户端提交的任务。中断后对方也会停止，确定继续吗？</string>

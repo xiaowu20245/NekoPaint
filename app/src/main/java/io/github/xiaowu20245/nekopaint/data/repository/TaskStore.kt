@@ -52,6 +52,18 @@ class TaskStore private constructor(
         }
     }
 
+    suspend fun delete(serverId: String, promptId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                runCatching {
+                    val file = taskFile(serverId, promptId)
+                    if (file.exists() && !file.delete()) {
+                        error("任务记录删除失败")
+                    }
+                }
+            }
+        }
+
     private fun write(serverId: String, record: TaskRecord) {
         val dir = dirFor(serverId)
         dir.mkdirs()

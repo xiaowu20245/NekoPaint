@@ -19,4 +19,8 @@ data class TaskRecord(
     val currentNode: String? = null,
     val progressValue: Double? = null,
     val progressMax: Double? = null,
+    val requestedAt: Long? = null,
+    val requestedPromptId: String? = null,
+    val statusUpdatedAt: Long? = null,
+    val statusSource: String? = null,
 )

@@ -737,3 +737,45 @@ git diff --check
 - **手工验收**：API 37 模拟器离线服务器手动刷新；截图像素采样显示徽章背景从 danger 色切到 warning（检测中）并持续 4 帧，约 1.2 秒后才回到 danger（离线），不再瞬时闪一下。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 43 节）；87 suites / 466 tests、lint、assemble、diff check 与本地一致；S2-01～S2-03 为非阻塞低优先级残余。
 - 本次补充 commit 已提交为 `fix: 延长检测中状态的最短展示时间`（`23143a0`）。
+
+### 38. 第二轮第 1 批：共享契约 + CR-005/008/009（已复审 APPROVED）
+
+- **共享契约**：
+  - 新增 `TaskStatus`（submitting/unknown/queued/running/terminal）和 `TaskStatusSource`（DISK/LOCAL/WS/QUEUE/HISTORY）。
+  - `TaskRecord` 增加 `requestedAt/requestedPromptId/statusUpdatedAt/statusSource`，旧 JSON 默认兼容。
+  - 新增 `PromptSubmissionAttempt`/`AttemptState` 与可序列化 `ServerBinding`。
+  - 新增 `TaskRecordRepository` + `TaskRecordObserver` + `TaskRecordWriteState`：写 TaskStore 后通知内存读模型，写失败可见；recorder 不依赖 TaskManager。
+  - `TaskStore.delete(serverId, promptId)` 已实现。
+- **CR-005**：`ClientIdStore` 增加 `Mutex`，抽出 `ClientIdAllocator`；32 并发只写一次；空白 ID 重生成；写异常向上传递。`WorkflowRepository` 捕获 clientId 读取异常并返回明确 Error。
+- **CR-008**：`TaskStatusSyncPolicy` 改为“来源+时间”合并，不使用单一 rank；本地 `submitting/unknown` 不被旧磁盘 queued 覆盖；`reloadTasks` 合并 stored + live-only，不丢未写盘任务；队列/历史同步产生变更后通过 `TaskRecordRepository`/`TaskPersistenceQueue` 写盘；`success` 清空旧错误；TaskManager 注册 observer 同步内存读模型。
+- **CR-009**：新增 `TaskProgressPolicy`，`ProgressState` 的 `finished` 节点计入完成集合；`total=0` 时 `overallPercent=null`，不再生成假 `0/1`；running value/max 只作为当前节点分数。
+- **测试**：`ClientIdAllocatorTest`、`TaskStatusSyncPolicyTest`、`TaskProgressPolicyTest`、`TaskRecordRepositoryTest`、`TaskListSyncPolicyTest`、`TaskStorePathTest` 扩展 requested/delete/并发。
+- **R2B1 修复**：
+  - `TaskStatusSyncPolicy` 仅在 `useIncoming=true` 时采用 incoming 的 finishedAt/error/currentNode/progress；本地较新的终态元数据不被旧磁盘/历史回退。
+  - Observer 回调投递到 TaskManager scope，并在 `stateMutex` 内更新 `_tasks`；与 WS/queue/history 串行化。
+  - `TaskStore.delete` 使用同一写 Mutex；新增并发 update/delete 测试。
+  - 新增 `TaskManager.remove/replace`、`TaskRecordWriteState.Deleted` 和 observer 删除通知。
+  - `TaskRecordRepository.upsert` 归一化空白 serverId 后再通知 observer。
+  - `ProgressState` 全部 finished 时不再取最后一个节点伪装 running；新增 `TaskProgressPolicy.runningNode()` 测试。
+  - 新增 `TaskListSyncPolicy` 纯函数，覆盖 reload live-only、queue 变更只写一次、history 终态、observer 旧记录不覆盖 running。
+  - `TaskManager.updateTask` 缺失任务时从 repository 读取或构造 placeholder，保证 WS 先到不丢事件；`TaskListSyncPolicy.applyEvent` 覆盖 upsert。
+  - `TaskRecordRepository` 增加写 Mutex + sequence；`TaskRecordEventDispatcher` 单消费者按顺序投递 upsert/delete；TaskManager 丢弃过期 sequence。
+  - `TaskManager.remove/replace`、`TaskRecordWriteState.Deleted`、observer 删除通知；record serverId 始终归一化为存储 scope。
+  - `TaskProgressPolicy.finishing()` 清除 currentNode；QueueScreen 无 currentNode 时不再显示“未知节点”。
+  - `TaskRecordRepository` 增加删除 tombstone：delete 后同一 serverId+promptId 的旧 upsert 被拒绝；不同 promptId 可正常写入。
+  - `TaskManager.remove/replace` 改为走 repository delete/upsert，由 sequence/dispatcher 统一排序；replace 不再直接改内存。
+  - 新增 `TaskRecordSequenceGate`；TaskManager 只接受递增 sequence，防止迟到事件复活/覆盖。
+  - QueueScreen 无 currentNode 时隐藏整个节点步骤行/细进度条，`finishing()` 同时清空 value/max。
+  - `updateTask` 对未知任务：仅当队列项属于本机 clientId 时构造内存 placeholder，且不持久化空 template；完整记录仍由预写/队列/历史补齐。
+  - `TaskRecordEventDispatcher` 增加 `flush()`/`close()`/超时；`TaskRecordEventCoordinator` 抽出可测的 observer/update/remove/replace 协调器，remove/replace 返回前等待内存消费；replace 同 promptId 直接拒绝。
+  - `TaskManager` WS 事件路径使用 `updateTaskLocked()`（调用方已持 stateMutex），避免 coordinator 再次加锁导致非重入死锁；新增持锁调用测试。
+  - 未知 clientId/队列未到的事件先进入最多 256 条的 pending 缓冲，待 clientId/队列证据到达后重放；不再直接放行外部事件，也不丢本机事件。
+  - 服务器切换清理 pending；dispatcher 关闭/超时返回 false，remove/replace 返回明确失败。
+  - clientId 缺失/本机 ID 未加载时不再丢本机 WS 事件；只有双方 ID 都已知且不同才过滤。
+  - tombstone 语义定为 v1 同 promptId 不允许重建，使用新 attempt ID；tombstone 仅进程内，重启自然清理。
+  - **R2B1f 修复**：已确认外部 clientId 事件直接丢弃，不占 pending；remove/replace 清理对应 pending；flushPendingUpdates 检查 tombstone + 30s TTL；unknown pending 上限 256；clientId/队列证据到达后重放。
+  - **R2B1g 修复**：pending map 所有增删/遍历统一 `pendingLock` 保护；新增 5s 周期 prune 与手动 `prunePending`；外部事件在 stored 存在时也检查；新增 external+stored、prune、pending 并发/持锁测试。
+  - **R2B1f 修复**：`TaskRecordEventDispatcher.closed` 改 `@Volatile`；`TaskManager.shutdown()` 关闭 coordinator/dispatcher；flush 超时返回“磁盘已写、内存同步未完成（可安全重试）”；新增外部事件丢弃、删除后 pending 拒绝、TTL、flush 超时/close 测试。
+- **验证**：95 suites / 519 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 54 节）；R2B1h-01～R2B1h-04 为非阻塞低优先级残余。
+- **说明**：本批不包含 2B 的预写/unknown 提交路径、Chat、Node install；这些按计划后续批次接入。

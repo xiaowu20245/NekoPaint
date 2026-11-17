@@ -7,7 +7,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
-import java.util.UUID
 
 private val Context.clientIdDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "client_identity",
@@ -16,14 +15,12 @@ private val Context.clientIdDataStore: DataStore<Preferences> by preferencesData
 class ClientIdStore(context: Context) {
 
     private val dataStore = context.clientIdDataStore
+    private val allocator = ClientIdAllocator(
+        read = { dataStore.data.first()[Key] },
+        write = { created -> dataStore.edit { it[Key] = created } },
+    )
 
-    suspend fun getOrCreate(): String {
-        val existing = dataStore.data.first()[Key]
-        if (!existing.isNullOrBlank()) return existing
-        val created = UUID.randomUUID().toString()
-        dataStore.edit { it[Key] = created }
-        return created
-    }
+    suspend fun getOrCreate(): String = allocator.getOrCreate()
 
     private companion object {
         val Key = stringPreferencesKey("client_id")

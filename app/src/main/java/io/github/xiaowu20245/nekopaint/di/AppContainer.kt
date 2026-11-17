@@ -28,6 +28,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.ServerRepository
 import io.github.xiaowu20245.nekopaint.data.repository.ServerAvatarStore
 import io.github.xiaowu20245.nekopaint.data.repository.ServerSensitiveHostProvider
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
+import io.github.xiaowu20245.nekopaint.data.repository.TaskRecordRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatHistoryStore
@@ -135,6 +136,7 @@ class AppContainer(context: Context) {
     val mediaCacheManager = MediaCacheManager(context.applicationContext, imageShareManager)
 
     val taskStore = TaskStore(context.applicationContext, json)
+    val taskRecordRepository = TaskRecordRepository(taskStore)
     val historyStore = HistoryStore(context.applicationContext, json)
     val modelCatalogStore = ModelCatalogStore(context.applicationContext, json)
     val modelsRepository = ModelsRepository(
@@ -154,6 +156,7 @@ class AppContainer(context: Context) {
 
     val taskManager = TaskManager(
         taskStore = taskStore,
+        taskRecordRepository = taskRecordRepository,
         historyStore = historyStore,
         queueRepository = queueRepository,
         webSocketManager = webSocketManager,

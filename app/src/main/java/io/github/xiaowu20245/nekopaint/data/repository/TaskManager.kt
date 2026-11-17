@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 
 class TaskManager(
     private val taskStore: TaskStore,
+    private val taskRecordRepository: TaskRecordRepository,
     private val historyStore: HistoryStore,
     private val queueRepository: QueueRepository,
     private val webSocketManager: ComfyWebSocketManager,
@@ -99,10 +100,23 @@ class TaskManager(
     private var identityGeneration = 0L
 
     private val stateMutex = Mutex()
+    val taskRecordWriteState: StateFlow<TaskRecordWriteState> = taskRecordRepository.writeState
+    private val taskEventCoordinator = TaskRecordEventCoordinator(
+        scope = scope,
+        repository = taskRecordRepository,
+        stateMutex = stateMutex,
+        tasks = _tasks,
+        currentServerId = { currentSnapshot?.identity?.serverId },
+        localClientId = { _localClientId.value },
+        queueSnapshot = { _queue.value },
+        persist = ::persistTask,
+    )
     private val taskPersistenceQueue = TaskPersistenceQueue(
         scope = scope,
         isCurrent = ::isCurrent,
-        writer = { serverId, record -> taskStore.update(serverId, record) },
+        writer = { serverId, record ->
+            taskRecordRepository.upsert(serverId, record).getOrThrow()
+        },
         onWriteError = { serverId, record, throwable ->
             AppLog.w("task persist failed: $serverId/${record.promptId}", throwable)
         },
@@ -114,6 +128,7 @@ class TaskManager(
     init {
         scope.launch {
             _localClientId.value = runCatching { clientIdStore.getOrCreate() }.getOrNull()
+            taskEventCoordinator.flushPendingUpdates()
         }
         scope.launch {
             combine(
@@ -254,6 +269,7 @@ class TaskManager(
         _queueRemaining.value = 0
         _progress.value = emptyMap()
         executedNodeIds.clear()
+        taskEventCoordinator.clearPendingUpdates()
         _queueError.value = null
         _historyError.value = null
         _actionError.value = null
@@ -278,6 +294,7 @@ class TaskManager(
      */
     suspend fun shutdown() {
         taskPersistenceQueue.shutdown()
+        taskEventCoordinator.close()
         scope.cancel()
     }
 
@@ -313,6 +330,7 @@ class TaskManager(
                         // 队列快照到达后才知道工作流节点总数，重算一次总进度。
                         refreshOverallProgress()
                     }
+                    taskEventCoordinator.flushPendingUpdates()
                 }
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
@@ -541,18 +559,7 @@ class TaskManager(
     ) {
         val stored = runCatching { taskStore.list(serverId) }.getOrNull() ?: return
         withCurrentState(identity, generation) {
-            _tasks.update { current ->
-                val currentById = current.associateBy { it.promptId }
-                stored.map { record ->
-                    val live = currentById[record.promptId]
-                    // 内存中的状态可能比磁盘文件更新，取更靠后的状态但保留新提交的任务。
-                    if (live != null && statusRank(live.status) >= statusRank(record.status)) {
-                        live
-                    } else {
-                        record
-                    }
-                }.sortedByDescending { it.submittedAt }
-            }
+            _tasks.value = TaskListSyncPolicy.reload(stored, _tasks.value)
         }
     }
 
@@ -607,8 +614,9 @@ class TaskManager(
             }
 
             is ComfyEvent.ProgressState -> {
-                val running = event.nodes.firstOrNull { it.state == "running" }
-                    ?: event.nodes.lastOrNull()
+                val completed = executedNodeIds.getOrPut(event.promptId) { mutableSetOf() }
+                TaskProgressPolicy.recordProgressState(completed, event.nodes)
+                val running = TaskProgressPolicy.runningNode(event.nodes)
                 if (running != null) {
                     val label = nodeLabel(event.promptId, running.nodeId)
                     _progress.update { current ->
@@ -620,6 +628,24 @@ class TaskManager(
                                 currentNodeLabel = label,
                                 value = running.value,
                                 max = running.max,
+                            )
+                            )
+                    }
+                } else {
+                    // 全部节点已 finished 时不要继续显示旧 currentNode；
+                    // 保留完成数/百分比，等待 Success 事件移除进度。
+                    _progress.update { current ->
+                        val old = current[event.promptId] ?: return@update current
+                        current + (
+                            event.promptId to TaskProgressPolicy.finishing(
+                                buildProgress(
+                                    promptId = event.promptId,
+                                    status = old.status,
+                                    currentNode = null,
+                                    currentNodeLabel = null,
+                                    value = old.value,
+                                    max = old.max,
+                                ),
                             )
                             )
                     }
@@ -685,16 +711,12 @@ class TaskManager(
         max: Double?,
     ): TaskProgress {
         val completed = executedNodeIds[promptId]?.size ?: 0
-        val workflowTotal = totalNodeCount(promptId)
-        val total = if (workflowTotal > 0) workflowTotal else maxOf(completed + 1, 1)
+        val total = totalNodeCount(promptId)
         val nodeFraction = if (max != null && max > 0) {
             ((value ?: 0.0) / max).coerceIn(0.0, 1.0)
         } else {
             0.0
         }
-        val overallPercent = ((completed + nodeFraction) / total)
-            .toFloat()
-            .coerceIn(0f, 1f)
         return TaskProgress(
             promptId = promptId,
             status = status,
@@ -704,7 +726,11 @@ class TaskManager(
             max = max,
             completedNodes = completed,
             totalNodes = total,
-            overallPercent = overallPercent,
+            overallPercent = TaskProgressPolicy.overallPercent(
+                completed = completed,
+                runningFraction = nodeFraction,
+                total = total,
+            ),
         )
     }
 
@@ -749,70 +775,53 @@ class TaskManager(
     }
 
     private fun syncTasksWithQueue(snapshot: QueueSnapshot) {
-        val running = snapshot.running.map { it.promptId }.toSet()
-        val pending = snapshot.pending.map { it.promptId }.toSet()
-        _tasks.update { tasks ->
-            tasks.map { task ->
-                when (task.promptId) {
-                    in running -> if (task.status != "running") {
-                        task.copy(status = "running", startedAt = task.startedAt ?: System.currentTimeMillis())
-                    } else {
-                        task
-                    }
-
-                    in pending -> if (task.status == "queued") task else task.copy(status = "queued")
-                    else -> task
-                }
-            }
-        }
+        val result = TaskListSyncPolicy.applyQueue(
+            tasks = _tasks.value,
+            snapshot = snapshot,
+            now = System.currentTimeMillis(),
+        )
+        _tasks.value = result.tasks
+        result.changed.forEach(::persistTask)
     }
 
     private fun syncTasksWithHistory(entries: List<HistoryEntry>) {
-        val byId = entries.associateBy { it.promptId }
-        _tasks.update { tasks ->
-            tasks.map { task ->
-                val entry = byId[task.promptId] ?: return@map task
-                val status = when (entry.status) {
-                    "success" -> "success"
-                    "failed" -> "failed"
-                    "interrupted" -> "interrupted"
-                    else -> task.status
-                }
-                if (status == task.status) {
-                    task
-                } else {
-                    task.copy(
-                        status = status,
-                        startedAt = task.startedAt ?: entry.startedAt,
-                        finishedAt = entry.finishedAt ?: entry.timestamp ?: task.finishedAt,
-                        errorMessage = entry.errorMessage ?: task.errorMessage,
-                    )
-                }
-            }
-        }
+        val result = TaskListSyncPolicy.applyHistory(
+            tasks = _tasks.value,
+            entries = entries,
+            now = System.currentTimeMillis(),
+        )
+        _tasks.value = result.tasks
+        result.changed.forEach(::persistTask)
     }
 
-    private fun updateTask(promptId: String, transform: (TaskRecord) -> TaskRecord) {
-        var updated: TaskRecord? = null
-        _tasks.update { tasks ->
-            tasks.map { task ->
-                if (task.promptId == promptId) {
-                    transform(task).also { updated = it }
-                } else {
-                    task
-                }
-            }
-        }
-        updated?.let { record ->
-            // 任务记录从创建起就带 serverId；旧数据兜底到默认服务器。
-            val identity = currentSnapshot?.identity
-            val generation = identityGeneration
-            val serverId = record.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID }
-            if (identity != null) {
-                taskPersistenceQueue.enqueue(serverId, record, identity, generation)
-            }
-        }
+    private suspend fun updateTask(
+        promptId: String,
+        source: TaskStatusSource = TaskStatusSource.WS,
+        transform: (TaskRecord) -> TaskRecord,
+    ) {
+        // 调用方（WS events.collect）已持有 stateMutex；使用无锁版本避免非重入死锁。
+        taskEventCoordinator.updateTaskLocked(
+            promptId = promptId,
+            source = source,
+            transform = transform,
+        )
     }
+
+    private fun persistTask(record: TaskRecord) {
+        val identity = currentSnapshot?.identity ?: return
+        val generation = identityGeneration
+        val serverId = record.serverId.ifBlank { ServerConfigStore.DEFAULT_SERVER_ID }
+        taskPersistenceQueue.enqueue(serverId, record, identity, generation)
+    }
+
+    suspend fun remove(promptId: String, serverId: String): Result<Unit> =
+        taskEventCoordinator.remove(serverId, promptId)
+
+    suspend fun replace(
+        serverId: String,
+        oldPromptId: String,
+        record: TaskRecord,
+    ): Result<Unit> = taskEventCoordinator.replace(serverId, oldPromptId, record)
 
     private fun nodeLabel(promptId: String, nodeId: String?): String? {
         if (nodeId == null) return null
@@ -821,12 +830,6 @@ class TaskManager(
             .firstOrNull { it.promptId == promptId }
             ?.nodeTitles
             ?.get(nodeId)
-    }
-
-    private fun statusRank(status: String): Int = when (status) {
-        "running" -> 1
-        "success", "failed", "interrupted" -> 2
-        else -> 0
     }
 
     private companion object {

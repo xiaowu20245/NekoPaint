@@ -375,7 +375,11 @@ class WorkflowRepository(
             )
         }
 
-        val clientId = clientIdStore.getOrCreate()
+        val clientId = runCatching { clientIdStore.getOrCreate() }.getOrElse { throwable ->
+            return@withContext WorkflowSubmitResult.Error(
+                "无法读取客户端标识：${throwable.message ?: "本地存储异常"}",
+            )
+        }
         val requestedPromptId = UUID.randomUUID().toString()
         val api = runCatching { apiFactory.create(config) }.getOrElse { throwable ->
             return@withContext WorkflowSubmitResult.Error(
