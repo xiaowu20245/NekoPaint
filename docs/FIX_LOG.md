@@ -835,4 +835,5 @@ git diff --check
 - 测试：新增 `PromptSubmissionPolicyTest`、`PendingSubmissionRecoveryPolicyTest`、`WorkflowSubmitPersistenceTest`（16 项：预写失败不发 POST、成功预写→queued、IO unknown、429 同 ID 重试、5xx 重试后 unknown、400 不重试、响应 ID 迁移、迁移删除失败 warning、迁移后拒绝重试、superseded 标记拒绝重试、新记录落盘失败标记旧记录、迁移新记录用 new ID 重试并保留映射、旧记录被新记录阻断、空响应 unknown、最终落盘失败 warning、unknown 同 ID 重试）、`WorkflowsViewModelTest`、`WorkflowDetailOperationPolicyTest`、`QueuePendingRetryControllerTest`、`PendingRecheckPolicyTest`、`HistoryLookupPolicyTest`、`QueueMigrationPolicyTest`、`QueueDiagnosticsPolicyTest`、`ChatTaskActionBatchRetryTest`；`TaskListSyncPolicyTest` 增加 unknown 在队列/历史命中后升级、reload 超时归一化、superseded 合并（共 9 项）；`TaskRecordRepositoryTest` 增加归一化落盘与原子 `prepareRetry`（含反向迁移）。
 - 验证：107 suites / 591 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；`git diff --check` 通过。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 64 节）；R2B4/R2B5 的迁移 ID 与映射问题已在六轮复审核对闭环。
+- 第二轮第 2B 批 commit 已提交为 `fix: 提交幂等与本地任务记录`（`ee106d2`）。
 - 未包含：Chat confirm、Node install（按计划留第 4/5 批）；unknown-only 记录在队列页展示，历史页仅在存在匹配 history entry 时显示任务状态。
