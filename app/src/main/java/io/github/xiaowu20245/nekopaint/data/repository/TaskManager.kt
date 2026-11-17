@@ -298,6 +298,66 @@ class TaskManager(
         scope.cancel()
     }
 
+    /**
+     * 定向检查一个本地 pending prompt：队列 + `/history/{promptId}`。
+     *
+     * 返回 true 表示服务器队列或历史已命中；false 表示未找到，可进入同 ID 重试。
+     * 不依赖最近一页 history，避免 unknown 恢复被分页遗漏。
+     */
+    suspend fun recheckPending(promptId: String): Result<Boolean> {
+        val snapshot = currentSnapshot
+            ?: return Result.failure(IllegalStateException("没有活动服务器"))
+        val identity = snapshot.identity
+        if (isBlocked(identity)) {
+            return Result.failure(IllegalStateException("服务器缓存身份未知，请重新添加服务器"))
+        }
+        val generation = identityGeneration
+        val serverId = identity.serverId
+        val config = snapshot.config
+
+        return PendingRecheckPolicy.recheck(
+            promptId = promptId,
+            loadQueue = { queueRepository.queue(config) },
+            loadHistory = { queueRepository.historyItem(promptId, config) },
+            applyQueue = { queueSnapshot ->
+                withCurrentState(identity, generation) {
+                    _queue.value = queueSnapshot
+                    _queueError.value = null
+                    syncTasksWithQueue(queueSnapshot)
+                }
+            },
+            applyHistory = { entry ->
+                val scoped = entry.copy(serverId = serverId)
+                withCurrentState(identity, generation) {
+                    val previous = _history.value
+                    val merged = mergeHistory(previous, listOf(scoped))
+                    _history.value = merged
+                    syncTasksWithHistory(listOf(scoped))
+                    if (previous != merged) {
+                        historyStore.save(serverId, merged)
+                    }
+                }
+            },
+            markNotFound = {
+                // 定向查询也未找到：若仍是刚预写的 submitting，且已超过阈值，则降级 unknown。
+                withCurrentState(identity, generation) {
+                    val stored = taskStore.get(serverId, promptId)
+                    if (stored != null && stored.status == TaskStatus.SUBMITTING) {
+                        val normalized = PendingSubmissionRecoveryPolicy.normalize(
+                            record = stored,
+                            now = System.currentTimeMillis(),
+                        )
+                        if (normalized != stored) {
+                            taskRecordRepository.upsert(serverId, normalized)
+                        }
+                    }
+                }
+            },
+        ).also {
+            taskEventCoordinator.flushPendingUpdates()
+        }
+    }
+
     fun refresh() {
         if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
@@ -558,8 +618,18 @@ class TaskManager(
         generation: Long,
     ) {
         val stored = runCatching { taskStore.list(serverId) }.getOrNull() ?: return
+        val reloaded = TaskListSyncPolicy.reloadWithRecovery(
+            stored = stored,
+            live = _tasks.value,
+            now = System.currentTimeMillis(),
+        )
         withCurrentState(identity, generation) {
-            _tasks.value = TaskListSyncPolicy.reload(stored, _tasks.value)
+            _tasks.value = reloaded.tasks
+        }
+        if (isCurrent(identity, generation)) {
+            reloaded.changed.forEach { record ->
+                taskRecordRepository.upsert(serverId, record)
+            }
         }
     }
 

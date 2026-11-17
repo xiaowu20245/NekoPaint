@@ -60,6 +60,7 @@ sealed interface WorkflowActionNotice {
         val name: String,
         val count: Int,
         val failed: Int = 0,
+        val unknown: Int = 0,
         val skipped: Int = 0,
     ) : WorkflowActionNotice
 }
@@ -205,6 +206,7 @@ class WorkflowsViewModel(
                         name = name,
                         count = operation.success,
                         failed = operation.failed,
+                        unknown = operation.unknown,
                         skipped = operation.skipped,
                     )
                 } else {
@@ -217,8 +219,13 @@ class WorkflowsViewModel(
                 } else {
                     null
                 },
-                errorDetail = operation.message
-                    ?.takeIf { operation.failed > 0 || operation.skipped > 0 },
+                errorDetail = operation.localRecordWarning ?: operation.message
+                    ?.takeIf {
+                        operation.failed > 0 ||
+                            operation.unknown > 0 ||
+                            operation.skipped > 0 ||
+                            operation.status == OperationStatus.UNKNOWN
+                    },
             )
         }
         if (operation.success > 0) {

@@ -70,6 +70,7 @@ object TaskStatusSyncPolicy {
             },
             requestedAt = incoming.requestedAt ?: local.requestedAt,
             requestedPromptId = incoming.requestedPromptId ?: local.requestedPromptId,
+            supersededBy = incoming.supersededBy ?: local.supersededBy,
             statusUpdatedAt = chosenTime,
             statusSource = chosenSource.name,
         )

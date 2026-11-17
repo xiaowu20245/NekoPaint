@@ -128,6 +128,101 @@ class TaskRecordRepositoryTest {
     }
 
     @Test
+    fun prepareRetryRejectsRecordAlreadyQueued() = runTest {
+        repository.upsert("server-a", record("p1"))
+        repository.upsert("server-a", record("p1").copy(status = TaskStatus.QUEUED))
+
+        val result = repository.prepareRetry("server-a", record("p1"))
+
+        assertTrue(result.isFailure)
+        assertEquals(TaskStatus.QUEUED, repository.get("server-a", "p1")?.status)
+    }
+
+    @Test
+    fun prepareRetryRejectsSupersededOrMigratedRecord() = runTest {
+        repository.upsert("server-a", record("old"))
+        repository.upsert(
+            "server-a",
+            record("new").copy(
+                status = TaskStatus.QUEUED,
+                requestedPromptId = "old",
+            ),
+        )
+
+        val result = repository.prepareRetry("server-a", record("old"))
+
+        assertTrue(result.isFailure)
+        assertEquals(TaskStatus.SUBMITTING, repository.get("server-a", "old")?.status)
+        assertNull(repository.get("server-a", "old")?.supersededBy)
+    }
+
+    @Test
+    fun prepareRetryRejectsPersistedSupersededMarker() = runTest {
+        repository.upsert(
+            "server-a",
+            record("old").copy(
+                status = TaskStatus.UNKNOWN,
+                supersededBy = "new",
+            ),
+        )
+
+        val result = repository.prepareRetry("server-a", record("old"))
+
+        assertTrue(result.isFailure)
+        assertEquals("new", repository.get("server-a", "old")?.supersededBy)
+    }
+
+    @Test
+    fun prepareRetryDoesNotTreatMigratedNewRecordAsPointingBackToOld() = runTest {
+        repository.upsert("server-a", record("old"))
+        repository.upsert(
+            "server-a",
+            record("new").copy(
+                status = TaskStatus.UNKNOWN,
+                requestedPromptId = "old",
+            ),
+        )
+
+        val result = repository.prepareRetry(
+            "server-a",
+            record("new").copy(
+                status = TaskStatus.SUBMITTING,
+                requestedPromptId = "old",
+            ),
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(TaskStatus.SUBMITTING, repository.get("server-a", "new")?.status)
+    }
+
+    @Test
+    fun prepareRetryAllowsUnknownRecord() = runTest {
+        repository.upsert("server-a", record("p1").copy(status = TaskStatus.UNKNOWN))
+
+        val result = repository.prepareRetry("server-a", record("p1"))
+
+        assertTrue(result.isSuccess)
+        assertEquals(TaskStatus.SUBMITTING, repository.get("server-a", "p1")?.status)
+    }
+
+    @Test
+    fun reloadRecoveryPersistsNormalizedUnknown() = runTest {
+        repository.upsert("server-a", record("p1"))
+        val stored = repository.list("server-a")
+
+        val reloaded = TaskListSyncPolicy.reloadWithRecovery(
+            stored = stored,
+            live = emptyList(),
+            now = 40_000L,
+        )
+        reloaded.changed.forEach { record ->
+            assertTrue(repository.upsert("server-a", record).isSuccess)
+        }
+
+        assertEquals(TaskStatus.UNKNOWN, repository.get("server-a", "p1")?.status)
+    }
+
+    @Test
     fun writeFailureIsVisibleInState() = runTest {
         val target = File(filesDir, "servers/server-a/tasks/p1.json")
         target.mkdirs()

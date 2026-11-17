@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
+import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
@@ -25,6 +26,7 @@ import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -55,6 +57,7 @@ sealed interface WorkflowSubmitResult {
     data class Success(
         val promptId: String,
         val queueNumber: Int?,
+        val localRecordWarning: String? = null,
     ) : WorkflowSubmitResult
 
     data class Validation(
@@ -64,23 +67,63 @@ sealed interface WorkflowSubmitResult {
 
     data object NoServer : WorkflowSubmitResult
 
+    data class Unknown(
+        val promptId: String,
+        val message: String,
+    ) : WorkflowSubmitResult
+
     data class Error(val message: String) : WorkflowSubmitResult
 }
 
-class WorkflowRepository(
-    context: Context,
-    private val json: Json,
-    private val apiFactory: ComfyApiFactory,
-    private val serverConfigStore: ServerConfigStore,
-    private val clientIdStore: ClientIdStore,
-    private val taskStore: TaskStore,
+internal data class WorkflowRepositoryDependencies(
+    val appContext: Context?,
+    val json: Json,
+    val templateStore: WorkflowTemplateStore,
+    val configProvider: suspend () -> ServerConfig?,
+    val activeServerIdProvider: suspend () -> String?,
+    val clientIdProvider: suspend () -> String,
+    val apiFactory: ComfyApiFactory,
+    val taskRecordRepository: TaskRecordRepository,
+    val retryDelay: suspend (Long) -> Unit = { delay(it) },
+)
+
+class WorkflowRepository private constructor(
+    private val deps: WorkflowRepositoryDependencies,
 ) {
 
-    private val appContext = context.applicationContext
-    private val templateStore = WorkflowTemplateStore(
-        rootDir = File(appContext.filesDir, "workflows"),
-        json = json,
+    constructor(
+        context: Context,
+        json: Json,
+        apiFactory: ComfyApiFactory,
+        serverConfigStore: ServerConfigStore,
+        clientIdStore: ClientIdStore,
+        taskRecordRepository: TaskRecordRepository,
+    ) : this(
+        WorkflowRepositoryDependencies(
+            appContext = context.applicationContext,
+            json = json,
+            templateStore = WorkflowTemplateStore(
+                rootDir = File(context.applicationContext.filesDir, "workflows"),
+                json = json,
+            ),
+            configProvider = { serverConfigStore.config.first() },
+            activeServerIdProvider = { serverConfigStore.activeServerId.first() },
+            clientIdProvider = { clientIdStore.getOrCreate() },
+            apiFactory = apiFactory,
+            taskRecordRepository = taskRecordRepository,
+        ),
     )
+
+    private val appContext: Context?
+        get() = deps.appContext
+    private val json: Json
+        get() = deps.json
+    private val templateStore: WorkflowTemplateStore
+        get() = deps.templateStore
+    private val apiFactory: ComfyApiFactory
+        get() = deps.apiFactory
+    private val taskRecordRepository: TaskRecordRepository
+        get() = deps.taskRecordRepository
     private val refreshMutex = Mutex()
 
     private var lastCompatibilityServerId: String? = null
@@ -127,7 +170,8 @@ class WorkflowRepository(
                 IllegalStateException("图片超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB"),
             )
         }
-        val resolver = appContext.contentResolver
+        val resolver = appContext?.contentResolver
+            ?: return@withContext Result.failure(IllegalStateException("当前环境不支持图片上传"))
         val mediaType = resolver.getType(uri)?.toMediaTypeOrNull()
         val part = MultipartBody.Part.createFormData(
             "image",
@@ -159,7 +203,7 @@ class WorkflowRepository(
     }
 
     private suspend fun uploadPart(part: MultipartBody.Part): Result<UploadedImageRef> {
-        val config = runCatching { serverConfigStore.config.first() }.getOrNull()
+        val config = runCatching { deps.configProvider() }.getOrNull()
             ?: return Result.failure(IllegalStateException("请先配置服务器"))
         return runCatching {
             val response = apiFactory.create(config).uploadImage(
@@ -190,7 +234,9 @@ class WorkflowRepository(
             if (size != null && size > MAX_FILE_BYTES) {
                 return@withContext WorkflowImportResult.Error("文件超过 10 MB 限制")
             }
-            val raw = appContext.contentResolver.openInputStream(uri)?.use {
+            val resolver = appContext?.contentResolver
+                ?: return@withContext WorkflowImportResult.Error("当前环境不支持文件导入")
+            val raw = resolver.openInputStream(uri)?.use {
                 readLimited(it, MAX_FILE_BYTES)
             } ?: return@withContext WorkflowImportResult.Error("无法读取文件")
 
@@ -281,7 +327,7 @@ class WorkflowRepository(
     suspend fun refreshAllCompatibility(): List<WorkflowTemplate>? =
         withContext(Dispatchers.IO) {
             refreshMutex.withLock {
-                val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+                val serverId = runCatching { deps.activeServerIdProvider() }.getOrNull()
                 val now = System.currentTimeMillis()
                 if (serverId != null &&
                     serverId == lastCompatibilityServerId &&
@@ -322,17 +368,83 @@ class WorkflowRepository(
         submitSelected(template, selected)
     }
 
+    /**
+     * 结果未知时复用原 promptId 重试，避免服务器实际已受理却生成第二个任务。
+     *
+     * 历史记录里的“再次生成”仍然走 [resubmit] 并使用新 attempt。
+     */
+    suspend fun retryUnknown(task: TaskRecord): WorkflowSubmitResult = withContext(Dispatchers.IO) {
+        val serverId = task.serverId.ifBlank {
+            runCatching { deps.activeServerIdProvider() }.getOrNull().orEmpty()
+        }
+        if (serverId.isBlank()) {
+            return@withContext WorkflowSubmitResult.Error("找不到当前服务器")
+        }
+        // 队列/历史可能已把该记录升级；必须用磁盘当前状态而不是调用方持有的旧对象。
+        val current = taskRecordRepository.get(serverId, task.promptId)
+            ?: return@withContext WorkflowSubmitResult.Error("本地任务记录已不存在，请刷新队列")
+        if (current.supersededBy != null) {
+            return@withContext WorkflowSubmitResult.Error(
+                "该请求已由任务 ${current.supersededBy.take(8)} 接管，请勿重复提交",
+            )
+        }
+        if (current.status != TaskStatus.UNKNOWN && current.status != TaskStatus.SUBMITTING) {
+            return@withContext WorkflowSubmitResult.Error(
+                "任务状态已更新为 ${current.status}，请刷新队列后再试",
+            )
+        }
+        val requestedPromptId = current.requestedPromptId?.takeIf { it.isNotBlank() }
+            ?: current.promptId
+        // 只有原始请求记录（promptId == requestedPromptId）才需要向后寻找迁移新记录；
+        // 迁移后的新记录本身使用自己的 promptId 重试，不能被旧记录反向阻断。
+        if (current.promptId == requestedPromptId) {
+            val migrated = taskRecordRepository.list(serverId).firstOrNull { record ->
+                record.promptId != current.promptId &&
+                    record.requestedPromptId == requestedPromptId
+            }
+            if (migrated != null) {
+                return@withContext WorkflowSubmitResult.Error(
+                    "该请求已由任务 ${migrated.promptId.take(8)} 接管，请勿重复提交",
+                )
+            }
+        }
+        if (current.values.isEmpty()) {
+            return@withContext WorkflowSubmitResult.Error("这条记录没有保存参数快照")
+        }
+        val template = getTemplate(current.templateId)
+            ?: return@withContext WorkflowSubmitResult.Error("找不到原工作流模板")
+        val selected = template.candidates.mapNotNull { candidate ->
+            val value = current.values[candidate.id] ?: return@mapNotNull null
+            if (candidate.readOnly) null else candidate.copy(value = value, selected = true)
+        }
+        if (selected.isEmpty()) {
+            return@withContext WorkflowSubmitResult.Error("原模板参数已变化，无法重试")
+        }
+        submitSelected(
+            template = template,
+            selected = selected,
+            // 迁移后的新记录必须复用自身 new ID；原始请求两者相同。
+            existingPromptId = current.promptId,
+            // 但记录里的 requestedPromptId 要保留 old→new 映射，供旧记录阻断使用。
+            preservedRequestedPromptId = current.requestedPromptId
+                ?.takeIf { it.isNotBlank() }
+                ?: current.promptId,
+        )
+    }
+
     private suspend fun submitSelected(
         template: WorkflowTemplate,
         selected: List<ParameterCandidate>,
+        existingPromptId: String? = null,
+        preservedRequestedPromptId: String? = null,
     ): WorkflowSubmitResult = withContext(Dispatchers.IO) {
         val stored = templateStore.getTemplate(template.id)
         if (WorkflowRepairFlag.blocksSubmit(template, stored)) {
             return@withContext WorkflowSubmitResult.Error("请先修复工作流模板并保存")
         }
-        val config = runCatching { serverConfigStore.config.first() }.getOrNull()
+        val config = runCatching { deps.configProvider() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.NoServer
-        val serverId = runCatching { serverConfigStore.activeServerId.first() }.getOrNull()
+        val serverId = runCatching { deps.activeServerIdProvider() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.Error("找不到当前服务器配置")
         val raw = readApiJson(template.id)
             ?: return@withContext WorkflowSubmitResult.Error("找不到工作流 JSON")
@@ -375,30 +487,84 @@ class WorkflowRepository(
             )
         }
 
-        val clientId = runCatching { clientIdStore.getOrCreate() }.getOrElse { throwable ->
+        val clientId = runCatching { deps.clientIdProvider() }.getOrElse { throwable ->
             return@withContext WorkflowSubmitResult.Error(
                 "无法读取客户端标识：${throwable.message ?: "本地存储异常"}",
             )
         }
-        val requestedPromptId = UUID.randomUUID().toString()
-        val api = runCatching { apiFactory.create(config) }.getOrElse { throwable ->
+        val requestedPromptId = existingPromptId ?: UUID.randomUUID().toString()
+        val attemptedAt = System.currentTimeMillis()
+        val values = expandedSelected.associate { it.id to it.value }
+        val prepared = TaskRecord(
+            promptId = requestedPromptId,
+            serverId = serverId,
+            templateId = template.id,
+            templateName = template.name,
+            clientId = clientId,
+            submittedAt = attemptedAt,
+            requestedAt = attemptedAt,
+            requestedPromptId = preservedRequestedPromptId ?: requestedPromptId,
+            status = TaskStatus.SUBMITTING,
+            values = values,
+            statusUpdatedAt = attemptedAt,
+            statusSource = TaskStatusSource.LOCAL.name,
+        )
+        val preparedResult = if (existingPromptId != null) {
+            // 重试必须在写锁内复核状态/迁移映射，不能覆盖已被队列/历史升级的记录。
+            taskRecordRepository.prepareRetry(serverId, prepared)
+        } else {
+            taskRecordRepository.upsert(serverId, prepared)
+        }
+        if (preparedResult.isFailure) {
             return@withContext WorkflowSubmitResult.Error(
-                throwable.message ?: "无法创建网络请求",
+                "无法保存本地任务记录，未提交：" +
+                    (preparedResult.exceptionOrNull()?.message ?: "本地存储异常"),
             )
         }
-
-        val response = runCatching {
-            api.submitPrompt(
-                PromptRequestDto(
-                    prompt = prompt,
-                    clientId = clientId,
-                    promptId = requestedPromptId,
+        val api = runCatching { apiFactory.create(config) }.getOrElse { throwable ->
+            val message = "无法创建网络请求：${throwable.message ?: "未知错误"}"
+            taskRecordRepository.upsert(
+                serverId,
+                prepared.copy(
+                    status = TaskStatus.FAILED,
+                    errorMessage = message,
+                    statusUpdatedAt = System.currentTimeMillis(),
+                    statusSource = TaskStatusSource.LOCAL.name,
                 ),
             )
-        }.getOrElse { throwable ->
-            return@withContext WorkflowSubmitResult.Error(
-                throwable.message ?: "提交失败",
+            return@withContext WorkflowSubmitResult.Error(message)
+        }
+
+        suspend fun submitOnce() = api.submitPrompt(
+            PromptRequestDto(
+                prompt = prompt,
+                clientId = clientId,
+                promptId = requestedPromptId,
+            ),
+        )
+
+        var response = runCatching { submitOnce() }.getOrElse { throwable ->
+            markSubmissionUnknown(serverId, prepared)
+            return@withContext WorkflowSubmitResult.Unknown(
+                promptId = requestedPromptId,
+                message = throwable.message ?: "提交结果未知",
             )
+        }
+        var httpAttempt = 1
+        while (!response.isSuccessful &&
+            PromptSubmissionPolicy.shouldRetry(response.code(), httpAttempt)
+        ) {
+            runCatching { response.errorBody()?.close() }
+            markSubmissionUnknown(serverId, prepared)
+            deps.retryDelay(PromptSubmissionPolicy.RETRY_DELAY_MS)
+            httpAttempt += 1
+            response = runCatching { submitOnce() }.getOrElse { throwable ->
+                markSubmissionUnknown(serverId, prepared)
+                return@withContext WorkflowSubmitResult.Unknown(
+                    promptId = requestedPromptId,
+                    message = throwable.message ?: "提交结果未知",
+                )
+            }
         }
 
         if (!response.isSuccessful) {
@@ -425,6 +591,23 @@ class WorkflowRepository(
                     )
                 }
             }
+            val unknownResult = PromptSubmissionPolicy.classify(response.code()) ==
+                PromptSubmissionPolicy.HttpClassification.UNKNOWN_RETRYABLE
+            taskRecordRepository.upsert(
+                serverId,
+                prepared.copy(
+                    status = if (unknownResult) TaskStatus.UNKNOWN else TaskStatus.FAILED,
+                    errorMessage = if (unknownResult) null else summary,
+                    statusUpdatedAt = System.currentTimeMillis(),
+                    statusSource = TaskStatusSource.LOCAL.name,
+                ),
+            )
+            if (unknownResult) {
+                return@withContext WorkflowSubmitResult.Unknown(
+                    promptId = requestedPromptId,
+                    message = summary,
+                )
+            }
             return@withContext WorkflowSubmitResult.Validation(
                 summary = summary,
                 nodeErrors = nodeErrors,
@@ -432,33 +615,89 @@ class WorkflowRepository(
         }
 
         val body = response.body()
-            ?: return@withContext WorkflowSubmitResult.Error("服务器返回为空")
+            ?: run {
+                markSubmissionUnknown(serverId, prepared)
+                return@withContext WorkflowSubmitResult.Unknown(
+                    promptId = requestedPromptId,
+                    message = "服务器返回为空，提交结果未知",
+                )
+            }
         val promptId = body.promptId ?: requestedPromptId
+        val completed = prepared.copy(
+            promptId = promptId,
+            queueNumber = body.number,
+            status = TaskStatus.QUEUED,
+            statusUpdatedAt = System.currentTimeMillis(),
+            statusSource = TaskStatusSource.LOCAL.name,
+        )
+        val saved = taskRecordRepository.upsert(serverId, completed)
+        val localRecordWarning = when {
+            saved.isFailure -> {
+                // 服务器已用新 ID 接收任务，但新记录没落盘；旧请求记录必须标记为已迁移，
+                // 否则 30 秒后恢复为 UNKNOWN 仍可复用旧 ID 重试。
+                if (promptId != requestedPromptId) {
+                    taskRecordRepository.upsert(
+                        serverId,
+                        prepared.copy(
+                            status = TaskStatus.UNKNOWN,
+                            supersededBy = promptId,
+                            errorMessage = "服务器任务 ${promptId.take(8)} 已接收，" +
+                                "但本地新记录保存失败，旧记录待清理",
+                            statusUpdatedAt = System.currentTimeMillis(),
+                            statusSource = TaskStatusSource.LOCAL.name,
+                        ),
+                    )
+                }
+                "任务已提交，但本地任务记录保存失败：" +
+                    (saved.exceptionOrNull()?.message ?: "本地存储异常")
+            }
 
-        runCatching {
-            taskStore.save(
-                serverId = serverId,
-                record = io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord(
-                    promptId = promptId,
-                    serverId = serverId,
-                    templateId = template.id,
-                    templateName = template.name,
-                    clientId = clientId,
-                    queueNumber = body.number,
-                    submittedAt = System.currentTimeMillis(),
-                    values = expandedSelected.associate { it.id to it.value },
-                ),
-            )
+            promptId != requestedPromptId -> {
+                val deleteFailure = taskRecordRepository
+                    .delete(serverId, requestedPromptId)
+                    .exceptionOrNull()
+                if (deleteFailure != null) {
+                    // 删除失败时把旧记录标记为已迁移，Queue 不依赖新记录是否已进入内存读模型。
+                    taskRecordRepository.upsert(
+                        serverId,
+                        prepared.copy(
+                            status = TaskStatus.UNKNOWN,
+                            supersededBy = promptId,
+                            errorMessage = "已由新任务 ${promptId.take(8)} 接管，旧记录待清理",
+                            statusUpdatedAt = System.currentTimeMillis(),
+                            statusSource = TaskStatusSource.LOCAL.name,
+                        ),
+                    )
+                }
+                deleteFailure?.let { throwable ->
+                    "任务已提交，但本地存在一条旧请求记录：" +
+                        (throwable.message ?: requestedPromptId)
+                }
+            }
+
+            else -> null
         }
 
         WorkflowSubmitResult.Success(
             promptId = promptId,
             queueNumber = body.number,
+            localRecordWarning = localRecordWarning,
+        )
+    }
+
+    private suspend fun markSubmissionUnknown(serverId: String, record: TaskRecord) {
+        taskRecordRepository.upsert(
+            serverId,
+            record.copy(
+                status = TaskStatus.UNKNOWN,
+                statusUpdatedAt = System.currentTimeMillis(),
+                statusSource = TaskStatusSource.LOCAL.name,
+            ),
         )
     }
 
     private suspend fun loadCatalog(): NodeCatalog? {
-        val config = serverConfigStore.config.first() ?: return null
+        val config = deps.configProvider() ?: return null
         return runCatching {
             NodeCatalog(apiFactory.create(config).objectInfo())
         }.getOrNull()
@@ -467,7 +706,7 @@ class WorkflowRepository(
     private fun queryFileMeta(uri: Uri): Pair<String?, Long?> {
         var name: String? = null
         var size: Long? = null
-        appContext.contentResolver.query(
+        appContext?.contentResolver?.query(
             uri,
             arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
             null,
@@ -513,11 +752,35 @@ class WorkflowRepository(
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    private companion object {
+    internal companion object {
         const val MAX_FILE_BYTES = 10 * 1024 * 1024
         const val MAX_UPLOAD_BYTES = 50L * 1024 * 1024
         const val COMPATIBILITY_REFRESH_GUARD_MS = 30_000L
         val TEXT_PLAIN = "text/plain".toMediaTypeOrNull()
+
+        /** JVM 测试构造：不读取 Android Context，templateStore 使用临时目录。 */
+        fun forTest(
+            rootDir: File,
+            json: Json,
+            config: ServerConfig?,
+            serverId: String?,
+            clientId: String,
+            apiFactory: ComfyApiFactory,
+            taskRecordRepository: TaskRecordRepository,
+            retryDelay: suspend (Long) -> Unit = {},
+        ): WorkflowRepository = WorkflowRepository(
+            WorkflowRepositoryDependencies(
+                appContext = null,
+                json = json,
+                templateStore = WorkflowTemplateStore(rootDir, json),
+                configProvider = { config },
+                activeServerIdProvider = { serverId },
+                clientIdProvider = { clientId },
+                apiFactory = apiFactory,
+                taskRecordRepository = taskRecordRepository,
+                retryDelay = retryDelay,
+            ),
+        )
     }
 }
 

@@ -157,10 +157,18 @@ fun HistoryDetailScreen(
 
     val noticeText = state.notice?.let { notice ->
         when (notice) {
-            is HistoryNotice.Success -> stringResource(
-                R.string.history_resubmit_success,
-                notice.promptId.take(8),
-            )
+            is HistoryNotice.Success -> if (notice.warning != null) {
+                stringResource(
+                    R.string.history_resubmit_success_warning,
+                    notice.promptId.take(8),
+                    notice.warning,
+                )
+            } else {
+                stringResource(
+                    R.string.history_resubmit_success,
+                    notice.promptId.take(8),
+                )
+            }
 
             HistoryNotice.NoServer -> stringResource(R.string.workflow_submit_no_server)
             is HistoryNotice.Error -> stringResource(

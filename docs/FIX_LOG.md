@@ -796,3 +796,43 @@ git diff --check
 - 第二轮第 2A 批 commit 已提交为 `fix: 后台批量提交工作流`（`e9efdb2`）。
 
 - **说明**：本批不包含 2B 的预写/unknown 提交路径、Chat、Node install；这些按计划后续批次接入。
+
+### 40. 第二轮第 2B 批：提交幂等与本地任务记录（已复审 APPROVED）
+
+- `WorkflowSubmitResult` 新增 `Unknown(promptId, message)`；`Success` 新增 `localRecordWarning`，用于“已提交但本地记录保存/迁移失败”的非阻断提示。
+- `WorkflowRepository` 提交前生成稳定 `promptId` 并预写 `submitting` TaskRecord（`requestedAt/requestedPromptId/values/statusSource`）；预写失败直接返回 Error，不发送 POST。
+- POST 复用该 promptId；超时/IO/空响应/429/5xx 写 `unknown` 并返回 Unknown。429/5xx 使用同一 ID 退避重试一次；400/401/403/413/422 写 `failed` 并返回 Validation。
+- 服务器返回不同 promptId 时写新记录并携带 `requestedPromptId`，删除旧请求 ID；删除失败保留映射并通过 `localRecordWarning` 提示“本地存在一条旧请求记录”，不静默双记录。最终记录写入失败也返回 Success + warning。
+- `WorkflowRepository` 增加 `internal WorkflowRepositoryDependencies`/`forTest` JVM seam：可注入临时 `WorkflowTemplateStore`、config/server/clientId provider、TaskRecordRepository、API factory 和 retry delay，不依赖 Android Context。
+- 启动/刷新恢复：`PendingSubmissionRecoveryPolicy` 将超过 30s 的 `submitting` 降级为 `unknown`；TaskManager reload 归一化后落盘，队列/历史命中仍由 TaskListSyncPolicy 升级为 queued/running/终态。
+- 队列页新增“本地待确认”区：展示 submitting/unknown 记录；unknown 提供“检查队列/历史”和“复用原 ID 重试”，重试走 `WorkflowRepository.retryUnknown`；历史详情再次生成仍使用新 attempt。
+- OperationCenter 新增 UNKNOWN 状态和 unknown 计数：success>0 时为 PARTIAL，success=0 且有 unknown 时为 UNKNOWN；Detail/Workflows 展示未知/部分成功摘要与本地记录 warning。
+- R2A4 闭环：新增 `WorkflowsViewModelTest`（RUNNING→terminal 摘要）与 `WorkflowDetailOperationPolicyTest`（快速终态、PARTIAL/UNKNOWN/warning）；Detail 顶部返回在后台提交运行中时 Toast 提示“提交将在后台继续”，不阻断返回；`OperationCenterTest` 新增 NonCancellable 终态写入与 cancel 竞争测试。
+- **R2B 修复（第 59 节 CONDITIONAL 后）**：
+  - R2B-01：Queue 重试 notice 拼接 `localRecordWarning`；Chat 批量重试把 warning 计入独立警告列表；Detail SUCCESS 合并“执行值落盘失败 + localRecordWarning”，不再只显示一项。
+  - R2B-02：`retryUnknown` 重新读取磁盘当前记录，只在 UNKNOWN/SUBMITTING 时继续，并检查 `requestedPromptId` 相同但 promptId 不同的新记录；发现迁移接管则拒绝重试。Queue 本地待确认卡片持久显示“已迁移”及新任务 ID，并禁用重试。
+  - R2B-03：补删除旧记录失败 warning、迁移后拒绝重试、空响应 unknown、OperationCenter UNKNOWN/partial 计数、reload 归一化落盘、Queue 重试控制器 Success/Unknown/warning/异常/finally、warning+落盘失败组合测试。
+  - R2B-04：Queue 页消费 `TaskRecordWriteState.Failed`，常驻显示“任务记录写入失败”横幅。
+  - R2B-05：Queue 重试改由独立 `QueuePendingRetryController` 在 operationScope 执行，try/finally 清理重试中状态；repository 重读存储状态降低旧对象竞态。
+  - R2B-06：新增 `/history/{promptId}` 定向查询；Queue“检查”按钮调用 `TaskManager.recheckPending`，先查队列再定向查历史，未找到时明确提示可同 ID 重试。
+- **R2B2 修复（第 60 节 CONDITIONAL 后）**：
+  - R2B2-01：`QueueViewModel.recheckUnknown` 先解包内层 `Result<Boolean>`，新增 `describeRecheckResult`；网络/服务器失败显示“检查失败，请勿据此重试”，只有明确 false 才提示可复用原 ID。
+  - R2B2-04：`/history/{promptId}` 改为 `Response<Map>`，新增 `HistoryLookupPolicy`：404/空 map/promptId 不匹配 -> NotFound；非 2xx -> Failed；只接受精确 promptId 命中，不再回退到其他条目。
+  - R2B2-03：`TaskRecordRepository.prepareRetry` 在同一把写锁内复核 UNKNOWN/SUBMITTING、supersededBy 和迁移映射后再预写 SUBMITTING；重试不再有“重读后又被升级”的覆盖窗口。
+  - R2B2-05：迁移删除失败时把旧记录持久化为 `unknown` + `supersededBy=新 ID`；`QueueMigrationPolicy` 优先使用该字段，Queue 即使新记录尚未进入内存读模型也显示“已迁移”并隐藏重试。
+  - R2B2-02：新增 `PendingRecheckPolicy`（队列命中/历史命中/双未命中/查询失败编排）及 5 项测试、`HistoryLookupPolicy` 3 项、`QueueMigrationPolicy` 4 项、`QueueDiagnosticsPolicy` 2 项、`ChatTaskActionBatchRetryTest`、`TaskRecordRepository.prepareRetry` 4 项测试。
+- **R2B3 修复（第 61 节 CONDITIONAL 后）**：
+  - R2B3-01：服务器返回不同 promptId 且新记录 `upsert(completed)` 失败时，也把旧 prewrite 记录写为 `unknown + supersededBy=新 ID`；Queue 隐藏重试，`prepareRetry` 拒绝。新增“新记录写入失败 + 旧记录仍在”测试。
+  - R2B3-02：新增 `recheckNotice` 作为 QueueViewModel 的实际解包接线，并测试内层 `Result.failure`、外层异常、true/false；避免只测描述函数。
+  - R2B3-03：迁移扫描增加方向性：只有原始请求记录（promptId == requestedPromptId）才向后寻找新记录；新记录不会反向显示“已迁移到旧 ID”，`prepareRetry(new)` 也不再被旧记录误伤。补反向测试。
+  - R2B3-04：记录为已知窄竞态——`prepareRetry` 读取 TaskStore，而 TaskPersistenceQueue 可能尚未落盘内存升级；正常 UI 已因 QUEUED 卡片消失而不可点击，同 ID 也由服务器去重。本批不引入版本号/CAS。
+- **R2B4 修复（第 62 节 CONDITIONAL 后）**：
+  - R2B4-01：`WorkflowRepository.retryUnknown` 只在 `current.promptId == requestedPromptId`（原始请求记录）时扫描迁移新记录；重试 ID 改为 `current.promptId`，迁移后的新记录用自己的 new ID 重试，不再被旧记录反向阻断，也不会用旧 ID 提交。
+  - R2B4-02：补 `retryUnknown(new)` 测试（old+new 共存、new UNKNOWN，POST 使用 new-id 且不被旧记录阻断）与 `retryUnknown(old)` 对照测试（仍被 new 阻断、0 请求）。
+- **R2B5 修复（第 63 节 CONDITIONAL 后）**：
+  - R2B5-01：`submitSelected` 分离“POST/预写使用的 promptId”和“TaskRecord 保留的 requestedPromptId”；迁移新记录重试使用 new ID 提交，但记录继续保留 old→new 映射。成功 `completed` 不再覆盖 `requestedPromptId`。
+  - R2B5-02：`retryUnknownUsesNewIdForMigratedNewRecord` 增加断言 new.requestedPromptId 仍为 old、重试后再次 `retryUnknown(old)` 返回 Error 且请求数仍为 1。
+- 测试：新增 `PromptSubmissionPolicyTest`、`PendingSubmissionRecoveryPolicyTest`、`WorkflowSubmitPersistenceTest`（16 项：预写失败不发 POST、成功预写→queued、IO unknown、429 同 ID 重试、5xx 重试后 unknown、400 不重试、响应 ID 迁移、迁移删除失败 warning、迁移后拒绝重试、superseded 标记拒绝重试、新记录落盘失败标记旧记录、迁移新记录用 new ID 重试并保留映射、旧记录被新记录阻断、空响应 unknown、最终落盘失败 warning、unknown 同 ID 重试）、`WorkflowsViewModelTest`、`WorkflowDetailOperationPolicyTest`、`QueuePendingRetryControllerTest`、`PendingRecheckPolicyTest`、`HistoryLookupPolicyTest`、`QueueMigrationPolicyTest`、`QueueDiagnosticsPolicyTest`、`ChatTaskActionBatchRetryTest`；`TaskListSyncPolicyTest` 增加 unknown 在队列/历史命中后升级、reload 超时归一化、superseded 合并（共 9 项）；`TaskRecordRepositoryTest` 增加归一化落盘与原子 `prepareRetry`（含反向迁移）。
+- 验证：107 suites / 591 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；`git diff --check` 通过。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 64 节）；R2B4/R2B5 的迁移 ID 与映射问题已在六轮复审核对闭环。
+- 未包含：Chat confirm、Node install（按计划留第 4/5 批）；unknown-only 记录在队列页展示，历史页仅在存在匹配 history entry 时显示任务状态。

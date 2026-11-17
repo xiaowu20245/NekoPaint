@@ -10,11 +10,14 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 data class QueueUiState(
     val queue: QueueSnapshot? = null,
@@ -26,11 +29,22 @@ data class QueueUiState(
     val error: String? = null,
     val actionError: String? = null,
     val refreshing: Boolean = false,
+    val retryingPromptId: String? = null,
+    val localNotice: String? = null,
+    val recordWriteError: String? = null,
 )
 
 class QueueViewModel(
     private val taskManager: TaskManager,
+    private val workflowRepository: WorkflowRepository,
+    private val operationScope: CoroutineScope,
 ) : ViewModel() {
+
+    private val retryController = QueuePendingRetryController(
+        scope = operationScope,
+        retrySubmission = workflowRepository::retryUnknown,
+        refresh = taskManager::refresh,
+    )
 
     private val taskData = combine(
         taskManager.queue,
@@ -54,18 +68,33 @@ class QueueViewModel(
         )
     }
 
+    private val actions = combine(
+        taskManager.actionError,
+        retryController.state,
+        taskManager.taskRecordWriteState,
+    ) { actionError, retry, writeState ->
+        Triple(
+            actionError,
+            retry,
+            queueRecordWriteError(writeState),
+        )
+    }
+
     val uiState: StateFlow<QueueUiState> = combine(
         base,
         taskManager.localClientId,
         taskManager.queueError,
         taskManager.refreshing,
-        taskManager.actionError,
-    ) { state, localClientId, error, refreshing, actionError ->
+        actions,
+    ) { state, localClientId, error, refreshing, action ->
         state.copy(
             localClientId = localClientId,
             error = error,
             refreshing = refreshing,
-            actionError = actionError,
+            actionError = action.first,
+            retryingPromptId = action.second.retryingPromptId,
+            localNotice = action.second.notice,
+            recordWriteError = action.third,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -85,9 +114,29 @@ class QueueViewModel(
 
     fun clearActionError() = taskManager.clearActionError()
 
+    /** 结果未知的记录复用原 promptId 重试，避免服务器已受理时生成重复任务。 */
+    fun retryUnknown(task: TaskRecord) = retryController.retry(task)
+
+    /** 定向检查队列 + `/history/{promptId}`，确认服务器是否已受理该 unknown 任务。 */
+    fun recheckUnknown(task: TaskRecord) {
+        operationScope.launch {
+            retryController.showNotice(
+                recheckNotice { taskManager.recheckPending(task.promptId) },
+            )
+        }
+    }
+
+    fun clearLocalNotice() = retryController.clearNotice()
+
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { QueueViewModel(container.taskManager) }
+            initializer {
+                QueueViewModel(
+                    taskManager = container.taskManager,
+                    workflowRepository = container.workflowRepository,
+                    operationScope = container.operationScope,
+                )
+            }
         }
     }
 }

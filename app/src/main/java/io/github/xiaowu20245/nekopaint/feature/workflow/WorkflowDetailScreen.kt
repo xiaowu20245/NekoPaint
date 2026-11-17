@@ -2,6 +2,7 @@ package io.github.xiaowu20245.nekopaint.feature.workflow
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -161,15 +162,29 @@ fun WorkflowDetailScreen(
     var renamePresetName by remember { mutableStateOf("") }
     var showUnsavedDialog by rememberSaveable { mutableStateOf(false) }
     val currentDirty by rememberUpdatedState(state.dirty)
+    val backgroundSubmissionMessage = stringResource(R.string.workflow_submit_background_running)
+    val currentBackgroundMessage by rememberUpdatedState(backgroundSubmissionMessage)
 
     DisposableEffect(Unit) {
         // 外部 TopAppBar 的返回箭头也走同一套未保存拦截。
         onBackHandlerChange {
-            if (currentDirty) {
-                showUnsavedDialog = true
-                true
-            } else {
-                false
+            when {
+                currentDirty -> {
+                    showUnsavedDialog = true
+                    true
+                }
+
+                viewModel.hasActiveSubmission() -> {
+                    // 非阻断：允许离开，但提示结果仍可在工作流列表恢复。
+                    Toast.makeText(
+                        context,
+                        currentBackgroundMessage,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    false
+                }
+
+                else -> false
             }
         }
         onDispose { onBackHandlerChange(null) }

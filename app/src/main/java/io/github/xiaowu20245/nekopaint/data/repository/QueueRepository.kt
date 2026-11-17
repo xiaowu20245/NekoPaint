@@ -39,6 +39,36 @@ class QueueRepository(
         }
     }
 
+    /**
+     * 按 promptId 定向查询历史，避免 unknown 恢复只检查最近一页而漏掉旧任务。
+     */
+    suspend fun historyItem(
+        promptId: String,
+        config: ServerConfig? = null,
+    ): Result<HistoryEntry?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resolved = config ?: serverConfigStore.config.first() ?: error("未配置服务器")
+            val response = apiFactory.create(resolved).historyItem(promptId)
+            val entries = if (response.isSuccessful) {
+                QueueMapper.toHistoryEntries(
+                    dto = response.body().orEmpty(),
+                    baseUrl = ServerEndpointValidator.require(resolved).baseUrl,
+                )
+            } else {
+                emptyList()
+            }
+            when (val outcome = HistoryLookupPolicy.classify(
+                code = response.code(),
+                entries = entries,
+                promptId = promptId,
+            )) {
+                HistoryLookupOutcome.NotFound -> null
+                is HistoryLookupOutcome.Found -> outcome.entry
+                is HistoryLookupOutcome.Failed -> error(outcome.message)
+            }
+        }
+    }
+
     suspend fun interrupt(
         promptId: String,
         config: ServerConfig? = null,

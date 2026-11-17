@@ -180,7 +180,7 @@ class AppContainer(context: Context) {
         apiFactory = comfyApiFactory,
         serverConfigStore = serverConfigStore,
         clientIdStore = clientIdStore,
-        taskStore = taskStore,
+        taskRecordRepository = taskRecordRepository,
     )
 
     val operationCenter = OperationCenter(

@@ -37,6 +37,12 @@ interface ComfyApi {
     @GET("history")
     suspend fun history(@Query("max_items") maxItems: Int? = null): Map<String, HistoryItemDto>
 
+    /** ComfyUI 支持按 promptId 定向查询；用于 unknown 恢复时避免分页遗漏。 */
+    @GET("history/{promptId}")
+    suspend fun historyItem(
+        @Path("promptId") promptId: String,
+    ): Response<Map<String, HistoryItemDto>>
+
     @POST("history")
     suspend fun updateHistory(@Body body: HistoryOperationDto): Response<Unit>
 

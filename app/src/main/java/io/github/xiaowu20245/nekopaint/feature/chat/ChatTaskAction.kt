@@ -633,7 +633,11 @@ class ChatTaskActionHandler(
             is WorkflowSubmitResult.Success -> {
                 dataSource.refresh()
                 Result.success(
-                    "已重新提交「${proposal.title}」，新任务 ID：${result.promptId.take(8)}",
+                    buildString {
+                        append("已重新提交「${proposal.title}」，新任务 ID：")
+                        append(result.promptId.take(8))
+                        result.localRecordWarning?.let { append("；").append(it) }
+                    },
                 )
             }
 
@@ -643,6 +647,12 @@ class ChatTaskActionHandler(
 
             is WorkflowSubmitResult.Validation -> Result.failure(
                 IllegalStateException(result.summary),
+            )
+
+            is WorkflowSubmitResult.Unknown -> Result.failure(
+                IllegalStateException(
+                    "${result.message}（任务 ID ${shortId(result.promptId)}，结果未知，请先在队列确认）",
+                ),
             )
 
             is WorkflowSubmitResult.Error -> Result.failure(
@@ -688,6 +698,7 @@ class ChatTaskActionHandler(
     private suspend fun batchRetry(proposal: ChatActionProposal): Result<String> {
         var succeeded = 0
         val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
         proposal.batchTargets.forEach { target ->
             val task = dataSource.findTask(target.promptId)
             if (task == null || task.values.isEmpty()) {
@@ -695,10 +706,20 @@ class ChatTaskActionHandler(
                 return@forEach
             }
             when (val result = dataSource.resubmit(task)) {
-                is WorkflowSubmitResult.Success -> succeeded++
+                is WorkflowSubmitResult.Success -> {
+                    succeeded++
+                    result.localRecordWarning?.let { warning ->
+                        warnings += "${target.title}：$warning"
+                    }
+                }
+
                 WorkflowSubmitResult.NoServer -> errors += "未连接服务器"
                 is WorkflowSubmitResult.Validation -> {
                     errors += "${target.title}：${result.summary}"
+                }
+
+                is WorkflowSubmitResult.Unknown -> {
+                    errors += "${target.title}：结果未知（${shortId(result.promptId)}）"
                 }
 
                 is WorkflowSubmitResult.Error -> {
@@ -707,7 +728,7 @@ class ChatTaskActionHandler(
             }
         }
         dataSource.refresh()
-        return batchResult("重试", succeeded, errors)
+        return batchResult("重试", succeeded, errors, warnings)
     }
 
     private suspend fun batchDelete(proposal: ChatActionProposal): Result<String> {
@@ -733,6 +754,7 @@ class ChatTaskActionHandler(
         actionLabel: String,
         succeeded: Int,
         errors: List<String>,
+        warnings: List<String> = emptyList(),
     ): Result<String> {
         if (succeeded == 0) {
             return Result.failure(
@@ -743,13 +765,18 @@ class ChatTaskActionHandler(
             )
         }
         val base = "已批量$actionLabel $succeeded 个任务"
-        return if (errors.isEmpty()) {
+        val details = buildList {
+            if (errors.isNotEmpty()) {
+                add("${errors.size} 个失败：" + errors.take(2).joinToString("；"))
+            }
+            if (warnings.isNotEmpty()) {
+                add("${warnings.size} 个警告：" + warnings.take(2).joinToString("；"))
+            }
+        }
+        return if (details.isEmpty()) {
             Result.success(base)
         } else {
-            Result.success(
-                "$base；${errors.size} 个失败：" +
-                    errors.take(2).joinToString("；"),
-            )
+            Result.success("$base；${details.joinToString("；")}")
         }
     }
 
@@ -762,7 +789,11 @@ class ChatTaskActionHandler(
             is WorkflowSubmitResult.Success -> {
                 dataSource.refresh()
                 Result.success(
-                    "已提交「${template.name}」，任务 ID：${result.promptId.take(8)}",
+                    buildString {
+                        append("已提交「${template.name}」，任务 ID：")
+                        append(result.promptId.take(8))
+                        result.localRecordWarning?.let { append("；").append(it) }
+                    },
                 )
             }
 
@@ -772,6 +803,12 @@ class ChatTaskActionHandler(
 
             is WorkflowSubmitResult.Validation -> Result.failure(
                 IllegalStateException(result.summary),
+            )
+
+            is WorkflowSubmitResult.Unknown -> Result.failure(
+                IllegalStateException(
+                    "${result.message}（任务 ID ${shortId(result.promptId)}，结果未知，请先在队列确认）",
+                ),
             )
 
             is WorkflowSubmitResult.Error -> Result.failure(

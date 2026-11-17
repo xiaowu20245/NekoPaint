@@ -39,7 +39,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 sealed interface HistoryNotice {
-    data class Success(val promptId: String) : HistoryNotice
+    data class Success(
+        val promptId: String,
+        val warning: String? = null,
+    ) : HistoryNotice
     data object NoServer : HistoryNotice
     data class Error(val message: String) : HistoryNotice
 }
@@ -298,13 +301,21 @@ class HistoryViewModel(
         viewModelScope.launch {
             val result = workflowRepository.resubmit(task)
             val notice = when (result) {
-                is WorkflowSubmitResult.Success -> HistoryNotice.Success(result.promptId)
+                is WorkflowSubmitResult.Success -> HistoryNotice.Success(
+                    promptId = result.promptId,
+                    warning = result.localRecordWarning,
+                )
                 is WorkflowSubmitResult.NoServer -> HistoryNotice.NoServer
                 is WorkflowSubmitResult.Validation -> HistoryNotice.Error(result.summary)
+                is WorkflowSubmitResult.Unknown -> HistoryNotice.Error(
+                    "${result.message}（结果未知，任务 ID ${result.promptId.take(8)}）",
+                )
                 is WorkflowSubmitResult.Error -> HistoryNotice.Error(result.message)
             }
             resubmitState.value = ResubmitState(submitting = false, notice = notice)
-            if (result is WorkflowSubmitResult.Success) {
+            if (result is WorkflowSubmitResult.Success ||
+                result is WorkflowSubmitResult.Unknown
+            ) {
                 taskManager.refresh()
             }
         }

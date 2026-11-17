@@ -865,6 +865,10 @@ class WorkflowDetailViewModel(
         }
     }
 
+    /** 返回键/顶部返回箭头询问：当前模板是否仍有后台提交在运行。 */
+    fun hasActiveSubmission(): Boolean =
+        operationCenter.stateFor(templateId)?.status == OperationStatus.RUNNING
+
     fun submit() {
         val state = _uiState.value
         val template = state.template ?: return
@@ -911,103 +915,14 @@ class WorkflowDetailViewModel(
     }
 
     private fun applyOperationState(operation: SubmissionOperationState) {
-        when (operation.status) {
-            OperationStatus.RUNNING -> {
-                _uiState.update {
-                    it.copy(
-                        submitting = true,
-                        submitError = null,
-                    )
-                }
-            }
-
-            OperationStatus.SUCCESS -> {
-                _uiState.update {
-                    it.copy(
-                        template = operation.lastTemplate ?: it.template,
-                        submitting = false,
-                        submission = operation.lastSuccess,
-                        submittedBatchCount = operation.success,
-                        dirty = operation.executionValuesPersisted == false,
-                        saved = operation.executionValuesPersisted != false,
-                        submitError = if (operation.executionValuesPersisted == false) {
-                            SubmitErrorUi(message = "任务已提交，但本地执行参数保存失败")
-                        } else {
-                            null
-                        },
-                    )
-                }
-            }
-
-            OperationStatus.PARTIAL -> {
-                val validation = operation.lastValidation
-                val fieldErrors = if (validation != null) {
-                    val template = _uiState.value.template
-                    template?.selectedCandidates.orEmpty().mapNotNull { candidate ->
-                        val nodeError = validation.nodeErrors.firstOrNull {
-                            it.nodeId == candidate.nodeId
-                        }
-                        nodeError?.let { candidate.id to FieldError.Server(it.message) }
-                    }.toMap()
-                } else {
-                    emptyMap()
-                }
-                _uiState.update {
-                    it.copy(
-                        template = operation.lastTemplate ?: it.template,
-                        submitting = false,
-                        submission = operation.lastSuccess,
-                        submittedBatchCount = operation.success,
-                        dirty = operation.executionValuesPersisted == false,
-                        saved = operation.executionValuesPersisted != false,
-                        fieldErrors = fieldErrors,
-                        submitError = SubmitErrorUi(
-                            message = buildString {
-                                append(operation.message ?: "部分任务提交失败")
-                                append("（成功 ${operation.success}，失败 ${operation.failed}，跳过 ${operation.skipped}）")
-                                if (operation.executionValuesPersisted == false) {
-                                    append("；本地执行参数保存失败")
-                                }
-                            },
-                            nodeErrors = validation?.nodeErrors.orEmpty(),
-                        ),
-                    )
-                }
-                if (validation != null) {
-                    _uiState.value.template?.let(::refreshCompatibility)
-                }
-            }
-
-            OperationStatus.FAILED,
-            OperationStatus.CANCELLED,
-            -> {
-                val validation = operation.lastValidation
-                val fieldErrors = if (validation != null) {
-                    val template = _uiState.value.template
-                    template?.selectedCandidates.orEmpty().mapNotNull { candidate ->
-                        val nodeError = validation.nodeErrors.firstOrNull {
-                            it.nodeId == candidate.nodeId
-                        }
-                        nodeError?.let { candidate.id to FieldError.Server(it.message) }
-                    }.toMap()
-                } else {
-                    emptyMap()
-                }
-                _uiState.update {
-                    it.copy(
-                        submitting = false,
-                        submittedBatchCount = operation.success,
-                        fieldErrors = fieldErrors,
-                        submitError = SubmitErrorUi(
-                            message = operation.message ?: "提交失败",
-                            nodeErrors = validation?.nodeErrors.orEmpty(),
-                        ),
-                    )
-                }
-                if (validation != null) {
-                    _uiState.value.template?.let(::refreshCompatibility)
-                }
-            }
+        var needsCompatibilityRefresh = false
+        _uiState.update { current ->
+            val mapped = WorkflowDetailOperationPolicy.apply(current, operation)
+            needsCompatibilityRefresh = mapped.refreshCompatibility
+            mapped.state
+        }
+        if (needsCompatibilityRefresh) {
+            _uiState.value.template?.let(::refreshCompatibility)
         }
     }
 

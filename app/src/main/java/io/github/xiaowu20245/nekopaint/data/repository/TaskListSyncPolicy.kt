@@ -12,6 +12,25 @@ object TaskListSyncPolicy {
         val changed: List<TaskRecord>,
     )
 
+    /**
+     * 启动/刷新 reload：先把超时 submitting 归一化为 unknown，再与内存读模型合并。
+     * [Change.changed] 是需要再次落盘的记录（TaskManager 负责 upsert）。
+     */
+    fun reloadWithRecovery(
+        stored: List<TaskRecord>,
+        live: List<TaskRecord>,
+        now: Long,
+    ): Change {
+        val normalized = PendingSubmissionRecoveryPolicy.normalizeAll(stored, now)
+        val changed = normalized.zip(stored).mapNotNull { (record, original) ->
+            record.takeIf { it != original }
+        }
+        return Change(
+            tasks = reload(normalized, live),
+            changed = changed,
+        )
+    }
+
     fun reload(stored: List<TaskRecord>, live: List<TaskRecord>): List<TaskRecord> {
         val liveById = live.associateBy { it.promptId }
         val merged = LinkedHashMap<String, TaskRecord>()

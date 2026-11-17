@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,6 +74,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueItem
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
+import io.github.xiaowu20245.nekopaint.data.repository.TaskStatus
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryMetadataExtractor
@@ -108,6 +110,13 @@ fun QueueScreen(
         }
     }
 
+    LaunchedEffect(state.localNotice) {
+        state.localNotice?.let { notice ->
+            snackbarHostState.showSnackbar(notice)
+            viewModel.clearLocalNotice()
+        }
+    }
+
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (state.connection == ComfyConnectionState.InvalidConfig) {
@@ -138,22 +147,68 @@ fun QueueScreen(
                 )
             }
 
-            if (state.queue == null) {
+            state.recordWriteError?.let { writeError ->
                 item {
-                    if (state.connection == ComfyConnectionState.InvalidConfig) {
-                        NekoEmptyState(
-                            icon = Icons.Outlined.Warning,
-                            title = stringResource(R.string.queue_config_invalid_title),
-                            subtitle = stringResource(R.string.queue_config_invalid_desc),
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        ),
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.queue_record_write_error,
+                                writeError,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp),
                         )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(180.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(strokeWidth = 2.dp)
+                    }
+                }
+            }
+
+            val localPending = state.tasks.filter { TaskStatus.isLocalPending(it.status) }
+            if (localPending.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "${stringResource(R.string.queue_local_pending)} " +
+                            "(${localPending.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                    )
+                }
+                items(localPending, key = { it.promptId }) { task ->
+                    val migratedTo = QueueMigrationPolicy.migratedTo(task, state.tasks)
+                    LocalPendingCard(
+                        task = task,
+                        migratedTo = migratedTo,
+                        retrying = state.retryingPromptId == task.promptId,
+                        onRecheck = { viewModel.recheckUnknown(task) },
+                        onRetry = { viewModel.retryUnknown(task) },
+                    )
+                }
+            }
+
+            if (state.queue == null) {
+                if (localPending.isEmpty()) {
+                    item {
+                        if (state.connection == ComfyConnectionState.InvalidConfig) {
+                            NekoEmptyState(
+                                icon = Icons.Outlined.Warning,
+                                title = stringResource(R.string.queue_config_invalid_title),
+                                subtitle = stringResource(R.string.queue_config_invalid_desc),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                CircularProgressIndicator(strokeWidth = 2.dp)
+                            }
                         }
                     }
                 }
@@ -161,7 +216,7 @@ fun QueueScreen(
                 val running = state.queue?.running.orEmpty()
                 val pending = state.queue?.pending.orEmpty()
 
-                if (running.isEmpty() && pending.isEmpty()) {
+                if (running.isEmpty() && pending.isEmpty() && localPending.isEmpty()) {
                     item {
                         QueueEmptyState(
                             onOpenHistory = onOpenHistory,
@@ -749,6 +804,104 @@ private fun RunningCard(
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalPendingCard(
+    task: TaskRecord,
+    migratedTo: String?,
+    retrying: Boolean,
+    onRecheck: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val unknown = task.status == TaskStatus.UNKNOWN
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = task.templateName.ifBlank { task.templateId },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "任务 ID：${task.promptId.take(8)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                SourceBadge(
+                    text = stringResource(
+                        when {
+                            migratedTo != null -> R.string.queue_local_migrated
+                            unknown -> R.string.queue_local_unknown
+                            else -> R.string.queue_local_submitting
+                        },
+                    ),
+                    highlighted = migratedTo != null || unknown,
+                )
+            }
+            if (migratedTo != null) {
+                Text(
+                    text = stringResource(
+                        R.string.queue_local_migrated_hint,
+                        migratedTo.take(8),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (unknown) {
+                Text(
+                    text = stringResource(R.string.queue_local_unknown_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRecheck) {
+                    Text(stringResource(R.string.queue_local_check))
+                }
+                if (QueueMigrationPolicy.canRetry(task, migratedTo)) {
+                    FilledTonalButton(
+                        onClick = onRetry,
+                        enabled = !retrying,
+                        modifier = Modifier.height(36.dp),
+                    ) {
+                        if (retrying) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(
+                            stringResource(
+                                if (retrying) {
+                                    R.string.queue_local_retrying
+                                } else {
+                                    R.string.queue_local_retry
+                                },
+                            ),
                         )
                     }
                 }

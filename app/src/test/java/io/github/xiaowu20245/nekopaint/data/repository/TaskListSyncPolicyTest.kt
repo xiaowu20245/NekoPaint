@@ -26,6 +26,21 @@ class TaskListSyncPolicyTest {
     }
 
     @Test
+    fun reloadWithRecoveryMarksStaleSubmittingUnknownAndReportsChanged() {
+        val stored = listOf(record("p1", TaskStatus.SUBMITTING, 1_000))
+
+        val result = TaskListSyncPolicy.reloadWithRecovery(
+            stored = stored,
+            live = emptyList(),
+            now = 1_000 + PendingSubmissionRecoveryPolicy.STALE_SUBMITTING_MS,
+        )
+
+        assertEquals(TaskStatus.UNKNOWN, result.tasks.single().status)
+        assertEquals(1, result.changed.size)
+        assertEquals(TaskStatus.UNKNOWN, result.changed.single().status)
+    }
+
+    @Test
     fun queueUpdateOnlyReportsChangedTasks() {
         val initial = listOf(record("p1", TaskStatus.QUEUED, 100))
         val snapshot = QueueSnapshot(
@@ -41,6 +56,38 @@ class TaskListSyncPolicyTest {
         val second = TaskListSyncPolicy.applyQueue(first.tasks, snapshot, now = 300)
         assertTrue(second.changed.isEmpty())
         assertEquals(TaskStatus.RUNNING, second.tasks.single().status)
+    }
+
+    @Test
+    fun unknownTaskFoundInQueueBecomesQueued() {
+        val initial = listOf(record("p1", TaskStatus.UNKNOWN, 100))
+        val snapshot = QueueSnapshot(
+            running = emptyList(),
+            pending = listOf(queueItem("p1")),
+            updatedAt = 200,
+        )
+
+        val result = TaskListSyncPolicy.applyQueue(initial, snapshot, now = 200)
+
+        assertEquals(TaskStatus.QUEUED, result.tasks.single().status)
+        assertEquals(1, result.changed.size)
+    }
+
+    @Test
+    fun unknownTaskFoundInHistoryBecomesTerminal() {
+        val initial = listOf(record("p1", TaskStatus.UNKNOWN, 100))
+        val entries = listOf(
+            history(
+                promptId = "p1",
+                status = TaskStatus.SUCCESS,
+                finishedAt = 300,
+            ),
+        )
+
+        val result = TaskListSyncPolicy.applyHistory(initial, entries, now = 400)
+
+        assertEquals(TaskStatus.SUCCESS, result.tasks.single().status)
+        assertEquals(1, result.changed.size)
     }
 
     @Test
@@ -72,6 +119,16 @@ class TaskListSyncPolicyTest {
 
         val repeat = TaskListSyncPolicy.applyHistory(result.tasks, entries, now = 500)
         assertTrue(repeat.changed.isEmpty())
+    }
+
+    @Test
+    fun persistedSupersededMarkerSurvivesMerge() {
+        val local = record("old", TaskStatus.UNKNOWN, 100)
+        val incoming = local.copy(supersededBy = "new", statusUpdatedAt = 50)
+
+        val merged = TaskListSyncPolicy.applyPersisted(listOf(local), incoming)
+
+        assertEquals("new", merged.single().supersededBy)
     }
 
     @Test

@@ -23,6 +23,7 @@ enum class OperationStatus {
     PARTIAL,
     SUCCESS,
     FAILED,
+    UNKNOWN,
     CANCELLED,
 }
 
@@ -35,10 +36,12 @@ data class SubmissionOperationState(
     val success: Int,
     val failed: Int,
     val skipped: Int,
+    val unknown: Int = 0,
     val lastSuccess: WorkflowSubmitResult.Success? = null,
     val lastValidation: WorkflowSubmitResult.Validation? = null,
     val lastTemplate: WorkflowTemplate? = null,
     val executionValuesPersisted: Boolean? = null,
+    val localRecordWarning: String? = null,
     val message: String? = null,
     val updatedAt: Long = 0L,
 ) {
@@ -134,10 +137,12 @@ class OperationCenter(
         var processed = 0
         var success = 0
         var failed = 0
+        var unknown = 0
         var lastSuccess: WorkflowSubmitResult.Success? = null
         var lastValidation: WorkflowSubmitResult.Validation? = null
         var lastTemplate: WorkflowTemplate? = null
         var executionValuesPersisted: Boolean? = null
+        var localRecordWarning: String? = null
         var message: String? = null
         var runSucceeded = false
         try {
@@ -155,6 +160,9 @@ class OperationCenter(
                         runSucceeded = true
                         lastSuccess = result
                         lastTemplate = runTemplate
+                        if (result.localRecordWarning != null) {
+                            localRecordWarning = result.localRecordWarning
+                        }
                     }
 
                     WorkflowSubmitResult.NoServer -> {
@@ -178,15 +186,24 @@ class OperationCenter(
                         message = result.message
                         break
                     }
+
+                    is WorkflowSubmitResult.Unknown -> {
+                        processed += 1
+                        unknown += 1
+                        message = result.message
+                        break
+                    }
                 }
                 update(
                     currentState(operationId, template.id, total).copy(
                         processed = processed,
                         success = success,
                         failed = failed,
+                        unknown = unknown,
                         lastSuccess = lastSuccess,
                         lastValidation = lastValidation,
                         lastTemplate = lastTemplate,
+                        localRecordWarning = localRecordWarning,
                         message = message,
                         updatedAt = now(),
                     ),
@@ -199,9 +216,11 @@ class OperationCenter(
                     processed = processed,
                     success = success,
                     failed = failed,
-                    skipped = total - processed,
+                    unknown = unknown,
+                    skipped = (total - processed).coerceAtLeast(0),
                     lastSuccess = lastSuccess,
                     lastTemplate = lastTemplate,
+                    localRecordWarning = localRecordWarning,
                     message = "操作已取消",
                     updatedAt = now(),
                 ),
@@ -223,11 +242,13 @@ class OperationCenter(
                     processed = failedProcessed,
                     success = success,
                     failed = failedCount,
+                    unknown = unknown,
                     skipped = (total - failedProcessed).coerceAtLeast(0),
                     lastSuccess = lastSuccess,
                     lastValidation = lastValidation,
                     lastTemplate = lastTemplate,
                     executionValuesPersisted = executionValuesPersisted,
+                    localRecordWarning = localRecordWarning,
                     message = throwable.message ?: "提交任务异常",
                     updatedAt = now(),
                 ),
@@ -237,9 +258,11 @@ class OperationCenter(
             jobs.remove(operationId)
         }
         val status = when {
-            success == 0 -> OperationStatus.FAILED
-            processed == total && failed == 0 -> OperationStatus.SUCCESS
-            else -> OperationStatus.PARTIAL
+            success > 0 && processed == total && failed == 0 && unknown == 0 ->
+                OperationStatus.SUCCESS
+            success > 0 -> OperationStatus.PARTIAL
+            unknown > 0 -> OperationStatus.UNKNOWN
+            else -> OperationStatus.FAILED
         }
         if (success > 0) {
             executionValuesPersisted = lastTemplate?.let { completed ->
@@ -252,11 +275,13 @@ class OperationCenter(
                 processed = processed,
                 success = success,
                 failed = failed,
+                unknown = unknown,
                 skipped = (total - processed).coerceAtLeast(0),
                 lastSuccess = lastSuccess,
                 lastValidation = lastValidation,
                 lastTemplate = lastTemplate,
                 executionValuesPersisted = executionValuesPersisted,
+                localRecordWarning = localRecordWarning,
                 message = message,
                 updatedAt = now(),
             ),

@@ -23,4 +23,6 @@ data class TaskRecord(
     val requestedPromptId: String? = null,
     val statusUpdatedAt: Long? = null,
     val statusSource: String? = null,
+    /** 响应 ID 迁移后旧记录指向的新 promptId；非空时禁止再复用旧 ID 重试。 */
+    val supersededBy: String? = null,
 )

@@ -70,6 +70,17 @@ class TaskRecordEventCoordinatorTest {
     }
 
     @Test
+    fun prewrittenSubmittingRecordAppearsInReadModelImmediately() = runTest {
+        createCoordinator(CoroutineScope(StandardTestDispatcher(testScheduler)))
+
+        repository.upsert("server-a", record("p1", TaskStatus.SUBMITTING))
+        advanceUntilIdle()
+
+        assertEquals(TaskStatus.SUBMITTING, tasks.value.single().status)
+        assertEquals("p1", tasks.value.single().promptId)
+    }
+
+    @Test
     fun updateTaskUpsertsStoredRecordAndPersists() = runTest {
         createCoordinator(CoroutineScope(StandardTestDispatcher(testScheduler)))
         repository.upsert("server-a", record("p1", TaskStatus.QUEUED))

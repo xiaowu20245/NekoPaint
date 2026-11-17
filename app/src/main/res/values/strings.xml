@@ -111,7 +111,8 @@
     <string name="workflow_quick_run_batch_label">连发：</string>
     <string name="workflow_quick_run_auto_seed">自动随机种子</string>
     <string name="workflow_quick_submitted">已提交「%1$s」(%2$d 次任务)</string>
-    <string name="workflow_quick_partial">「%1$s」成功 %2$d，失败 %3$d，跳过 %4$d</string>
+    <string name="workflow_quick_partial">「%1$s」成功 %2$d，失败 %3$d，结果未知 %4$d，跳过 %5$d</string>
+    <string name="workflow_submit_background_running">提交将在后台继续，可在工作流列表查看结果</string>
     <string name="workflow_meta_nodes_short">%1$d 节点</string>
     <string name="workflow_meta_selected_short">%1$d 项可调</string>
     <string name="workflow_meta_image_mask_short">%1$d 图 / %2$d 蒙版</string>
@@ -223,6 +224,16 @@
     <string name="queue_refresh">刷新队列</string>
     <string name="queue_error">无法刷新队列：%1$s</string>
     <string name="queue_action_error">操作失败：%1$s</string>
+    <string name="queue_local_pending">本地待确认</string>
+    <string name="queue_local_submitting">提交中…</string>
+    <string name="queue_local_unknown">结果未知</string>
+    <string name="queue_local_migrated">已迁移</string>
+    <string name="queue_local_migrated_hint">已由新任务 %1$s 接管，旧记录不可重试；请核对新任务。</string>
+    <string name="queue_local_unknown_hint">服务器可能已接收任务。请先刷新队列/历史确认，再决定是否复用原 ID 重试。</string>
+    <string name="queue_record_write_error">任务记录写入失败：%1$s</string>
+    <string name="queue_local_check">检查队列/历史</string>
+    <string name="queue_local_retry">复用原 ID 重试</string>
+    <string name="queue_local_retrying">重试中…</string>
     <string name="queue_realtime_unavailable">实时连接不可用，正在定时轮询</string>
     <string name="queue_empty_title">当前队列空闲</string>
     <string name="queue_empty_desc">没有正在运行或等待中的任务，随时可发起新生成</string>
@@ -308,6 +319,7 @@
     <string name="history_resubmitting">提交中…</string>
     <string name="history_resubmit_hint">没有参数快照，无法再次生成。</string>
     <string name="history_resubmit_success">已再次提交，Prompt ID：%1$s</string>
+    <string name="history_resubmit_success_warning">已再次提交，Prompt ID：%1$s；%2$s</string>
     <string name="image_viewer_close">关闭图片预览</string>
     <string name="image_viewer_page">第 %1$d / %2$d 张</string>
     <string name="image_viewer_hint">双指缩放，左右滑动切换</string>
