@@ -778,4 +778,5 @@ git diff --check
   - **R2B1f 修复**：`TaskRecordEventDispatcher.closed` 改 `@Volatile`；`TaskManager.shutdown()` 关闭 coordinator/dispatcher；flush 超时返回“磁盘已写、内存同步未完成（可安全重试）”；新增外部事件丢弃、删除后 pending 拒绝、TTL、flush 超时/close 测试。
 - **验证**：95 suites / 519 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 54 节）；R2B1h-01～R2B1h-04 为非阻塞低优先级残余。
+- 第二轮第 1 批 commit 已提交为 `fix: 统一任务状态、持久化与进度`（`4036d60`）。
 - **说明**：本批不包含 2B 的预写/unknown 提交路径、Chat、Node install；这些按计划后续批次接入。
