@@ -779,4 +779,19 @@ git diff --check
 - **验证**：95 suites / 519 tests / 0 failures / 0 errors / 0 skipped；lint 0 errors / 9 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 54 节）；R2B1h-01～R2B1h-04 为非阻塞低优先级残余。
 - 第二轮第 1 批 commit 已提交为 `fix: 统一任务状态、持久化与进度`（`4036d60`）。
+
+### 39. 第二轮第 2A 批：工作流批量提交后台化（已复审 APPROVED）
+
+- 新增 `data/operation/OperationCenter`：独立 `operationScope`（不修改共享 appScope）、不可变 template 快照、RUNNING/PARTIAL/SUCCESS/FAILED/CANCELLED、success/failed/skipped/total、duplicate template guard、TTL 清理。
+- 批量失败矩阵：400/本地校验/Error 记为 failed 并跳过剩余；成功继续；0 成功为 FAILED；支持 cancel（当前无 UI 入口）。
+- `WorkflowDetailViewModel.submit()` 改为 OperationCenter.start + 状态观察；页面销毁不取消提交；历史 terminal 操作不会被新页面误当成本次结果；成功后仍同步执行值。
+- `WorkflowsViewModel.quickRun()` 改为 OperationCenter + operationId 观察；离开页面继续；结果通知/摘要/刷新列表。
+- `AppContainer` 创建独立 operationScope + operationCenter；Chat confirm、Node install 未迁移（按计划留到第 4/5 批）。
+- 测试：`OperationCenterTest` 覆盖部分成功/skipped、0 成功、全成功、重复模板拒绝、lastSuccess。
+- **R2A 修复**：非取消异常写入 FAILED；启动后立即应用当前 operation 状态；Validation 的 nodeErrors/fieldErrors 映射并触发兼容性复检；OperationCenter 增加 persistExecutionValues（成功执行值在 operationScope 落盘）；Workflows init 订阅 running/recent 操作并恢复摘要；quickRun 部分成功显示 failed/skipped 与错误详情；start 使用 startLock+LAZY job 原子占位；cancel 仅覆盖 RUNNING。
+- **R2A2 修复**：Workflows handled 只在 terminal 标记、RUNNING 不吞终态；Detail 先清 UI 再应用 current state；异常 processed/failed 计数修正、success>0 为 PARTIAL 且持久化执行值；lastValidation 进入终态、PARTIAL 映射 Validation；Workflows 恢复 5 分钟窗口内终态；终态写使用 updateTerminal 防止 cancel 被覆盖；PARTIAL 更新 lastTemplate。
+- **R2A3 修复**：QuickSubmitted 增加 failed/skipped 摘要并在 Snackbar 渲染（含 4 参字符串）；PARTIAL 摘要显示成功/失败/跳过；executionValuesPersisted 暴露给 ViewModel，成功/部分成功按落盘结果设置 dirty/saved；异常路径 runSucceeded 防双重计数；新增 cancel 不被终态覆盖、计数守恒测试。R2A3-04“提交后台继续”返回提示明确延后到 2B（不改变数据正确性）。
+- 验证：96 suites / 525 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；git diff --check 通过。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 58 节）；R2A4-01～03（ViewModel 测试/返回提示/cancel 竞争测试）为 2B 必须跟踪的非阻塞残余。
+
 - **说明**：本批不包含 2B 的预写/unknown 提交路径、Chat、Node install；这些按计划后续批次接入。

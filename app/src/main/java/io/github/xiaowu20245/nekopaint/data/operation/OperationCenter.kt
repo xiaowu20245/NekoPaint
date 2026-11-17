@@ -1,0 +1,307 @@
+package io.github.xiaowu20245.nekopaint.data.operation
+
+import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+enum class OperationStatus {
+    RUNNING,
+    PARTIAL,
+    SUCCESS,
+    FAILED,
+    CANCELLED,
+}
+
+data class SubmissionOperationState(
+    val operationId: String,
+    val templateId: String,
+    val status: OperationStatus,
+    val total: Int,
+    val processed: Int,
+    val success: Int,
+    val failed: Int,
+    val skipped: Int,
+    val lastSuccess: WorkflowSubmitResult.Success? = null,
+    val lastValidation: WorkflowSubmitResult.Validation? = null,
+    val lastTemplate: WorkflowTemplate? = null,
+    val executionValuesPersisted: Boolean? = null,
+    val message: String? = null,
+    val updatedAt: Long = 0L,
+) {
+    val isTerminal: Boolean
+        get() = status != OperationStatus.RUNNING
+}
+
+/**
+ * 工作流批量提交的后台操作中心。
+ *
+ * 操作使用独立的 application scope，页面销毁只取消观察，不取消已启动的提交循环。
+ */
+class OperationCenter(
+    private val scope: CoroutineScope,
+    private val submit: suspend (WorkflowTemplate) -> WorkflowSubmitResult,
+    private val persistExecutionValues: suspend (WorkflowTemplate) -> Unit = {},
+    private val now: () -> Long = System::currentTimeMillis,
+) {
+
+    private val _states = MutableStateFlow<Map<String, SubmissionOperationState>>(emptyMap())
+    val states: StateFlow<Map<String, SubmissionOperationState>> = _states.asStateFlow()
+
+    private val jobs = ConcurrentHashMap<String, Job>()
+    private val startLock = Any()
+
+    fun start(
+        template: WorkflowTemplate,
+        totalRuns: Int,
+        seedStrategy: SeedStrategy,
+    ): Result<String> {
+        pruneExpired()
+        val total = totalRuns.coerceIn(1, 16)
+        val operationId = UUID.randomUUID().toString()
+        val job: Job
+        synchronized(startLock) {
+            val active = _states.value.values.firstOrNull {
+                it.templateId == template.id && it.status == OperationStatus.RUNNING
+            }
+            if (active != null) {
+                return Result.failure(IllegalStateException("该工作流已有提交任务在执行"))
+            }
+            val initial = SubmissionOperationState(
+                operationId = operationId,
+                templateId = template.id,
+                status = OperationStatus.RUNNING,
+                total = total,
+                processed = 0,
+                success = 0,
+                failed = 0,
+                skipped = 0,
+                updatedAt = now(),
+            )
+            update(initial)
+            job = scope.launch(start = CoroutineStart.LAZY) {
+                runOperation(operationId, template, total, seedStrategy)
+            }
+            jobs[operationId] = job
+        }
+        job.start()
+        return Result.success(operationId)
+    }
+
+    fun cancel(operationId: String) {
+        val state = _states.value[operationId] ?: return
+        if (state.isTerminal) return
+        jobs[operationId]?.cancel()
+        jobs.remove(operationId)
+        _states.update { states ->
+            val current = states[operationId] ?: return@update states
+            if (current.status != OperationStatus.RUNNING) return@update states
+            states + (
+                operationId to current.copy(
+                    status = OperationStatus.CANCELLED,
+                    skipped = current.total - current.processed,
+                    message = "操作已取消",
+                    updatedAt = now(),
+                )
+                )
+        }
+    }
+
+    fun stateFor(templateId: String): SubmissionOperationState? =
+        _states.value.values
+            .filter { it.templateId == templateId }
+            .maxByOrNull { it.updatedAt }
+
+    private suspend fun runOperation(
+        operationId: String,
+        template: WorkflowTemplate,
+        total: Int,
+        seedStrategy: SeedStrategy,
+    ) {
+        var processed = 0
+        var success = 0
+        var failed = 0
+        var lastSuccess: WorkflowSubmitResult.Success? = null
+        var lastValidation: WorkflowSubmitResult.Validation? = null
+        var lastTemplate: WorkflowTemplate? = null
+        var executionValuesPersisted: Boolean? = null
+        var message: String? = null
+        var runSucceeded = false
+        try {
+            for (index in 0 until total) {
+                runSucceeded = false
+                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
+                    template = template,
+                    strategy = seedStrategy,
+                    runIndex = index,
+                )
+                when (val result = submit(runTemplate)) {
+                    is WorkflowSubmitResult.Success -> {
+                        processed += 1
+                        success += 1
+                        runSucceeded = true
+                        lastSuccess = result
+                        lastTemplate = runTemplate
+                    }
+
+                    WorkflowSubmitResult.NoServer -> {
+                        processed += 1
+                        failed += 1
+                        message = "提交失败：没有可用服务器"
+                        break
+                    }
+
+                    is WorkflowSubmitResult.Validation -> {
+                        processed += 1
+                        failed += 1
+                        message = "提交校验失败：${result.summary}"
+                        lastValidation = result
+                        break
+                    }
+
+                    is WorkflowSubmitResult.Error -> {
+                        processed += 1
+                        failed += 1
+                        message = result.message
+                        break
+                    }
+                }
+                update(
+                    currentState(operationId, template.id, total).copy(
+                        processed = processed,
+                        success = success,
+                        failed = failed,
+                        lastSuccess = lastSuccess,
+                        lastValidation = lastValidation,
+                        lastTemplate = lastTemplate,
+                        message = message,
+                        updatedAt = now(),
+                    ),
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            update(
+                currentState(operationId, template.id, total).copy(
+                    status = OperationStatus.CANCELLED,
+                    processed = processed,
+                    success = success,
+                    failed = failed,
+                    skipped = total - processed,
+                    lastSuccess = lastSuccess,
+                    lastTemplate = lastTemplate,
+                    message = "操作已取消",
+                    updatedAt = now(),
+                ),
+            )
+            throw cancelled
+        } catch (throwable: Throwable) {
+            val failedProcessed = if (runSucceeded) processed else (processed + 1).coerceAtMost(total)
+            val failedCount = if (runSucceeded) failed else failed + 1
+            executionValuesPersisted = if (success > 0) {
+                lastTemplate?.let { completed ->
+                    runCatching { persistExecutionValues(completed) }.isSuccess
+                }
+            } else {
+                null
+            }
+            updateTerminal(
+                currentState(operationId, template.id, total).copy(
+                    status = if (success > 0) OperationStatus.PARTIAL else OperationStatus.FAILED,
+                    processed = failedProcessed,
+                    success = success,
+                    failed = failedCount,
+                    skipped = (total - failedProcessed).coerceAtLeast(0),
+                    lastSuccess = lastSuccess,
+                    lastValidation = lastValidation,
+                    lastTemplate = lastTemplate,
+                    executionValuesPersisted = executionValuesPersisted,
+                    message = throwable.message ?: "提交任务异常",
+                    updatedAt = now(),
+                ),
+            )
+            return
+        } finally {
+            jobs.remove(operationId)
+        }
+        val status = when {
+            success == 0 -> OperationStatus.FAILED
+            processed == total && failed == 0 -> OperationStatus.SUCCESS
+            else -> OperationStatus.PARTIAL
+        }
+        if (success > 0) {
+            executionValuesPersisted = lastTemplate?.let { completed ->
+                runCatching { persistExecutionValues(completed) }.isSuccess
+            }
+        }
+        updateTerminal(
+            currentState(operationId, template.id, total).copy(
+                status = status,
+                processed = processed,
+                success = success,
+                failed = failed,
+                skipped = (total - processed).coerceAtLeast(0),
+                lastSuccess = lastSuccess,
+                lastValidation = lastValidation,
+                lastTemplate = lastTemplate,
+                executionValuesPersisted = executionValuesPersisted,
+                message = message,
+                updatedAt = now(),
+            ),
+        )
+    }
+
+    private fun currentState(
+        operationId: String,
+        templateId: String,
+        total: Int,
+    ): SubmissionOperationState =
+        _states.value[operationId] ?: SubmissionOperationState(
+            operationId = operationId,
+            templateId = templateId,
+            status = OperationStatus.RUNNING,
+            total = total,
+            processed = 0,
+            success = 0,
+            failed = 0,
+            skipped = 0,
+        )
+
+    private fun update(state: SubmissionOperationState) {
+        _states.update { it + (state.operationId to state) }
+    }
+
+    private fun updateTerminal(state: SubmissionOperationState) {
+        _states.update { states ->
+            val current = states[state.operationId]
+            if (current != null && current.status != OperationStatus.RUNNING) {
+                states
+            } else {
+                states + (state.operationId to state)
+            }
+        }
+    }
+
+    private fun pruneExpired() {
+        val cutoff = now() - OPERATION_TTL_MS
+        _states.update { states ->
+            states.filterValues { !(it.isTerminal && it.updatedAt < cutoff) }
+        }
+    }
+
+    private companion object {
+        const val OPERATION_TTL_MS = 10 * 60 * 1000L
+    }
+}

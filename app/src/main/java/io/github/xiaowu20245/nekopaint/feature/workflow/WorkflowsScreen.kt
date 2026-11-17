@@ -111,11 +111,21 @@ fun WorkflowsScreen(
         is WorkflowActionNotice.Renamed -> stringResource(R.string.workflow_renamed, notice.name)
         is WorkflowActionNotice.Copied -> stringResource(R.string.workflow_copied, notice.name)
         WorkflowActionNotice.Deleted -> stringResource(R.string.workflow_deleted)
-        is WorkflowActionNotice.QuickSubmitted -> stringResource(
-            R.string.workflow_quick_submitted,
-            notice.name,
-            notice.count,
-        )
+        is WorkflowActionNotice.QuickSubmitted -> if (notice.failed > 0 || notice.skipped > 0) {
+            stringResource(
+                R.string.workflow_quick_partial,
+                notice.name,
+                notice.count,
+                notice.failed,
+                notice.skipped,
+            )
+        } else {
+            stringResource(
+                R.string.workflow_quick_submitted,
+                notice.name,
+                notice.count,
+            )
+        }
         null -> null
     }
     var renameTarget by remember { mutableStateOf<WorkflowTemplate?>(null) }

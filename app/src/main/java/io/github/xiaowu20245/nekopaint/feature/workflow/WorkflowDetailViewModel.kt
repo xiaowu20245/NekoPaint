@@ -22,6 +22,9 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.ModelInputResolver
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
+import io.github.xiaowu20245.nekopaint.data.operation.OperationCenter
+import io.github.xiaowu20245.nekopaint.data.operation.OperationStatus
+import io.github.xiaowu20245.nekopaint.data.operation.SubmissionOperationState
 import io.github.xiaowu20245.nekopaint.data.repository.ModelsRepository
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
 import io.github.xiaowu20245.nekopaint.data.repository.NodeInstallRepository
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -110,6 +114,7 @@ data class NodeInstallUiState(
 class WorkflowDetailViewModel(
     private val templateId: String,
     private val repository: WorkflowRepository,
+    private val operationCenter: OperationCenter,
     private val modelsRepository: ModelsRepository,
     private val taskManager: TaskManager,
     private val pendingRefillStore: PendingWorkflowRefillStore,
@@ -138,6 +143,7 @@ class WorkflowDetailViewModel(
         )
 
     private var compatibilityFresh = false
+    private var activeOperationId: String? = null
 
     init {
         viewModelScope.launch {
@@ -183,6 +189,31 @@ class WorkflowDetailViewModel(
             template?.let { refreshCompatibility(it) }
         }
         taskManager.refresh()
+        viewModelScope.launch {
+            operationCenter.states
+                .map { states ->
+                    states.values
+                        .filter { it.templateId == templateId }
+                        .maxByOrNull { it.updatedAt }
+                }
+                .distinctUntilChanged()
+                .collect { operation ->
+                    if (operation == null) return@collect
+                    val active = activeOperationId
+                    if (operation.operationId != active &&
+                        !(active == null && operation.status == OperationStatus.RUNNING)
+                    ) {
+                        return@collect
+                    }
+                    if (operation.operationId != active) {
+                        activeOperationId = operation.operationId
+                    }
+                    applyOperationState(operation)
+                    if (operation.isTerminal) {
+                        activeOperationId = null
+                    }
+                }
+        }
     }
 
     private fun refreshCompatibility(template: WorkflowTemplate) {
@@ -854,8 +885,17 @@ class WorkflowDetailViewModel(
 
         val totalRuns = state.batchCount.coerceIn(1, 16)
         val strategy = state.seedStrategy
-
-        viewModelScope.launch {
+        val started = operationCenter.start(template, totalRuns, strategy)
+        started.onFailure { error ->
+            _uiState.update {
+                it.copy(
+                    submitError = SubmitErrorUi(
+                        message = error.message ?: "无法启动提交任务",
+                    ),
+                )
+            }
+        }.onSuccess { operationId ->
+            activeOperationId = operationId
             _uiState.update {
                 it.copy(
                     submitting = true,
@@ -864,87 +904,109 @@ class WorkflowDetailViewModel(
                     submission = null,
                 )
             }
+            operationCenter.stateFor(templateId)
+                ?.takeIf { it.operationId == operationId }
+                ?.let(::applyOperationState)
+        }
+    }
 
-            var latestTemplate = template
-            var lastSuccess: WorkflowSubmitResult.Success? = null
-            var successCount = 0
-
-            for (runIndex in 0 until totalRuns) {
-                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
-                    template = template,
-                    strategy = strategy,
-                    runIndex = runIndex,
-                )
-                when (val result = repository.submit(runTemplate)) {
-                    is WorkflowSubmitResult.Success -> {
-                        latestTemplate = runTemplate
-                        lastSuccess = result
-                        successCount++
-                    }
-
-                    is WorkflowSubmitResult.Validation -> {
-                        val fieldErrors = mutableMapOf<String, FieldError>()
-                        template.selectedCandidates.forEach { candidate ->
-                            val nodeError = result.nodeErrors.firstOrNull {
-                                it.nodeId == candidate.nodeId
-                            }
-                            if (nodeError != null) {
-                                fieldErrors[candidate.id] = FieldError.Server(nodeError.message)
-                            }
-                        }
-                        _uiState.update {
-                            it.copy(
-                                template = latestTemplate,
-                                submitting = false,
-                                fieldErrors = fieldErrors,
-                                submitError = SubmitErrorUi(
-                                    message = result.summary,
-                                    nodeErrors = result.nodeErrors,
-                                ),
-                            )
-                        }
-                        // 提交校验失败常意味着当前主机缺少节点；立即复检并刷新安装入口。
-                        refreshCompatibility(latestTemplate)
-                        return@launch
-                    }
-
-                    WorkflowSubmitResult.NoServer -> {
-                        _uiState.update {
-                            it.copy(
-                                template = latestTemplate,
-                                submitting = false,
-                                submitError = SubmitErrorUi(
-                                    messageRes = R.string.workflow_submit_no_server,
-                                ),
-                            )
-                        }
-                        return@launch
-                    }
-
-                    is WorkflowSubmitResult.Error -> {
-                        _uiState.update {
-                            it.copy(
-                                template = latestTemplate,
-                                submitting = false,
-                                submitError = SubmitErrorUi(message = result.message),
-                            )
-                        }
-                        return@launch
-                    }
+    private fun applyOperationState(operation: SubmissionOperationState) {
+        when (operation.status) {
+            OperationStatus.RUNNING -> {
+                _uiState.update {
+                    it.copy(
+                        submitting = true,
+                        submitError = null,
+                    )
                 }
             }
 
-            runCatching { repository.updateTemplate(latestTemplate) }
+            OperationStatus.SUCCESS -> {
+                _uiState.update {
+                    it.copy(
+                        template = operation.lastTemplate ?: it.template,
+                        submitting = false,
+                        submission = operation.lastSuccess,
+                        submittedBatchCount = operation.success,
+                        dirty = operation.executionValuesPersisted == false,
+                        saved = operation.executionValuesPersisted != false,
+                        submitError = if (operation.executionValuesPersisted == false) {
+                            SubmitErrorUi(message = "任务已提交，但本地执行参数保存失败")
+                        } else {
+                            null
+                        },
+                    )
+                }
+            }
 
-            _uiState.update {
-                it.copy(
-                    template = latestTemplate,
-                    submitting = false,
-                    submission = lastSuccess,
-                    submittedBatchCount = successCount.coerceAtLeast(1),
-                    dirty = false,
-                    saved = true,
-                )
+            OperationStatus.PARTIAL -> {
+                val validation = operation.lastValidation
+                val fieldErrors = if (validation != null) {
+                    val template = _uiState.value.template
+                    template?.selectedCandidates.orEmpty().mapNotNull { candidate ->
+                        val nodeError = validation.nodeErrors.firstOrNull {
+                            it.nodeId == candidate.nodeId
+                        }
+                        nodeError?.let { candidate.id to FieldError.Server(it.message) }
+                    }.toMap()
+                } else {
+                    emptyMap()
+                }
+                _uiState.update {
+                    it.copy(
+                        template = operation.lastTemplate ?: it.template,
+                        submitting = false,
+                        submission = operation.lastSuccess,
+                        submittedBatchCount = operation.success,
+                        dirty = operation.executionValuesPersisted == false,
+                        saved = operation.executionValuesPersisted != false,
+                        fieldErrors = fieldErrors,
+                        submitError = SubmitErrorUi(
+                            message = buildString {
+                                append(operation.message ?: "部分任务提交失败")
+                                append("（成功 ${operation.success}，失败 ${operation.failed}，跳过 ${operation.skipped}）")
+                                if (operation.executionValuesPersisted == false) {
+                                    append("；本地执行参数保存失败")
+                                }
+                            },
+                            nodeErrors = validation?.nodeErrors.orEmpty(),
+                        ),
+                    )
+                }
+                if (validation != null) {
+                    _uiState.value.template?.let(::refreshCompatibility)
+                }
+            }
+
+            OperationStatus.FAILED,
+            OperationStatus.CANCELLED,
+            -> {
+                val validation = operation.lastValidation
+                val fieldErrors = if (validation != null) {
+                    val template = _uiState.value.template
+                    template?.selectedCandidates.orEmpty().mapNotNull { candidate ->
+                        val nodeError = validation.nodeErrors.firstOrNull {
+                            it.nodeId == candidate.nodeId
+                        }
+                        nodeError?.let { candidate.id to FieldError.Server(it.message) }
+                    }.toMap()
+                } else {
+                    emptyMap()
+                }
+                _uiState.update {
+                    it.copy(
+                        submitting = false,
+                        submittedBatchCount = operation.success,
+                        fieldErrors = fieldErrors,
+                        submitError = SubmitErrorUi(
+                            message = operation.message ?: "提交失败",
+                            nodeErrors = validation?.nodeErrors.orEmpty(),
+                        ),
+                    )
+                }
+                if (validation != null) {
+                    _uiState.value.template?.let(::refreshCompatibility)
+                }
             }
         }
     }
@@ -1037,6 +1099,7 @@ class WorkflowDetailViewModel(
                 WorkflowDetailViewModel(
                     templateId = templateId,
                     repository = container.workflowRepository,
+                    operationCenter = container.operationCenter,
                     modelsRepository = container.modelsRepository,
                     taskManager = container.taskManager,
                     pendingRefillStore = container.pendingWorkflowRefillStore,

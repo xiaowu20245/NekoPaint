@@ -11,10 +11,11 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
-import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
+import io.github.xiaowu20245.nekopaint.data.operation.OperationCenter
+import io.github.xiaowu20245.nekopaint.data.operation.OperationStatus
+import io.github.xiaowu20245.nekopaint.data.operation.SubmissionOperationState
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowImportResult
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
-import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -25,8 +26,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class WorkflowsUiState(
@@ -54,11 +56,17 @@ sealed interface WorkflowActionNotice {
     data class Renamed(val name: String) : WorkflowActionNotice
     data class Copied(val name: String) : WorkflowActionNotice
     data object Deleted : WorkflowActionNotice
-    data class QuickSubmitted(val name: String, val count: Int) : WorkflowActionNotice
+    data class QuickSubmitted(
+        val name: String,
+        val count: Int,
+        val failed: Int = 0,
+        val skipped: Int = 0,
+    ) : WorkflowActionNotice
 }
 
 class WorkflowsViewModel(
     private val repository: WorkflowRepository,
+    private val operationCenter: OperationCenter,
     private val activeServerId: Flow<String?>,
 ) : ViewModel() {
 
@@ -67,8 +75,18 @@ class WorkflowsViewModel(
 
     private var compatibilityRefreshPending = false
     private var refreshJob: Job? = null
+    private val viewModelStartedAt = System.currentTimeMillis()
+    private val handledOperations = mutableSetOf<String>()
 
     init {
+        viewModelScope.launch {
+            operationCenter.states
+                .map { states -> states.values.toList() }
+                .distinctUntilChanged()
+                .collect { states ->
+                    states.forEach(::handleOperationState)
+                }
+        }
         viewModelScope.launch {
             val templates = runCatching { repository.listTemplates() }.getOrDefault(emptyList())
             _uiState.update { it.copy(loading = false, templates = templates) }
@@ -145,54 +163,66 @@ class WorkflowsViewModel(
                 return@launch
             }
 
-            var successCount = 0
-            var lastTemplate: WorkflowTemplate = baseTemplate
-            var errorRes: Int? = null
-            var errorMessage: String? = null
+            val started = operationCenter.start(
+                template = baseTemplate,
+                totalRuns = count,
+                seedStrategy = SeedStrategy.RANDOM,
+            )
+            started.getOrElse { error ->
+                _uiState.update {
+                    it.copy(
+                        runningTemplateId = null,
+                        errorDetail = error.message ?: "无法启动快捷运行",
+                    )
+                }
+                return@launch
+            }
+        }
+    }
 
-            for (index in 0 until count) {
-                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
-                    template = lastTemplate,
-                    strategy = SeedStrategy.RANDOM,
-                    runIndex = index,
-                )
-                when (val result = repository.submit(runTemplate)) {
-                    is WorkflowSubmitResult.Success -> {
-                        successCount++
-                        lastTemplate = runTemplate
-                    }
-                    WorkflowSubmitResult.NoServer -> {
-                        errorRes = R.string.workflow_submit_no_server
-                        break
-                    }
-                    is WorkflowSubmitResult.Validation -> {
-                        errorMessage = result.summary
-                        break
-                    }
-                    is WorkflowSubmitResult.Error -> {
-                        errorMessage = result.message
-                        break
-                    }
+    private fun handleOperationState(operation: SubmissionOperationState) {
+        if (operation.status == OperationStatus.RUNNING) {
+            _uiState.update { state ->
+                if (state.runningTemplateId == null) {
+                    state.copy(runningTemplateId = operation.templateId)
+                } else {
+                    state
                 }
             }
-
-            if (successCount > 0) {
-                runCatching { repository.updateTemplate(lastTemplate) }
-                refreshTemplates()
-            }
-
-            _uiState.update {
-                it.copy(
-                    runningTemplateId = null,
-                    actionNotice = if (successCount > 0) {
-                        WorkflowActionNotice.QuickSubmitted(baseTemplate.name, successCount)
-                    } else {
-                        it.actionNotice
-                    },
-                    errorRes = errorRes,
-                    errorDetail = errorMessage,
-                )
-            }
+            return
+        }
+        if (operation.updatedAt < viewModelStartedAt - RECENT_OPERATION_WINDOW_MS) return
+        if (!handledOperations.add(operation.operationId)) return
+        val name = _uiState.value.templates
+            .firstOrNull { it.id == operation.templateId }
+            ?.name
+            .orEmpty()
+        _uiState.update {
+            it.copy(
+                runningTemplateId = null,
+                actionNotice = if (operation.success > 0) {
+                    WorkflowActionNotice.QuickSubmitted(
+                        name = name,
+                        count = operation.success,
+                        failed = operation.failed,
+                        skipped = operation.skipped,
+                    )
+                } else {
+                    it.actionNotice
+                },
+                errorRes = if (operation.status == OperationStatus.FAILED &&
+                    operation.message?.contains("服务器") == true
+                ) {
+                    R.string.workflow_submit_no_server
+                } else {
+                    null
+                },
+                errorDetail = operation.message
+                    ?.takeIf { operation.failed > 0 || operation.skipped > 0 },
+            )
+        }
+        if (operation.success > 0) {
+            viewModelScope.launch { refreshTemplates() }
         }
     }
 
@@ -372,11 +402,13 @@ class WorkflowsViewModel(
 
     companion object {
         private const val INITIAL_SETTLE_DELAY_MS = 250L
+        private const val RECENT_OPERATION_WINDOW_MS = 5 * 60 * 1000L
 
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 WorkflowsViewModel(
                     repository = container.workflowRepository,
+                    operationCenter = container.operationCenter,
                     activeServerId = container.serverConfigStore.activeServerId,
                 )
             }

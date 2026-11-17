@@ -111,6 +111,7 @@
     <string name="workflow_quick_run_batch_label">连发：</string>
     <string name="workflow_quick_run_auto_seed">自动随机种子</string>
     <string name="workflow_quick_submitted">已提交「%1$s」(%2$d 次任务)</string>
+    <string name="workflow_quick_partial">「%1$s」成功 %2$d，失败 %3$d，跳过 %4$d</string>
     <string name="workflow_meta_nodes_short">%1$d 节点</string>
     <string name="workflow_meta_selected_short">%1$d 项可调</string>
     <string name="workflow_meta_image_mask_short">%1$d 图 / %2$d 蒙版</string>

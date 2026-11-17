@@ -2,10 +2,12 @@ package io.github.xiaowu20245.nekopaint.di
 
 import android.content.Context
 import io.github.xiaowu20245.nekopaint.BuildConfig
+import io.github.xiaowu20245.nekopaint.core.common.AppLog
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
+import io.github.xiaowu20245.nekopaint.data.operation.OperationCenter
 import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
 import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
@@ -32,6 +34,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.TaskRecordRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatHistoryStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,6 +54,12 @@ class AppContainer(context: Context) {
 
     // 应用级协程作用域：聊天请求在离开页面后仍继续完成并写盘。
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // 批量提交/安装等长操作使用独立作用域，异常不改变聊天等共享 appScope 语义。
+    val operationScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, throwable ->
+            AppLog.w("operation failed", throwable)
+        },
+    )
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -172,6 +181,12 @@ class AppContainer(context: Context) {
         serverConfigStore = serverConfigStore,
         clientIdStore = clientIdStore,
         taskStore = taskStore,
+    )
+
+    val operationCenter = OperationCenter(
+        scope = operationScope,
+        submit = { template -> workflowRepository.submit(template) },
+        persistExecutionValues = { template -> workflowRepository.updateTemplate(template) },
     )
 
     val nodeInstallRepository = NodeInstallRepository(
