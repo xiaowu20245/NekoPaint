@@ -571,16 +571,30 @@ fun WorkflowDetailScreen(
 
     maskEditorCandidateId?.let { candidateId ->
         val maskSourceImages by viewModel.maskSourceImages.collectAsStateWithLifecycle()
+        val maskExportState by viewModel.maskExportState.collectAsStateWithLifecycle()
+        LaunchedEffect(maskExportState.success) {
+            if (maskExportState.success) {
+                maskEditorCandidateId = null
+                viewModel.resetMaskExportState()
+            }
+        }
         MaskEditorDialog(
             images = maskSourceImages,
-            uploading = state.uploadingCandidateId == candidateId,
-            uploadError = state.imageUploadError,
+            uploading = maskExportState.busy,
+            uploadError = maskExportState.error,
+            dimensionReader = app.container.imageDimensionReader,
             onDismiss = {
                 maskEditorCandidateId = null
                 viewModel.clearImageUploadNotice()
+                viewModel.resetMaskExportState()
             },
-            onUpload = { bitmap ->
-                viewModel.uploadMask(candidateId, bitmap)
+            onUpload = { strokes, sourceSize ->
+                viewModel.exportMask(
+                    candidateId = candidateId,
+                    strokes = strokes,
+                    sourceWidth = sourceSize.width,
+                    sourceHeight = sourceSize.height,
+                )
             },
         )
     }

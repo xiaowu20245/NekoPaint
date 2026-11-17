@@ -17,6 +17,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
 import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
 import io.github.xiaowu20245.nekopaint.data.repository.HistoryAutoSaver
+import io.github.xiaowu20245.nekopaint.data.repository.ImageDimensionReader
 import io.github.xiaowu20245.nekopaint.data.repository.ImageSaver
 import io.github.xiaowu20245.nekopaint.data.repository.ImageShareManager
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
@@ -128,6 +129,11 @@ class AppContainer(context: Context) {
     val serverAvatarStore = ServerAvatarStore(context.applicationContext)
 
     val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)
+
+    val imageDimensionReader = ImageDimensionReader(
+        contentResolver = context.applicationContext.contentResolver,
+        httpClient = imageOkHttpClient,
+    )
 
     val historyAutoSaver = HistoryAutoSaver(
         context = context.applicationContext,

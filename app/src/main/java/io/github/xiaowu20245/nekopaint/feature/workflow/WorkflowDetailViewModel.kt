@@ -34,6 +34,10 @@ import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +48,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface FieldError {
     data class Local(@param:StringRes val messageRes: Int) : FieldError
@@ -99,6 +104,16 @@ data class WorkflowDetailUiState(
         }.orEmpty()
 }
 
+data class MaskExportState(
+    val rendering: Boolean = false,
+    val uploading: Boolean = false,
+    val error: String? = null,
+    val success: Boolean = false,
+) {
+    val busy: Boolean
+        get() = rendering || uploading
+}
+
 data class NodeInstallUiState(
     val visible: Boolean = false,
     val loading: Boolean = false,
@@ -119,6 +134,7 @@ class WorkflowDetailViewModel(
     private val taskManager: TaskManager,
     private val pendingRefillStore: PendingWorkflowRefillStore,
     private val nodeInstallRepository: NodeInstallRepository,
+    private val maskExportScope: CoroutineScope,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(WorkflowDetailUiState())
@@ -126,6 +142,9 @@ class WorkflowDetailViewModel(
 
     private val _nodeInstallState = MutableStateFlow(NodeInstallUiState())
     val nodeInstallState: StateFlow<NodeInstallUiState> = _nodeInstallState.asStateFlow()
+
+    private val _maskExportState = MutableStateFlow(MaskExportState())
+    val maskExportState: StateFlow<MaskExportState> = _maskExportState.asStateFlow()
 
     /**
      * 蒙版来源图只在打开蒙版编辑器时订阅，避免历史刷新触发表单整页重组。
@@ -402,10 +421,78 @@ class WorkflowDetailViewModel(
     }
 
     /**
-     * 上传画布导出的蒙版，并写回当前蒙版槽。
+     * 在后台按预算渲染蒙版并上传，Bitmap 只在本次导出内持有，所有路径 finally recycle。
      */
-    fun uploadMask(candidateId: String, bitmap: Bitmap) {
-        uploadToCandidate(candidateId) { repository.uploadMask(bitmap) }
+    fun exportMask(
+        candidateId: String,
+        strokes: List<MaskStroke>,
+        sourceWidth: Int,
+        sourceHeight: Int,
+    ) {
+        if (_maskExportState.value.busy) return
+        if (strokes.isEmpty() || sourceWidth <= 0 || sourceHeight <= 0) {
+            _maskExportState.value = MaskExportState(error = "蒙版尺寸或笔迹无效")
+            return
+        }
+        _maskExportState.value = MaskExportState(rendering = true)
+        maskExportScope.launch {
+            var bitmap: Bitmap? = null
+            try {
+                val target = MaskExportPolicy.targetSize(sourceWidth, sourceHeight)
+                // 让渲染完成并把 Bitmap 赋给可清理变量后再响应取消，避免返回窗口泄漏。
+                bitmap = withContext(Dispatchers.Default + NonCancellable) {
+                    MaskBitmapRenderer.render(target, strokes)
+                }
+                _maskExportState.update { it.copy(rendering = false, uploading = true) }
+                repository.uploadMask(bitmap)
+                    .onSuccess { uploaded ->
+                        _uiState.update { state ->
+                            val template = state.template ?: return@update state
+                            state.copy(
+                                template = template.copy(
+                                    candidates = template.candidates.map { candidate ->
+                                        if (candidate.id == candidateId) {
+                                            candidate.copy(value = uploaded.reference)
+                                        } else {
+                                            candidate
+                                        }
+                                    },
+                                ),
+                                uploadedImageName = uploaded.fileName,
+                                imageUploadError = null,
+                                dirty = true,
+                                saved = false,
+                                fieldErrors = state.fieldErrors - candidateId,
+                                submission = null,
+                                submitError = null,
+                            )
+                        }
+                        _maskExportState.value = MaskExportState(success = true)
+                    }
+                    .onFailure { throwable ->
+                        _maskExportState.value = MaskExportState(
+                            error = throwable.message ?: "蒙版上传失败",
+                        )
+                    }
+            } catch (oom: OutOfMemoryError) {
+                _maskExportState.value = MaskExportState(error = "图片过大，内存不足")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                _maskExportState.value = MaskExportState(
+                    error = throwable.message ?: "蒙版导出失败",
+                )
+            } finally {
+                bitmap?.recycle()
+                _maskExportState.update { state ->
+                    if (state.busy) state.copy(rendering = false, uploading = false) else state
+                }
+            }
+        }
+    }
+
+    fun resetMaskExportState() {
+        _maskExportState.value = MaskExportState()
     }
 
     private fun uploadToCandidate(
@@ -1019,6 +1106,7 @@ class WorkflowDetailViewModel(
                     taskManager = container.taskManager,
                     pendingRefillStore = container.pendingWorkflowRefillStore,
                     nodeInstallRepository = container.nodeInstallRepository,
+                    maskExportScope = container.operationScope,
                 )
             }
         }

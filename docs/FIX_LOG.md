@@ -837,3 +837,26 @@ git diff --check
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 64 节）；R2B4/R2B5 的迁移 ID 与映射问题已在六轮复审核对闭环。
 - 第二轮第 2B 批 commit 已提交为 `fix: 提交幂等与本地任务记录`（`ee106d2`）。
 - 未包含：Chat confirm、Node install（按计划留第 4/5 批）；unknown-only 记录在队列页展示，历史页仅在存在匹配 history entry 时显示任务状态。
+
+### 41. 第二轮第 3 批：图片内存与分辨率（已复审 APPROVED）
+
+- **CR-012 蒙版**
+  - 新增 `MaskExportPolicy`：最长边 4096、16MP 像素预算、RGB_565、32MB 上限；`targetSize/scale/estimatedBytes` 为纯 JVM 策略。
+  - 新增 `MaskStroke` 与 `MaskBitmapRenderer`：Dialog 只收集归一化笔迹；渲染在后台执行，使用 RGB_565、黑底白笔迹，渲染后校验无 alpha 且抽样灰阶；异常路径 recycle。
+  - `MaskEditorDialog` 回调改为 `onUpload(strokes, sourceSize)`，点击时不再渲染为主线程工作；`ImageDimensionReader` 预读 PNG/JPEG/WebP 头尺寸。
+  - `WorkflowDetailViewModel` 新增 `MaskExportState`（rendering/uploading/error/success），`exportMask` 在 `operationScope` 后台渲染+上传；ViewModel/导出函数是 Bitmap 唯一所有者，`finally` recycle，成功后关闭蒙版对话框并写回候选值。
+  - 新增 `ImageHeaderParser` + `ImageDimensionReader`：PNG IHDR/tRNS、JPEG SOF、WebP VP8/VP8L/VP8X；HTTP 使用注入的 image client 且只读 256KB 头，失败返回 Result。
+- **CR-013 Chat 图片**
+  - `ChatImageEncoder` 不再 `readBytes`：先按 20MB 上限 bounded 复制到 cache，再 `inJustDecodeBounds` + `inSampleSize`（约 2×目标）解码，精确缩放到 1024。
+  - 新增 `ChatImageDecodePolicy`（20MB/1024/采样/目标/格式）；照片输出 JPEG，源图 alpha（PNG/tRNS、WebP alpha）输出 PNG；头无法解析时保守按 PNG。
+  - 临时文件、decoded/scaled Bitmap 在所有路径 finally 删除/recycle；OOM/解码/编码失败返回 Result.failure。
+- **R3 修复（第 65 节 CONDITIONAL 后）**：
+  - R3-01：蒙版 Paint 关闭抗锯齿，确保 RGB_565 只有黑白；保留严格灰阶校验。`MaskBitmapRendererInstrumentedTest` 在 Android Canvas 上验证 4000×4000 蒙版、四角黑色、笔迹中心白色、无 alpha。
+  - R3-02：`MaskEditorDialog` 分离 `sourceSize`（ImageDimensionReader 头解析，导出用）与 `decodedSize`（Coil 显示用）；Coil 只填充 decoded，源尺寸仅在缺失时兜底，不再覆盖头解析结果。
+  - R3-03：`ImageHeaderParser.parseWebP` 对 VP8X/VP8/VP8L 分别做严格长度检查，截断头返回 null；`ChatImageEncoder` 用局部 `runCatching` 解析头，失败按 PNG 保守处理。补截断 VP8X/VP8/VP8L 测试。
+  - R3-05：蒙版渲染与 Chat bounded 复制放入 `NonCancellable` 作用域，确保 Bitmap/临时文件在取消窗口中有明确所有者并最终清理。
+  - R3-04：新增 7 项 Android instrumentation，并在 `NekoPaint_API_28` 模拟器全部通过：4000×4000 蒙版+擦除（断言角点 (0,0) 黑、笔迹中心白）、4000×3000 JPEG→≤1024、50MP (8160×6120) 照片→≤1024、透明 PNG 保持 PNG、8000×1000 长截图→≤1024、>20MB 文件失败。
+- 测试：`MaskExportPolicyTest` 5、`ImageHeaderParserTest` 6（含截断 WebP）、`ChatImageDecodePolicyTest` 4；Android instrumentation 7。
+- 验证：110 suites / 606 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；`git diff --check` 通过；`connectedDebugAndroidTest` 7/7 通过。
+- **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 66 节）。
+- 非阻塞残余：R3B-01 `sourceSize` 优先级缺直接 UI/策略断言；R3B-02 NonCancellable 取消窗口缺专门测试；R3B-03 文档“四角黑色”已修正为角点断言。R3B-01/02 留第 4 批跟踪。

@@ -1,10 +1,5 @@
 package io.github.xiaowu20245.nekopaint.feature.workflow
 
-import android.graphics.Bitmap
-import android.graphics.Canvas as AndroidCanvas
-import android.graphics.Color as AndroidColor
-import android.graphics.Paint
-import android.graphics.Path as AndroidPath
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -74,19 +69,13 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
 import coil3.compose.AsyncImage
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import io.github.xiaowu20245.nekopaint.data.repository.ImageDimensionReader
 import kotlinx.coroutines.delay
 import kotlin.math.min
-import kotlin.math.roundToInt
-
-private data class MaskStroke(
-    val points: List<Offset>,
-    val widthFraction: Float,
-    val eraser: Boolean,
-)
 
 /**
  * 单图蒙版编辑器。
@@ -98,11 +87,13 @@ fun MaskEditorDialog(
     images: List<HistoryImage>,
     uploading: Boolean,
     uploadError: String?,
+    dimensionReader: ImageDimensionReader? = null,
     onDismiss: () -> Unit,
-    onUpload: (Bitmap) -> Unit,
+    onUpload: (List<MaskStroke>, IntSize) -> Unit,
 ) {
     var selectedImage by remember { mutableStateOf<HistoryImage?>(null) }
-    var imageSize by remember { mutableStateOf<IntSize?>(null) }
+    var sourceSize by remember { mutableStateOf<IntSize?>(null) }
+    var decodedSize by remember { mutableStateOf<IntSize?>(null) }
     var imageLoadFailed by remember { mutableStateOf(false) }
     var loadTimedOut by remember { mutableStateOf(false) }
     var loadAttempt by remember { mutableIntStateOf(0) }
@@ -113,14 +104,22 @@ fun MaskEditorDialog(
     val candidates = remember(images) { images.filter { !it.url.isNullOrBlank() } }
 
     LaunchedEffect(selectedImage?.url, loadAttempt) {
-        imageSize = null
+        sourceSize = null
+        decodedSize = null
         imageLoadFailed = false
         loadTimedOut = false
         currentStroke = null
         strokes.clear()
+        val url = selectedImage?.url
+        if (url != null && dimensionReader != null) {
+            dimensionReader.read(url.toUri()).getOrNull()?.let { dimensions ->
+                // 头解析得到的是源图尺寸，不能被 Coil 的解码/显示尺寸覆盖。
+                sourceSize = IntSize(dimensions.width, dimensions.height)
+            }
+        }
         if (selectedImage != null) {
             delay(20_000)
-            if (imageSize == null) {
+            if (decodedSize == null) {
                 loadTimedOut = true
             }
         }
@@ -172,7 +171,7 @@ fun MaskEditorDialog(
                         currentStroke = currentStroke,
                         brushSize = brushSize,
                         eraser = eraser,
-                        imageSize = imageSize,
+                        imageSize = decodedSize ?: sourceSize,
                         imageLoadFailed = imageLoadFailed,
                         loadTimedOut = loadTimedOut,
                         loadAttempt = loadAttempt,
@@ -181,7 +180,10 @@ fun MaskEditorDialog(
                             loadTimedOut = false
                             loadAttempt += 1
                         },
-                        onImageSize = { imageSize = it },
+                        onImageSize = { decoded ->
+                            decodedSize = decoded
+                            if (sourceSize == null) sourceSize = decoded
+                        },
                         onImageFailed = { imageLoadFailed = true },
                         onStrokeChange = { currentStroke = it },
                         onStrokeCommit = { stroke ->
@@ -205,13 +207,12 @@ fun MaskEditorDialog(
                             currentStroke = null
                         },
                         uploading = uploading,
-                        canUpload = strokes.isNotEmpty() && imageSize != null,
+                        canUpload = strokes.isNotEmpty() && sourceSize != null,
                         uploadError = uploadError,
                         onPickAnother = { selectedImage = null },
                         onUpload = {
-                            val size = imageSize ?: return@MaskTools
-                            val bitmap = renderMaskBitmap(size.width, size.height, strokes)
-                            onUpload(bitmap)
+                            val size = sourceSize ?: return@MaskTools
+                            onUpload(strokes.toList(), size)
                         },
                     )
                 }
@@ -572,59 +573,4 @@ private fun MaskTools(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-}
-
-/**
- * 导出黑白蒙版：白色=重绘区域，黑色=保留区域。
- */
-private fun renderMaskBitmap(
-    sourceWidth: Int,
-    sourceHeight: Int,
-    strokes: List<MaskStroke>,
-): Bitmap {
-    val maxDimension = 4096f
-    val scale = min(
-        1f,
-        maxDimension / maxOf(sourceWidth, sourceHeight).toFloat(),
-    )
-    val width = (sourceWidth * scale).roundToInt().coerceAtLeast(1)
-    val height = (sourceHeight * scale).roundToInt().coerceAtLeast(1)
-    val bitmap = createBitmap(width, height, Bitmap.Config.RGB_565)
-    val canvas = AndroidCanvas(bitmap)
-    canvas.drawColor(AndroidColor.BLACK)
-
-    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-
-    strokes.forEach { stroke ->
-        val color = if (stroke.eraser) AndroidColor.BLACK else AndroidColor.WHITE
-        val strokeWidth = (stroke.widthFraction * width).coerceAtLeast(1f)
-        strokePaint.color = color
-        strokePaint.strokeWidth = strokeWidth
-        dotPaint.color = color
-        if (stroke.points.size == 1) {
-            val point = stroke.points.first()
-            canvas.drawCircle(
-                point.x * width,
-                point.y * height,
-                strokeWidth / 2f,
-                dotPaint,
-            )
-        } else {
-            val path = AndroidPath()
-            val first = stroke.points.first()
-            path.moveTo(first.x * width, first.y * height)
-            stroke.points.drop(1).forEach { point ->
-                path.lineTo(point.x * width, point.y * height)
-            }
-            canvas.drawPath(path, strokePaint)
-        }
-    }
-    return bitmap
 }
