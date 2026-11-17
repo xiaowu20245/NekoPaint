@@ -859,4 +859,5 @@ git diff --check
 - 测试：`MaskExportPolicyTest` 5、`ImageHeaderParserTest` 6（含截断 WebP）、`ChatImageDecodePolicyTest` 4；Android instrumentation 7。
 - 验证：110 suites / 606 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；`git diff --check` 通过；`connectedDebugAndroidTest` 7/7 通过。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 66 节）。
+- 第二轮第 3 批 commit 已提交为 `fix: 控制图片内存与分辨率`（`8842943`）。
 - 非阻塞残余：R3B-01 `sourceSize` 优先级缺直接 UI/策略断言；R3B-02 NonCancellable 取消窗口缺专门测试；R3B-03 文档“四角黑色”已修正为角点断言。R3B-01/02 留第 4 批跟踪。
