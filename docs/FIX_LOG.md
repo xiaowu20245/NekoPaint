@@ -793,5 +793,6 @@ git diff --check
 - **R2A3 修复**：QuickSubmitted 增加 failed/skipped 摘要并在 Snackbar 渲染（含 4 参字符串）；PARTIAL 摘要显示成功/失败/跳过；executionValuesPersisted 暴露给 ViewModel，成功/部分成功按落盘结果设置 dirty/saved；异常路径 runSucceeded 防双重计数；新增 cancel 不被终态覆盖、计数守恒测试。R2A3-04“提交后台继续”返回提示明确延后到 2B（不改变数据正确性）。
 - 验证：96 suites / 525 tests / 0 failures / 0 errors / 0 skipped；lint 0/9/3；assembleDebug 成功；git diff --check 通过。
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 58 节）；R2A4-01～03（ViewModel 测试/返回提示/cancel 竞争测试）为 2B 必须跟踪的非阻塞残余。
+- 第二轮第 2A 批 commit 已提交为 `fix: 后台批量提交工作流`（`e9efdb2`）。
 
 - **说明**：本批不包含 2B 的预写/unknown 提交路径、Chat、Node install；这些按计划后续批次接入。
