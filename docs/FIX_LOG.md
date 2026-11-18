@@ -943,3 +943,4 @@ git diff --check
   - R4I-12：refresh 始终使用合并而不是整份替换；远程 PENDING 不覆盖本地 CANCELLED/SUCCESS/FAILED，本地 EXECUTING 仅在 registry 仍活跃时保留，否则降级 FAILED；发送完成也走同一合并，并追加 store 中缺失的消息（按 ID + role/text 去重）。新增 `refreshKeepsLocalCancelledAndActiveExecutingStates`。
   - R4I-13：新增生产 ChatViewModel 集成测试：`mutationOnOneSessionDoesNotBlockSendOnAnotherAtViewModelLevel`、`sameSessionMutationBlocksSendAtViewModelLevel`、`disjointMutationsCanRunConcurrentlyAtViewModelLevel`；`ChatViewModelSessionTest` 24 项。
   - 验证：120 suites / 673 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- 第二轮第 4 批 commit 已提交为 `fix: 会话与参数保存`（`8b66bda`）。
