@@ -136,6 +136,7 @@ fun NekoPaintNavHost(
                     navController.navigate(NekoPaintDestination.AiAssistant.route)
                 },
                 onTopBarIconActionsChange = onTopBarIconActionsChange,
+                onBackHandlerChange = onBackHandlerChange,
                 promptId = entry.arguments?.getString("promptId"),
             )
         }

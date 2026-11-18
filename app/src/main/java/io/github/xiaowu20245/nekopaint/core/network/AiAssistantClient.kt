@@ -43,7 +43,7 @@ class AiAssistantClient(
     private val consentProvider: suspend () -> AiHttpConsent = { AiHttpConsent() },
     private val disclosureProvider: suspend (String) -> Boolean = { false },
     private val privacySanitizer: AiPrivacySanitizer,
-) : AiAssistantSettingsClient {
+) : AiAssistantSettingsClient, ChatCompletionClient {
 
     /**
      * AI requests must never follow redirects: the initial endpoint has been
@@ -106,7 +106,7 @@ class AiAssistantClient(
     /**
      * 通用多轮对话；带图片时使用配置中的视觉模型。
      */
-    suspend fun chat(
+    override suspend fun chat(
         config: AiAssistantConfig,
         messages: List<AiChatMessage>,
     ): Result<String> {
@@ -133,11 +133,11 @@ class AiAssistantClient(
     /**
      * 带只读工具的对话；模型可以自行决定调用哪个工具。
      */
-    suspend fun chatWithTools(
+    override suspend fun chatWithTools(
         config: AiAssistantConfig,
         messages: List<AiChatMessage>,
         tools: List<AiToolDefinition>,
-        toolChoice: String? = "auto",
+        toolChoice: String?,
     ): Result<AiChatCompletion> {
         if (!config.isConfigured) {
             return Result.failure(IllegalStateException("尚未配置 AI 助手"))
@@ -162,11 +162,11 @@ class AiAssistantClient(
     /**
      * 带只读工具的流式对话；[onDelta] 会在模型逐字返回时被调用。
      */
-    suspend fun chatWithToolsStream(
+    override suspend fun chatWithToolsStream(
         config: AiAssistantConfig,
         messages: List<AiChatMessage>,
         tools: List<AiToolDefinition>,
-        toolChoice: String? = "auto",
+        toolChoice: String?,
         onDelta: (String) -> Unit,
     ): Result<AiChatCompletion> {
         if (!config.isConfigured) {

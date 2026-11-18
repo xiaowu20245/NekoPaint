@@ -77,6 +77,8 @@ data class ChatBatchTarget(
 @Serializable
 data class ChatActionProposal(
     val id: String,
+    /** 动作所属会话；旧数据为空时按当前会话兼容。 */
+    val sessionId: String? = null,
     val action: ChatTaskAction,
     val promptId: String,
     val title: String,
@@ -287,7 +289,7 @@ private const val MAX_BATCH_TASKS = 10
 class ChatTaskActionHandler(
     private val dataSource: ChatTaskActionDataSource,
     private val nodeInstaller: NodeInstaller? = null,
-) {
+) : ChatActionExecutor {
 
     fun propose(action: ChatTaskAction, promptId: String): Result<ChatActionProposal> {
         val task = dataSource.findTask(promptId)
@@ -344,7 +346,7 @@ class ChatTaskActionHandler(
         )
     }
 
-    suspend fun execute(proposal: ChatActionProposal): Result<String> = when (proposal.action) {
+    override suspend fun execute(proposal: ChatActionProposal): Result<String> = when (proposal.action) {
         ChatTaskAction.RETRY -> retry(proposal)
         ChatTaskAction.INTERRUPT -> interrupt(proposal)
         ChatTaskAction.DELETE -> deletePending(proposal)
@@ -817,7 +819,7 @@ class ChatTaskActionHandler(
         }
     }
 
-    suspend fun savePreset(
+    override suspend fun savePreset(
         proposal: ChatActionProposal,
         name: String,
     ): Result<String> {

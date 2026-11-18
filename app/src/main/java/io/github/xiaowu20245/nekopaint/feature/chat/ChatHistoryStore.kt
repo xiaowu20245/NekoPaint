@@ -27,6 +27,19 @@ data class ChatSessionSummary(
     val messageCount: Int,
     val pinned: Boolean = false,
     val mode: ChatMode = ChatMode.CHAT,
+    val revision: Long = 0L,
+)
+
+sealed interface ChatSessionSaveResult {
+    data class Saved(val revision: Long) : ChatSessionSaveResult
+    data class Unchanged(val revision: Long) : ChatSessionSaveResult
+    data class Rejected(val reason: String) : ChatSessionSaveResult
+    data class Failed(val message: String) : ChatSessionSaveResult
+}
+
+data class ChatSessionSaveOutcome(
+    val encoded: String?,
+    val result: ChatSessionSaveResult,
 )
 
 /**
@@ -42,66 +55,129 @@ data class ChatSessionSummary(
 class ChatHistoryStore(
     context: Context,
     private val json: Json,
-) {
+) : ChatSessionStore {
 
     private val dataStore = context.applicationContext.aiChatHistoryDataStore
     private val mutex = Mutex()
 
-    suspend fun listSessions(): List<ChatSessionSummary> = mutex.withLock {
+    override suspend fun listSessions(): List<ChatSessionSummary> = mutex.withLock {
         val raw = dataStore.data.first()[SessionsKey]
         ChatHistoryCodec.listSessions(json, raw)
     }
 
-    suspend fun loadSession(sessionId: String): List<ChatUiMessage> = mutex.withLock {
+    override suspend fun loadSession(
+        sessionId: String,
+        activeProposalIds: Set<String>,
+    ): List<ChatUiMessage> = mutex.withLock {
         val raw = dataStore.data.first()[SessionsKey]
-        ChatHistoryCodec.loadSession(json, raw, sessionId)
+        ChatHistoryCodec.loadSession(json, raw, sessionId, activeProposalIds)
     }
 
-    suspend fun saveSession(
+    override suspend fun maxRevision(): Long = mutex.withLock {
+        ChatHistoryCodec.maxRevision(json, dataStore.data.first()[SessionsKey])
+    }
+
+    override suspend fun saveSession(
         sessionId: String,
         promptId: String?,
         title: String,
         mode: ChatMode,
         messages: List<ChatUiMessage>,
-    ) {
-        mutex.withLock {
-            dataStore.edit { preferences ->
-                val encoded = ChatHistoryCodec.saveSession(
-                    json = json,
-                    existingRaw = preferences[SessionsKey],
-                    sessionId = sessionId,
-                    promptId = promptId,
-                    title = title,
-                    mode = mode,
-                    messages = messages,
-                )
-                if (encoded == null) {
-                    preferences.remove(SessionsKey)
-                } else {
-                    preferences[SessionsKey] = encoded
+        revision: Long,
+    ): ChatSessionSaveResult = saveSessionInternal(
+        sessionId = sessionId,
+        promptId = promptId,
+        title = title,
+        mode = mode,
+        messages = messages,
+        revision = revision,
+    )
+
+    override suspend fun saveSessionWithNextRevision(
+        sessionId: String,
+        promptId: String?,
+        title: String,
+        mode: ChatMode,
+        messages: List<ChatUiMessage>,
+    ): ChatSessionSaveResult = saveSessionInternal(
+        sessionId = sessionId,
+        promptId = promptId,
+        title = title,
+        mode = mode,
+        messages = messages,
+        revision = null,
+    )
+
+    private suspend fun saveSessionInternal(
+        sessionId: String,
+        promptId: String?,
+        title: String,
+        mode: ChatMode,
+        messages: List<ChatUiMessage>,
+        revision: Long?,
+    ): ChatSessionSaveResult {
+        var result: ChatSessionSaveResult =
+            ChatSessionSaveResult.Failed("会话保存失败")
+        runCatching {
+            mutex.withLock {
+                dataStore.edit { preferences ->
+                    // 由写锁内分配 revision，避免旧 ViewModel 的本地计数器过期。
+                    val effectiveRevision = revision
+                        ?: (ChatHistoryCodec.maxRevision(json, preferences[SessionsKey]) + 1L)
+                    val outcome = ChatHistoryCodec.saveSessionWithResult(
+                        json = json,
+                        existingRaw = preferences[SessionsKey],
+                        sessionId = sessionId,
+                        promptId = promptId,
+                        title = title,
+                        mode = mode,
+                        messages = messages,
+                        revision = effectiveRevision,
+                    )
+                    if (outcome.encoded == null) {
+                        preferences.remove(SessionsKey)
+                    } else {
+                        preferences[SessionsKey] = outcome.encoded
+                    }
+                    result = outcome.result
                 }
             }
+        }.onFailure { throwable ->
+            result = ChatSessionSaveResult.Failed(
+                throwable.message ?: "会话保存失败",
+            )
         }
+        return result
     }
 
-    suspend fun deleteSession(sessionId: String) {
-        mutex.withLock {
-            dataStore.edit { preferences ->
-                val encoded = ChatHistoryCodec.deleteSession(
-                    json = json,
-                    existingRaw = preferences[SessionsKey],
-                    sessionId = sessionId,
-                )
-                if (encoded == null) {
-                    preferences.remove(SessionsKey)
-                } else {
-                    preferences[SessionsKey] = encoded
+    override suspend fun deleteSession(sessionId: String): ChatSessionSaveResult {
+        var result: ChatSessionSaveResult =
+            ChatSessionSaveResult.Failed("会话删除失败")
+        runCatching {
+            mutex.withLock {
+                dataStore.edit { preferences ->
+                    val outcome = ChatHistoryCodec.deleteSessionWithResult(
+                        json = json,
+                        existingRaw = preferences[SessionsKey],
+                        sessionId = sessionId,
+                    )
+                    if (outcome.encoded == null) {
+                        preferences.remove(SessionsKey)
+                    } else {
+                        preferences[SessionsKey] = outcome.encoded
+                    }
+                    result = outcome.result
                 }
             }
+        }.onFailure { throwable ->
+            result = ChatSessionSaveResult.Failed(
+                throwable.message ?: "会话删除失败",
+            )
         }
+        return result
     }
 
-    suspend fun renameSession(sessionId: String, title: String) {
+    override suspend fun renameSession(sessionId: String, title: String) {
         mutex.withLock {
             dataStore.edit { preferences ->
                 val encoded = ChatHistoryCodec.renameSession(
@@ -117,7 +193,7 @@ class ChatHistoryStore(
         }
     }
 
-    suspend fun setPinned(sessionId: String, pinned: Boolean) {
+    override suspend fun setPinned(sessionId: String, pinned: Boolean) {
         mutex.withLock {
             dataStore.edit { preferences ->
                 val encoded = ChatHistoryCodec.setPinned(
@@ -142,6 +218,7 @@ internal object ChatHistoryCodec {
 
     fun listSessions(json: Json, raw: String?): List<ChatSessionSummary> =
         decodeSessions(json, raw)
+            .filterNot { it.deleted }
             .sortedWith(
                 compareByDescending<StoredSession> { it.pinned }
                     .thenByDescending { it.updatedAt },
@@ -157,11 +234,23 @@ internal object ChatHistoryCodec {
                     messageCount = session.messages.size,
                     pinned = session.pinned,
                     mode = session.mode,
+                    revision = session.revision,
                 )
             }
 
-    fun loadSession(json: Json, raw: String?, sessionId: String): List<ChatUiMessage> {
-        val session = decodeSessions(json, raw).firstOrNull { it.id == sessionId }
+    fun maxRevision(json: Json, raw: String?): Long =
+        decodeSessions(json, raw).maxOfOrNull { session ->
+            maxOf(session.revision, session.deleteGeneration)
+        } ?: 0L
+
+    fun loadSession(
+        json: Json,
+        raw: String?,
+        sessionId: String,
+        activeProposalIds: Set<String> = emptySet(),
+    ): List<ChatUiMessage> {
+        val session = decodeSessions(json, raw)
+            .firstOrNull { it.id == sessionId && !it.deleted }
             ?: return emptyList()
         return session.messages.mapIndexedNotNull { index, message ->
             val role = ChatRole.entries.firstOrNull { it.name == message.role }
@@ -175,13 +264,20 @@ internal object ChatHistoryCodec {
                 isError = message.isError,
                 toolActivities = message.toolActivities,
                 actionProposals = message.actionProposals.map { proposal ->
-                    val restored = if (proposal.state == ChatActionState.EXECUTING) {
-                        proposal.copy(
+                    // 活跃动作即使尚未落盘为 EXECUTING，也要在新实例里保持一致；
+                    // 进程死亡且没有登记时才降级为未知。
+                    val restored = when {
+                        proposal.id in activeProposalIds -> proposal.copy(
+                            state = ChatActionState.EXECUTING,
+                            resultMessage = null,
+                        )
+
+                        proposal.state == ChatActionState.EXECUTING -> proposal.copy(
                             state = ChatActionState.FAILED,
                             resultMessage = "上次操作状态未知，请检查队列后再试",
                         )
-                    } else {
-                        proposal
+
+                        else -> proposal
                     }
                     restored.copy(presetSaving = false)
                 },
@@ -198,8 +294,36 @@ internal object ChatHistoryCodec {
         title: String,
         mode: ChatMode,
         messages: List<ChatUiMessage>,
+        revision: Long = -1L,
     ): String? {
-        val sessions = decodeSessions(json, existingRaw).toMutableList()
+        val existing = decodeSessions(json, existingRaw).firstOrNull { it.id == sessionId }
+        val effectiveRevision = if (revision < 0) {
+            maxOf(existing?.revision ?: 0L, existing?.deleteGeneration ?: 0L) + 1L
+        } else {
+            revision
+        }
+        return saveSessionWithResult(
+            json = json,
+            existingRaw = existingRaw,
+            sessionId = sessionId,
+            promptId = promptId,
+            title = title,
+            mode = mode,
+            messages = messages,
+            revision = effectiveRevision,
+        ).encoded
+    }
+
+    fun saveSessionWithResult(
+        json: Json,
+        existingRaw: String?,
+        sessionId: String,
+        promptId: String?,
+        title: String,
+        mode: ChatMode,
+        messages: List<ChatUiMessage>,
+        revision: Long,
+    ): ChatSessionSaveOutcome {        val sessions = decodeSessions(json, existingRaw).toMutableList()
         val storedMessages = messages
             .filter { it.text.isNotBlank() }
             .takeLast(MAX_STORED_MESSAGES)
@@ -215,28 +339,83 @@ internal object ChatHistoryCodec {
                 )
             }
         val existingIndex = sessions.indexOfFirst { it.id == sessionId }
-        if (storedMessages.isEmpty()) {
-            if (existingIndex >= 0) sessions.removeAt(existingIndex)
-        } else {
-            val existing = sessions.getOrNull(existingIndex)
-            val stored = StoredSession(
-                id = sessionId,
-                promptId = promptId,
-                title = existing?.title?.takeIf { it.isNotBlank() }
-                    ?: title.takeIf { it.isNotBlank() }
-                    ?: deriveTitle(storedMessages, promptId),
-                pinned = existing?.pinned ?: false,
-                mode = mode,
-                updatedAt = System.currentTimeMillis(),
-                messages = storedMessages,
+        val existing = sessions.getOrNull(existingIndex)
+        if (revision <= 0) {
+            return ChatSessionSaveOutcome(
+                encoded = existingRaw,
+                result = ChatSessionSaveResult.Rejected("revision 必须大于 0"),
             )
-            if (existingIndex >= 0) {
-                sessions[existingIndex] = stored
-            } else {
-                sessions += stored
-            }
         }
-        return encodeSessions(json, sessions)
+        if (existing?.deleted == true) {
+            // 会话 ID 不复用：tombstone 之后任何旧会话保存都不能复活。
+            return ChatSessionSaveOutcome(
+                encoded = existingRaw,
+                result = ChatSessionSaveResult.Rejected("会话已删除"),
+            )
+        }
+        if (existing != null && revision < existing.revision) {
+            return ChatSessionSaveOutcome(
+                encoded = existingRaw,
+                result = ChatSessionSaveResult.Rejected("会话已有更新的版本"),
+            )
+        }
+        if (existing != null && revision == existing.revision) {
+            val sameContent = existing.promptId == promptId &&
+                existing.mode == mode &&
+                existing.messages == storedMessages
+            return ChatSessionSaveOutcome(
+                encoded = existingRaw,
+                result = if (sameContent) {
+                    ChatSessionSaveResult.Unchanged(revision)
+                } else {
+                    ChatSessionSaveResult.Rejected("同一 revision 内容不一致")
+                },
+            )
+        }
+        if (storedMessages.isEmpty()) {
+            if (existingIndex < 0) {
+                return ChatSessionSaveOutcome(
+                    encoded = existingRaw,
+                    result = ChatSessionSaveResult.Unchanged(0L),
+                )
+            }
+            val generation = maxOf(revision, existing?.revision ?: 0L) + 1L
+            sessions[existingIndex] = existing!!.copy(
+                deleted = true,
+                messages = emptyList(),
+                deleteGeneration = generation,
+                revision = generation,
+                updatedAt = System.currentTimeMillis(),
+            )
+            return ChatSessionSaveOutcome(
+                encoded = encodeSessions(json, sessions),
+                result = ChatSessionSaveResult.Saved(generation),
+            )
+        }
+        val resolvedTitle = existing?.title?.takeIf { it.isNotBlank() }
+            ?: title.takeIf { it.isNotBlank() }
+            ?: deriveTitle(storedMessages, promptId)
+        val stored = StoredSession(
+            id = sessionId,
+            promptId = promptId,
+            title = resolvedTitle,
+            pinned = existing?.pinned ?: false,
+            mode = mode,
+            updatedAt = System.currentTimeMillis(),
+            messages = storedMessages,
+            revision = revision,
+            deleted = false,
+            deleteGeneration = existing?.deleteGeneration ?: 0L,
+        )
+        if (existingIndex >= 0) {
+            sessions[existingIndex] = stored
+        } else {
+            sessions += stored
+        }
+        return ChatSessionSaveOutcome(
+            encoded = encodeSessions(json, sessions),
+            result = ChatSessionSaveResult.Saved(revision),
+        )
     }
 
     fun renameSession(
@@ -248,7 +427,15 @@ internal object ChatHistoryCodec {
         val trimmed = title.trim()
         if (trimmed.isBlank()) return existingRaw
         val sessions = decodeSessions(json, existingRaw).map { session ->
-            if (session.id == sessionId) session.copy(title = trimmed) else session
+            if (session.id == sessionId && !session.deleted) {
+                session.copy(
+                    title = trimmed,
+                    revision = session.revision + 1,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            } else {
+                session
+            }
         }
         return encodeSessions(json, sessions)
     }
@@ -260,15 +447,52 @@ internal object ChatHistoryCodec {
         pinned: Boolean,
     ): String? {
         val sessions = decodeSessions(json, existingRaw).map { session ->
-            if (session.id == sessionId) session.copy(pinned = pinned) else session
+            if (session.id == sessionId && !session.deleted) {
+                session.copy(
+                    pinned = pinned,
+                    revision = session.revision + 1,
+                    updatedAt = System.currentTimeMillis(),
+                )
+            } else {
+                session
+            }
         }
         return encodeSessions(json, sessions)
     }
 
-    fun deleteSession(json: Json, existingRaw: String?, sessionId: String): String? {
-        val sessions = decodeSessions(json, existingRaw)
-            .filterNot { it.id == sessionId }
-        return encodeSessions(json, sessions)
+    fun deleteSession(json: Json, existingRaw: String?, sessionId: String): String? =
+        deleteSessionWithResult(json, existingRaw, sessionId).encoded
+
+    fun deleteSessionWithResult(
+        json: Json,
+        existingRaw: String?,
+        sessionId: String,
+    ): ChatSessionSaveOutcome {
+        val sessions = decodeSessions(json, existingRaw).toMutableList()
+        val index = sessions.indexOfFirst { it.id == sessionId }
+        if (index < 0) {
+            return ChatSessionSaveOutcome(
+                encoded = existingRaw,
+                result = ChatSessionSaveResult.Unchanged(0L),
+            )
+        }
+        val existing = sessions[index]
+        val generation = maxOf(
+            existing.revision,
+            existing.deleteGeneration,
+        ) + 1L
+        val tombstone = existing.copy(
+            deleted = true,
+            messages = emptyList(),
+            deleteGeneration = generation,
+            revision = generation,
+            updatedAt = System.currentTimeMillis(),
+        )
+        sessions[index] = tombstone
+        return ChatSessionSaveOutcome(
+            encoded = encodeSessions(json, sessions),
+            result = ChatSessionSaveResult.Saved(generation),
+        )
     }
 
     private fun decodeSessions(json: Json, raw: String?): List<StoredSession> {
@@ -309,12 +533,20 @@ internal object ChatHistoryCodec {
 
     private fun encodeSessions(json: Json, sessions: List<StoredSession>): String? {
         if (sessions.isEmpty()) return null
-        val trimmed = sessions
+        // tombstone 不挤占正常会话名额；保留最近一批用于拒绝在途旧保存。
+        val active = sessions.filterNot { it.deleted }
             .sortedWith(
                 compareByDescending<StoredSession> { it.pinned }
                     .thenByDescending { it.updatedAt },
             )
             .take(MAX_STORED_SESSIONS)
+        val tombstones = sessions.filter { it.deleted }
+            .sortedByDescending { maxOf(it.deleteGeneration, it.revision) }
+            .take(MAX_STORED_TOMBSTONES)
+        val trimmed = (active + tombstones).sortedWith(
+            compareByDescending<StoredSession> { it.pinned }
+                .thenByDescending { it.updatedAt },
+        )
         return json.encodeToString(StoredSessions(sessions = trimmed))
     }
 
@@ -344,6 +576,7 @@ internal object ChatHistoryCodec {
     private const val LEGACY_GLOBAL_KEY = "__global__"
     private const val MAX_STORED_MESSAGES = 100
     private const val MAX_STORED_SESSIONS = 30
+    private const val MAX_STORED_TOMBSTONES = 30
 }
 
 @Serializable
@@ -361,6 +594,9 @@ private data class StoredSession(
     val mode: ChatMode = ChatMode.CHAT,
     val updatedAt: Long = 0L,
     val messages: List<StoredChatMessage> = emptyList(),
+    val revision: Long = 0L,
+    val deleted: Boolean = false,
+    val deleteGeneration: Long = 0L,
 )
 
 @Serializable

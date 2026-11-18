@@ -28,11 +28,11 @@ class ChatToolRegistry(
     private val actionHandler: ChatTaskActionHandler,
     private val visionAnalyzer: VisionAnalyzer? = null,
     private val privacySanitizer: AiPrivacySanitizer,
-) {
+) : ChatToolRuntime {
 
     private val imageAnalysisTool = ImageAnalysisTool(visionAnalyzer)
 
-    fun definitions(mode: ChatMode): List<AiToolDefinition> =
+    override fun definitions(mode: ChatMode): List<AiToolDefinition> =
         allDefinitions().filter { tool -> ChatToolPolicy.allows(tool.name, mode) }
 
     private fun allDefinitions(): List<AiToolDefinition> = listOf(
@@ -285,11 +285,11 @@ class ChatToolRegistry(
         ),
     )
 
-    suspend fun execute(
+    override suspend fun execute(
         call: AiToolCall,
-        fallbackPromptId: String? = null,
-        attachments: List<ChatImageAttachment> = emptyList(),
-        direct: Boolean = false,
+        fallbackPromptId: String?,
+        attachments: List<ChatImageAttachment>,
+        direct: Boolean,
     ): ChatToolExecution {
         val args = parseArguments(call.arguments)
         var actionProposal: ChatActionProposal? = null
@@ -484,7 +484,7 @@ class ChatToolRegistry(
         )
     }
 
-    fun describe(call: AiToolCall, fallbackPromptId: String? = null): ChatToolActivity =
+    override fun describe(call: AiToolCall, fallbackPromptId: String?): ChatToolActivity =
         describeToolCall(json, call, fallbackPromptId)
 
     private fun parseArguments(arguments: String): JsonObject = runCatching {

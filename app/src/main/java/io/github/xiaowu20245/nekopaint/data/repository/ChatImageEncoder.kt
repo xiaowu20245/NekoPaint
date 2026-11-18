@@ -21,14 +21,14 @@ import kotlinx.coroutines.withContext
  * 解码到约 2×目标，精确缩放到 1024；照片输出 JPEG，含 alpha 输出 PNG。
  * 临时文件与 Bitmap 在所有路径回收。
  */
-class ChatImageEncoder(context: Context) {
+class ChatImageEncoder(context: Context) : ChatImageEncoderApi {
 
     private val appContext = context.applicationContext
 
-    suspend fun toDataUrl(
+    override suspend fun toDataUrl(
         uri: Uri,
-        maxDimension: Int = ChatImageDecodePolicy.TARGET_DIMENSION,
-        quality: Int = 85,
+        maxDimension: Int,
+        quality: Int,
     ): Result<String> = withContext(Dispatchers.IO) {
         // 复制阶段不响应取消，确保 temp 文件创建/清理成对完成。
         val temp = runCatching {

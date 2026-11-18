@@ -717,6 +717,7 @@
     <string name="chat_action_preset_save">保存</string>
     <string name="chat_action_confirm">确认执行</string>
     <string name="chat_action_executing">正在执行…</string>
+    <string name="chat_action_leave_blocked">动作执行中，请等待完成</string>
     <string name="chat_action_success">已执行</string>
     <string name="chat_action_failed">执行失败</string>
     <string name="chat_action_cancelled">已取消</string>

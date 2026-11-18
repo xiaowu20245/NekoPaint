@@ -12,12 +12,12 @@ import java.io.File
  *
  * 只保存压缩后的 data URL 文本，按图片 ID 命名；最多保留 50 张，避免无限增长。
  */
-class ChatImageStore(context: Context) {
+class ChatImageStore(context: Context) : ChatImageStorage {
 
     private val dir = File(context.applicationContext.filesDir, "chat_images")
     private val mutex = Mutex()
 
-    suspend fun save(id: String, dataUrl: String) = withContext(Dispatchers.IO) {
+    override suspend fun save(id: String, dataUrl: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
             dir.mkdirs()
             val file = fileFor(id)
@@ -26,7 +26,7 @@ class ChatImageStore(context: Context) {
         }
     }
 
-    suspend fun load(id: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun load(id: String): String? = withContext(Dispatchers.IO) {
         mutex.withLock {
             val file = fileFor(id)
             if (!file.exists()) return@withLock null
@@ -34,7 +34,7 @@ class ChatImageStore(context: Context) {
         }
     }
 
-    suspend fun delete(ids: Collection<String>) = withContext(Dispatchers.IO) {
+    override suspend fun delete(ids: Collection<String>) = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext
         mutex.withLock {
             ids.forEach { id -> fileFor(id).delete() }

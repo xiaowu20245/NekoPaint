@@ -8,11 +8,11 @@ import io.github.xiaowu20245.nekopaint.core.privacy.SensitiveHostProvider
  */
 class AiPrivacySanitizer(
     private val hostProvider: SensitiveHostProvider,
-) {
+) : ChatPrivacyGuard {
 
-    suspend fun awaitReady(): Boolean = hostProvider.awaitReady()
+    override suspend fun awaitReady(): Boolean = hostProvider.awaitReady()
 
-    fun sanitize(text: String): String {
+    override fun sanitize(text: String): String {
         if (text.isBlank()) return text
         var result = text
         result = result.replace(WINDOWS_PATH) { redactPath(it.value) }

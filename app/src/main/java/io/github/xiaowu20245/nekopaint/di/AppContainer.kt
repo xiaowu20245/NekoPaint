@@ -34,7 +34,10 @@ import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.TaskRecordRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
+import io.github.xiaowu20245.nekopaint.feature.chat.ChatActionExecutionRegistry
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatHistoryStore
+import io.github.xiaowu20245.nekopaint.feature.chat.ChatSendExecutionRegistry
+import io.github.xiaowu20245.nekopaint.feature.chat.ChatSessionOperationGate
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +79,12 @@ class AppContainer(context: Context) {
     val settingsStore = SettingsStore(context.applicationContext)
     val aiAssistantStore = AiAssistantStore(context.applicationContext)
     val chatHistoryStore = ChatHistoryStore(context.applicationContext, json)
+    // 页面销毁后后台动作仍可据此判断 session+proposal 是否在执行。
+    val chatActionExecutionRegistry = ChatActionExecutionRegistry()
+    // 页面销毁后 appScope 发送仍会写回原会话，新实例据此拒绝切换/删除。
+    val chatSendExecutionRegistry = ChatSendExecutionRegistry()
+    // 跨 ChatViewModel 共享的 SEND/ACTION/SWITCH/DELETE 许可，避免检查后另一实例 begin。
+    val chatSessionOperationGate = ChatSessionOperationGate()
     val promptLexiconRepository = PromptLexiconRepository(context.applicationContext, json)
     val pendingWorkflowRefillStore = PendingWorkflowRefillStore()
 
@@ -192,7 +201,9 @@ class AppContainer(context: Context) {
     val operationCenter = OperationCenter(
         scope = operationScope,
         submit = { template -> workflowRepository.submit(template) },
-        persistExecutionValues = { template -> workflowRepository.updateTemplate(template) },
+        persistExecutionValues = { template ->
+            workflowRepository.patchExecutionValues(template.id, template.candidates).getOrThrow()
+        },
     )
 
     val nodeInstallRepository = NodeInstallRepository(

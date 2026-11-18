@@ -3,6 +3,8 @@ package io.github.xiaowu20245.nekopaint.data.repository
 import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
@@ -89,6 +91,155 @@ internal class WorkflowTemplateStore(
                     presets = presets,
                     activePresetId = activePreset,
                 ),
+            )
+        }
+    }
+
+    suspend fun patchPrimaryPrompt(
+        id: String,
+        candidateId: String?,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        val primary = candidateId?.takeIf { requested ->
+            template.candidates.any { candidate ->
+                candidate.id == requested &&
+                    WorkflowCandidateSafety.isPrimaryPromptCandidate(candidate)
+            }
+        }
+        template.copy(primaryPromptCandidateId = primary)
+    }
+
+    suspend fun patchPreset(
+        id: String,
+        preset: WorkflowPreset,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        val presets = WorkflowCandidateSafety.sanitizePresets(
+            template.presets.filterNot { it.id == preset.id } + preset,
+            template.candidates,
+        )
+        template.copy(
+            presets = presets,
+            activePresetId = template.activePresetId?.takeIf { active ->
+                presets.any { it.id == active }
+            },
+        )
+    }
+
+    suspend fun deletePreset(
+        id: String,
+        presetId: String,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        val presets = template.presets.filterNot { it.id == presetId }
+        template.copy(
+            presets = presets,
+            activePresetId = template.activePresetId?.takeIf { it != presetId },
+        )
+    }
+
+    suspend fun patchActivePreset(
+        id: String,
+        presetId: String?,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        template.copy(
+            activePresetId = presetId?.takeIf { requested ->
+                template.presets.any { it.id == requested }
+            },
+        )
+    }
+
+    suspend fun patchPromptTagGroups(
+        id: String,
+        groups: List<PromptTagGroup>,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        template.copy(promptTagGroups = groups)
+    }
+
+    suspend fun patchExecutionValues(
+        id: String,
+        candidateSnapshot: List<ParameterCandidate>,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        template.copy(
+            candidates = applyCandidateSnapshot(template, candidateSnapshot),
+        )
+    }
+
+    suspend fun patchApplyPreset(
+        id: String,
+        candidateSnapshot: List<ParameterCandidate>,
+        presetId: String?,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        val candidates = applyCandidateSnapshot(template, candidateSnapshot)
+        template.copy(
+            candidates = candidates,
+            activePresetId = presetId?.takeIf { requested ->
+                template.presets.any { it.id == requested }
+            },
+        )
+    }
+
+    suspend fun patchSavePreset(
+        id: String,
+        preset: WorkflowPreset,
+        candidateSnapshot: List<ParameterCandidate>,
+    ): Result<WorkflowTemplate> = patch(id) { template ->
+        val candidates = applyCandidateSnapshot(template, candidateSnapshot)
+        val presets = WorkflowCandidateSafety.sanitizePresets(
+            template.presets.filterNot { it.id == preset.id } + preset,
+            candidates,
+        )
+        template.copy(
+            candidates = candidates,
+            presets = presets,
+            activePresetId = preset.id.takeIf { requested ->
+                presets.any { it.id == requested }
+            },
+        )
+    }
+
+    private suspend fun patch(
+        id: String,
+        transform: (WorkflowTemplate) -> WorkflowTemplate,
+    ): Result<WorkflowTemplate> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            runCatching {
+                val dir = File(rootDir, id)
+                val stored = readProfile(dir) ?: error("找不到工作流模板")
+                val updated = transform(stored)
+                WorkflowCandidateSafety.validate(updated.candidates, stored.candidates)
+                val primary = updated.primaryPromptCandidateId?.takeIf { candidateId ->
+                    updated.candidates.any { candidate ->
+                        candidate.id == candidateId &&
+                            WorkflowCandidateSafety.isPrimaryPromptCandidate(candidate)
+                    }
+                }
+                val presets = WorkflowCandidateSafety.sanitizePresets(
+                    updated.presets,
+                    updated.candidates,
+                )
+                val active = updated.activePresetId?.takeIf { presetId ->
+                    presets.any { it.id == presetId }
+                }
+                val safe = updated.copy(
+                    repairRequired = stored.repairRequired,
+                    primaryPromptCandidateId = primary,
+                    presets = presets,
+                    activePresetId = active,
+                )
+                writeProfile(dir, safe)
+                safe
+            }
+        }
+    }
+
+    private fun applyCandidateSnapshot(
+        template: WorkflowTemplate,
+        snapshot: List<ParameterCandidate>,
+    ): List<ParameterCandidate> {
+        val byId = snapshot.associateBy { it.id }
+        return template.candidates.map { candidate ->
+            val incoming = byId[candidate.id] ?: return@map candidate
+            candidate.copy(
+                value = incoming.value,
+                selected = incoming.selected && !candidate.readOnly,
             )
         }
     }

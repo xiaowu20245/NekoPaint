@@ -380,10 +380,19 @@ class WorkflowDetailViewModel(
             }
             if (!valid) return
         }
-        val updated = template.copy(primaryPromptCandidateId = candidateId)
-        _uiState.update { it.copy(template = updated, errorRes = null) }
+        _uiState.update { it.copy(errorRes = null) }
         viewModelScope.launch {
-            runCatching { repository.updateTemplate(updated) }
+            repository.patchPrimaryPrompt(template.id, candidateId)
+                .onSuccess { saved ->
+                    _uiState.update { state ->
+                        state.copy(
+                            template = state.template?.copy(
+                                primaryPromptCandidateId = saved.primaryPromptCandidateId,
+                            ) ?: saved,
+                            errorRes = null,
+                        )
+                    }
+                }
                 .onFailure {
                     _uiState.update { state ->
                         state.copy(errorRes = R.string.workflow_error_generic)
@@ -590,22 +599,29 @@ class WorkflowDetailViewModel(
             val preset = current.presets.firstOrNull { it.id == presetId } ?: return
             WorkflowPresetMatcher.applyPreset(current.candidates, preset)
         }
-        val updated = current.copy(
-            candidates = nextCandidates,
-            activePresetId = presetId,
-        )
         _uiState.update {
             it.copy(
-                template = updated,
-                dirty = false,
-                saved = false,
                 fieldErrors = emptyMap(),
                 submission = null,
                 submitError = null,
+                errorRes = null,
             )
         }
         viewModelScope.launch {
-            runCatching { repository.updateTemplate(updated) }
+            repository.patchApplyPreset(current.id, nextCandidates, presetId)
+                .onSuccess { saved ->
+                    val flags = WorkflowDirtyPolicy.selectPreset()
+                    _uiState.update {
+                        it.copy(
+                            template = saved,
+                            dirty = flags.dirty,
+                            saved = flags.saved,
+                            fieldErrors = emptyMap(),
+                            submission = null,
+                            submitError = null,
+                        )
+                    }
+                }
                 .onFailure {
                     _uiState.update { state ->
                         state.copy(errorRes = R.string.workflow_error_generic)
@@ -624,20 +640,25 @@ class WorkflowDetailViewModel(
             entries = WorkflowPresetMatcher.buildEntries(current.candidates),
             updatedAt = System.currentTimeMillis(),
         )
-        val updated = current.copy(
-            presets = current.presets + newPreset,
-            activePresetId = newPreset.id,
-        )
         viewModelScope.launch {
-            val result = runCatching { repository.updateTemplate(updated) }
-            _uiState.update {
-                it.copy(
-                    template = if (result.isSuccess) updated else it.template,
-                    dirty = if (result.isSuccess) false else it.dirty,
-                    presetNotice = if (result.isSuccess) PresetNotice.Saved(trimmed) else null,
-                    errorRes = if (result.isFailure) R.string.workflow_error_generic else null,
-                )
-            }
+            repository.patchSavePreset(current.id, newPreset, current.candidates)
+                .onSuccess { saved ->
+                    val flags = WorkflowDirtyPolicy.saveNewPreset()
+                    _uiState.update {
+                        it.copy(
+                            template = saved,
+                            dirty = flags.dirty,
+                            saved = flags.saved,
+                            presetNotice = PresetNotice.Saved(trimmed),
+                            errorRes = null,
+                        )
+                    }
+                }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
         }
     }
 
@@ -646,43 +667,51 @@ class WorkflowDetailViewModel(
         if (trimmed.isEmpty()) return
         val current = _uiState.value.template ?: return
         val activeId = current.activePresetId ?: return
-        val updated = current.copy(
-            presets = current.presets.map { preset ->
-                if (preset.id == activeId) {
-                    preset.copy(name = trimmed, updatedAt = System.currentTimeMillis())
-                } else {
-                    preset
-                }
-            },
-        )
+        val updatedPreset = current.presets.firstOrNull { it.id == activeId }
+            ?.copy(name = trimmed, updatedAt = System.currentTimeMillis())
+            ?: return
         viewModelScope.launch {
-            if (runCatching { repository.updateTemplate(updated) }.isSuccess) {
-                _uiState.update {
-                    it.copy(
-                        template = updated,
-                        presetNotice = PresetNotice.Updated(trimmed),
-                    )
+            repository.patchPreset(current.id, updatedPreset)
+                .onSuccess { saved ->
+                    _uiState.update { state ->
+                        state.copy(
+                            template = state.template?.copy(
+                                presets = saved.presets,
+                                activePresetId = saved.activePresetId,
+                            ) ?: saved,
+                            presetNotice = PresetNotice.Updated(trimmed),
+                        )
+                    }
                 }
-            }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
         }
     }
 
     fun deleteActivePreset() {
         val current = _uiState.value.template ?: return
         val activeId = current.activePresetId ?: return
-        val updated = current.copy(
-            presets = current.presets.filterNot { it.id == activeId },
-            activePresetId = null,
-        )
         viewModelScope.launch {
-            if (runCatching { repository.updateTemplate(updated) }.isSuccess) {
-                _uiState.update {
-                    it.copy(
-                        template = updated,
-                        presetNotice = PresetNotice.Deleted,
-                    )
+            repository.deletePreset(current.id, activeId)
+                .onSuccess { saved ->
+                    _uiState.update { state ->
+                        state.copy(
+                            template = state.template?.copy(
+                                presets = saved.presets,
+                                activePresetId = saved.activePresetId,
+                            ) ?: saved,
+                            presetNotice = PresetNotice.Deleted,
+                        )
+                    }
                 }
-            }
+                .onFailure {
+                    _uiState.update { state ->
+                        state.copy(errorRes = R.string.workflow_error_generic)
+                    }
+                }
         }
     }
 
@@ -713,14 +742,24 @@ class WorkflowDetailViewModel(
                 if (group.id == existing.id) group.copy(tags = cleanTags) else group
             }
         }
-        val updated = current.copy(promptTagGroups = groups)
-        _uiState.update { it.copy(template = updated, errorRes = null) }
+        _uiState.update {
+            it.copy(
+                template = it.template?.copy(promptTagGroups = groups),
+                errorRes = null,
+            )
+        }
         viewModelScope.launch {
-            // 标签组管理立即落盘，但不能顺带提交尚未保存的提示词/参数编辑。
-            val persisted = runCatching { repository.getTemplate(current.id) }.getOrNull()
-                ?: current
-            val toWrite = persisted.copy(promptTagGroups = groups)
-            runCatching { repository.updateTemplate(toWrite) }
+            // 只 patch 标签组，不能顺带提交尚未保存的提示词/参数编辑。
+            repository.patchPromptTagGroups(current.id, groups)
+                .onSuccess { saved ->
+                    _uiState.update { state ->
+                        state.copy(
+                            template = state.template?.copy(
+                                promptTagGroups = saved.promptTagGroups,
+                            ) ?: saved,
+                        )
+                    }
+                }
                 .onFailure {
                     _uiState.update { state ->
                         state.copy(errorRes = R.string.workflow_error_generic)
@@ -732,13 +771,23 @@ class WorkflowDetailViewModel(
     fun deletePromptTagGroup(id: String) {
         val current = _uiState.value.template ?: return
         val groups = current.promptTagGroups.filterNot { it.id == id }
-        val updated = current.copy(promptTagGroups = groups)
-        _uiState.update { it.copy(template = updated, errorRes = null) }
+        _uiState.update {
+            it.copy(
+                template = it.template?.copy(promptTagGroups = groups),
+                errorRes = null,
+            )
+        }
         viewModelScope.launch {
-            val persisted = runCatching { repository.getTemplate(current.id) }.getOrNull()
-                ?: current
-            val toWrite = persisted.copy(promptTagGroups = groups)
-            runCatching { repository.updateTemplate(toWrite) }
+            repository.patchPromptTagGroups(current.id, groups)
+                .onSuccess { saved ->
+                    _uiState.update { state ->
+                        state.copy(
+                            template = state.template?.copy(
+                                promptTagGroups = saved.promptTagGroups,
+                            ) ?: saved,
+                        )
+                    }
+                }
                 .onFailure {
                     _uiState.update { state ->
                         state.copy(errorRes = R.string.workflow_error_generic)

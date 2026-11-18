@@ -76,6 +76,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -102,21 +103,60 @@ import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarMenuItem
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.history.ImagePreviewDialog
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.delay
+
+/**
+ * Chat 返回门禁：系统返回和顶栏返回共用同一判定。
+ *
+ * 动作执行中消费返回并提示；其余情况交回外部 pop。
+ */
+@Composable
+fun ChatBackHandler(
+    actionExecuting: Boolean,
+    onBackHandlerChange: ((() -> Boolean)?) -> Unit,
+    blockedMessage: String,
+) {
+    val context = LocalContext.current
+    val currentActionExecuting by rememberUpdatedState(actionExecuting)
+    BackHandler(enabled = actionExecuting) {
+        Toast.makeText(context, blockedMessage, Toast.LENGTH_SHORT).show()
+    }
+    DisposableEffect(Unit) {
+        onBackHandlerChange {
+            if (currentActionExecuting) {
+                Toast.makeText(context, blockedMessage, Toast.LENGTH_SHORT).show()
+                true
+            } else {
+                false
+            }
+        }
+        onDispose { onBackHandlerChange(null) }
+    }
+}
 
 @Composable
 fun ChatScreen(
     onOpenAiSettings: () -> Unit,
     onTopBarIconActionsChange: (List<NekoTopBarIconAction>) -> Unit = {},
+    onBackHandlerChange: ((() -> Boolean)?) -> Unit = {},
     promptId: String? = null,
+    viewModelOverride: ChatViewModel? = null,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as NekoPaintApplication
-    val viewModel: ChatViewModel = viewModel(
+    val viewModel: ChatViewModel = viewModelOverride ?: viewModel(
         factory = ChatViewModel.factory(app.container, promptId),
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.sessionError) {
+        state.sessionError?.let { error ->
+            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+            viewModel.clearSessionError()
+        }
+    }
     val contextQuestionText = stringResource(
         if (state.taskContext?.isFailure == true) {
             R.string.chat_context_ask_failed
@@ -161,10 +201,20 @@ fun ChatScreen(
     )
     val currentSession = state.sessions.firstOrNull { it.id == state.currentSessionId }
     val isNewSession = state.currentSessionId == null && state.messages.isEmpty()
+    val actionExecuting = state.messages.any { message ->
+        message.actionProposals.any { it.state == ChatActionState.EXECUTING }
+    }
+    val actionRunningMessage = stringResource(R.string.chat_action_leave_blocked)
+    ChatBackHandler(
+        actionExecuting = actionExecuting,
+        onBackHandlerChange = onBackHandlerChange,
+        blockedMessage = actionRunningMessage,
+    )
     DisposableEffect(
         state.messages.isNotEmpty(),
         state.currentSessionId,
         state.sending,
+        actionExecuting,
         currentSession?.title,
         state.mode,
     ) {
@@ -172,7 +222,7 @@ fun ChatScreen(
             add(
                 NekoTopBarIconAction(
                     label = modeLabel,
-                    enabled = !state.sending,
+                    enabled = !state.sending && !actionExecuting,
                     onClick = { showModeDialog = true },
                 ),
             )
@@ -181,7 +231,7 @@ fun ChatScreen(
                     NekoTopBarIconAction(
                         icon = Icons.Outlined.Add,
                         contentDescription = newSessionLabel,
-                        enabled = !state.sending,
+                        enabled = !state.sending && !actionExecuting,
                         onClick = viewModel::newSession,
                     ),
                 )
@@ -190,6 +240,7 @@ fun ChatScreen(
                 NekoTopBarIconAction(
                     icon = Icons.AutoMirrored.Outlined.List,
                     contentDescription = sessionsLabel,
+                    enabled = !actionExecuting,
                     onClick = { showSessions = true },
                 ),
             )
@@ -201,7 +252,7 @@ fun ChatScreen(
                         add(
                             NekoTopBarMenuItem(
                                 label = renameLabel,
-                                enabled = currentSession != null && !state.sending,
+                                enabled = currentSession != null && !state.sending && !actionExecuting,
                                 onClick = {
                                     currentSession?.let { session ->
                                         renameTarget = session
@@ -215,7 +266,7 @@ fun ChatScreen(
                                 label = deleteLabel,
                                 icon = Icons.Outlined.Delete,
                                 destructive = true,
-                                enabled = currentSession != null && !state.sending,
+                                enabled = currentSession != null && !state.sending && !actionExecuting,
                                 onClick = {
                                     currentSession?.let { deleteTarget = it }
                                 },
@@ -361,6 +412,7 @@ fun ChatScreen(
             sessions = state.sessions,
             currentSessionId = state.currentSessionId,
             sending = state.sending,
+            actionExecuting = actionExecuting,
             isNewSession = isNewSession,
             onDismiss = { showSessions = false },
             onNewSession = {
@@ -916,6 +968,7 @@ private fun ChatSessionSheet(
     sessions: List<ChatSessionSummary>,
     currentSessionId: String?,
     sending: Boolean,
+    actionExecuting: Boolean,
     isNewSession: Boolean,
     onDismiss: () -> Unit,
     onNewSession: () -> Unit,
@@ -924,6 +977,7 @@ private fun ChatSessionSheet(
     onTogglePin: (ChatSessionSummary) -> Unit,
     onDelete: (ChatSessionSummary) -> Unit,
 ) {
+    val enabled = !sending && !actionExecuting
     var query by rememberSaveable { mutableStateOf("") }
     val filtered = remember(sessions, query) {
         if (query.isBlank()) {
@@ -955,7 +1009,7 @@ private fun ChatSessionSheet(
                     modifier = Modifier.weight(1f),
                 )
                 if (!isNewSession) {
-                    TextButton(onClick = onNewSession, enabled = !sending) {
+                    TextButton(onClick = onNewSession, enabled = enabled) {
                         Icon(
                             imageVector = Icons.Outlined.Add,
                             contentDescription = null,
@@ -1042,7 +1096,7 @@ private fun ChatSessionSheet(
                         )
                         Surface(
                             onClick = { onSelect(session.id) },
-                            enabled = !sending,
+                            enabled = enabled,
                             shape = RoundedCornerShape(12.dp),
                             color = if (selected) {
                                 MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
@@ -1101,7 +1155,7 @@ private fun ChatSessionSheet(
                                 Box {
                                     IconButton(
                                         onClick = { menuExpanded = true },
-                                        enabled = !sending,
+                                        enabled = enabled,
                                     ) {
                                         Icon(
                                             imageVector = Icons.Outlined.MoreVert,

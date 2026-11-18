@@ -10,8 +10,10 @@ import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ContentUriRequestBody
@@ -134,6 +136,36 @@ class WorkflowRepository private constructor(
     suspend fun getTemplate(id: String): WorkflowTemplate? = templateStore.getTemplate(id)
 
     suspend fun updateTemplate(template: WorkflowTemplate) = templateStore.updateTemplate(template)
+
+    suspend fun patchPrimaryPrompt(id: String, candidateId: String?) =
+        templateStore.patchPrimaryPrompt(id, candidateId)
+
+    suspend fun patchPreset(id: String, preset: WorkflowPreset) =
+        templateStore.patchPreset(id, preset)
+
+    suspend fun deletePreset(id: String, presetId: String) =
+        templateStore.deletePreset(id, presetId)
+
+    suspend fun patchActivePreset(id: String, presetId: String?) =
+        templateStore.patchActivePreset(id, presetId)
+
+    suspend fun patchPromptTagGroups(id: String, groups: List<PromptTagGroup>) =
+        templateStore.patchPromptTagGroups(id, groups)
+
+    suspend fun patchExecutionValues(id: String, snapshot: List<ParameterCandidate>) =
+        templateStore.patchExecutionValues(id, snapshot)
+
+    suspend fun patchApplyPreset(
+        id: String,
+        snapshot: List<ParameterCandidate>,
+        presetId: String?,
+    ) = templateStore.patchApplyPreset(id, snapshot, presetId)
+
+    suspend fun patchSavePreset(
+        id: String,
+        preset: WorkflowPreset,
+        snapshot: List<ParameterCandidate>,
+    ) = templateStore.patchSavePreset(id, preset, snapshot)
 
     /**
      * Rebuilds detection-derived fields from api.json while preserving user

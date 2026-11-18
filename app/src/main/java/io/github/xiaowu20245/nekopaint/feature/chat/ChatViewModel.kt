@@ -6,19 +6,22 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
-import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
-import io.github.xiaowu20245.nekopaint.core.network.AiAssistantClient
 import io.github.xiaowu20245.nekopaint.core.network.AiChatMessage
-import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.AiToolCall
-import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
-import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
+import io.github.xiaowu20245.nekopaint.core.network.ChatCompletionClient
+import io.github.xiaowu20245.nekopaint.core.network.ChatPrivacyGuard
+import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoderApi
+import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStorage
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,6 +74,7 @@ data class ChatUiState(
     val currentSessionId: String? = null,
     val sessions: List<ChatSessionSummary> = emptyList(),
     val mode: ChatMode = ChatMode.CHAT,
+    val sessionError: String? = null,
 )
 
 private data class ChatAnswer(
@@ -87,17 +91,21 @@ private data class ChatAnswer(
  * 从历史/任务详情进入时会携带任务上下文，工具调用失败时自动回退到本地意图路由。
  */
 class ChatViewModel(
-    private val store: AiAssistantStore,
-    private val settingsStore: SettingsStore,
-    private val client: AiAssistantClient,
-    private val imageEncoder: ChatImageEncoder,
-    private val imageStore: ChatImageStore,
-    private val contextBuilder: ChatContextBuilder,
-    private val toolRegistry: ChatToolRegistry,
-    private val historyStore: ChatHistoryStore,
-    private val actionHandler: ChatTaskActionHandler,
+    private val configFlow: Flow<AiAssistantConfig>,
+    private val defaultAgentModeFlow: Flow<Boolean>,
+    private val client: ChatCompletionClient,
+    private val imageEncoder: ChatImageEncoderApi,
+    private val imageStore: ChatImageStorage,
+    private val contextBuilder: ChatContextSource,
+    private val toolRegistry: ChatToolRuntime,
+    private val historyStore: ChatSessionStore,
+    private val actionHandler: ChatActionExecutor,
     private val appScope: CoroutineScope,
-    private val privacySanitizer: AiPrivacySanitizer,
+    private val operationScope: CoroutineScope,
+    private val actionRegistry: ChatActionExecutionRegistry,
+    private val sendRegistry: ChatSendExecutionRegistry,
+    private val operationGate: ChatSessionOperationGate,
+    private val privacySanitizer: ChatPrivacyGuard,
     contextPromptId: String? = null,
 ) : ViewModel() {
 
@@ -110,6 +118,16 @@ class ChatViewModel(
     private var currentSessionId: String? = null
     private var mode = ChatMode.CHAT
     private var defaultMode = ChatMode.CHAT
+    private data class SaveMeta(
+        val revision: Long,
+        val result: ChatSessionSaveResult,
+    )
+
+    private var nextRevision = 1L
+    private val sessionLock = Any()
+    private val sessionGate = operationGate
+    private val pendingSaveJobs = ConcurrentHashMap<String, Job>()
+    private val pendingSaveResults = ConcurrentHashMap<String, SaveMeta>()
 
     init {
         if (contextPromptId != null) {
@@ -121,15 +139,24 @@ class ChatViewModel(
             }
         }
         viewModelScope.launch {
-            defaultMode = if (settingsStore.agentModeByDefault.first()) {
+            defaultMode = if (defaultAgentModeFlow.first()) {
                 ChatMode.AGENT
             } else {
                 ChatMode.CHAT
             }
+            val maxRevision = historyStore.maxRevision() + 1L
+            synchronized(sessionLock) {
+                nextRevision = maxOf(nextRevision, maxRevision)
+            }
             val sessions = historyStore.listSessions()
             val latest = ChatStartupPolicy.initialSession(contextPromptId, sessions)
             val restored = hydrateStoredImages(
-                latest?.let { historyStore.loadSession(it.id) }.orEmpty(),
+                latest?.let {
+                    historyStore.loadSession(
+                        it.id,
+                        actionRegistry.activeProposalIds(it.id),
+                    )
+                }.orEmpty(),
             )
             // 避免与用户极快发送消息的竞态：只有当前仍是空白新对话时才应用启动策略。
             if (currentSessionId == null && _state.value.messages.isEmpty()) {
@@ -149,12 +176,12 @@ class ChatViewModel(
             }
         }
         viewModelScope.launch {
-            settingsStore.agentModeByDefault.collect { value ->
+            defaultAgentModeFlow.collect { value ->
                 defaultMode = if (value) ChatMode.AGENT else ChatMode.CHAT
             }
         }
         viewModelScope.launch {
-            store.config.collect { value ->
+            configFlow.collect { value ->
                 config = value
                 _state.update {
                     it.copy(
@@ -165,118 +192,225 @@ class ChatViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            // completion 不要求本地已经显示 EXECUTING：快速 begin/finish 可能被
+            // StateFlow 合并，只要当前会话匹配就按 store 终态刷新。
+            actionRegistry.completions.collect { completed ->
+                if (synchronized(sessionLock) { currentSessionId } != completed.sessionId) {
+                    return@collect
+                }
+                if (_state.value.sending) return@collect
+                refreshCurrentSessionFromStore(completed.sessionId)
+            }
+        }
+        viewModelScope.launch {
+            // 旧 ViewModel 的后台发送完成时，若新实例已停留在该会话，补齐最终消息。
+            sendRegistry.completions.collect { completed ->
+                if (_state.value.sending) return@collect
+                if (synchronized(sessionLock) { currentSessionId } != completed.sessionId) {
+                    return@collect
+                }
+                refreshCurrentSessionFromStore(completed.sessionId)
+            }
+        }
+        viewModelScope.launch {
+            // 其他实例刚开始动作时，把本地仍为 PENDING 的同 proposal 提升为 EXECUTING。
+            actionRegistry.activeState.collect { active ->
+                val currentId = synchronized(sessionLock) { currentSessionId } ?: return@collect
+                val ids = active
+                    .filter { it.sessionId == currentId }
+                    .mapTo(mutableSetOf()) { it.proposalId }
+                if (ids.isEmpty()) return@collect
+                val hasPending = _state.value.messages.any { message ->
+                    message.actionProposals.any { proposal ->
+                        proposal.id in ids && proposal.state == ChatActionState.PENDING
+                    }
+                }
+                if (!hasPending) return@collect
+                // 只同步 UI 门禁，不写盘：EXECUTING 的持久化由动作所属实例负责，
+                // 避免两个实例同时用本地 revision 写同一会话。
+                synchronized(sessionLock) {
+                    if (currentSessionId != currentId) return@synchronized
+                    _state.update { state ->
+                        state.copy(
+                            messages = state.messages.map { message ->
+                                message.copy(
+                                    actionProposals = message.actionProposals.map { proposal ->
+                                        if (proposal.id in ids &&
+                                            proposal.state == ChatActionState.PENDING
+                                        ) {
+                                            proposal.copy(
+                                                state = ChatActionState.EXECUTING,
+                                                resultMessage = null,
+                                            )
+                                        } else {
+                                            proposal
+                                        }
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun send(text: String, imageUri: Uri?) {
         val trimmed = text.trim()
         if (_state.value.sending || (trimmed.isEmpty() && imageUri == null)) return
+        if (hasExecutingAction()) return
+
+        val sendSessionId = synchronized(sessionLock) {
+            currentSessionId ?: UUID.randomUUID().toString().also { created ->
+                currentSessionId = created
+                _state.update { it.copy(currentSessionId = created) }
+            }
+        }
+        // 发送必须先拿到该会话的 SEND lease：切换/删除等待期间以及动作执行期间都直接拒绝。
+        val lease = acquireSendLease(sendSessionId) ?: return
+        if (hasBackgroundOperation(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
         if (!config.isConfigured) {
-            appendAssistant(
-                text = "尚未配置 AI 助手，请先在设置中填写 Base URL 和文本模型。",
-                isError = true,
-            )
+            try {
+                appendAssistant(
+                    text = "尚未配置 AI 助手，请先在设置中填写 Base URL 和文本模型。",
+                    isError = true,
+                )
+            } finally {
+                sessionGate.release(lease)
+            }
             return
         }
 
         // 历史数据可能在进入聊天后才刷新，这里同步一次关联任务信息。
         refreshTaskContext()
 
+        if (!sendRegistry.begin(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
         val userText = if (trimmed.isEmpty()) "请分析这张图片。" else trimmed
         val imageId = if (imageUri != null) UUID.randomUUID().toString() else null
+        val userMessageId = synchronized(sessionLock) { nextMessageId++ }
         val userMessage = ChatUiMessage(
-            id = nextMessageId++,
+            id = userMessageId,
             role = ChatRole.USER,
             text = userText,
             imageUri = imageUri,
             imageId = imageId,
         )
-        _state.update {
-            it.copy(messages = it.messages + userMessage, sending = true)
+        try {
+            updateAndPersist {
+                it.copy(messages = it.messages + userMessage, sending = true)
+            }
+        } catch (throwable: Throwable) {
+            sendRegistry.finish(sendSessionId)
+            sessionGate.release(lease)
+            throw throwable
         }
-        persistMessages()
+        val sessionForProposals = sendSessionId
 
         appScope.launch {
-            if (!privacySanitizer.awaitReady()) {
-                failUserMessage(
-                    userMessageId = userMessage.id,
-                    text = "无法加载服务器隐私配置，已停止发送。请稍后重试。",
-                )
-                return@launch
-            }
-            val imageData = if (imageUri != null) {
-                val result = imageEncoder.toDataUrl(imageUri)
-                val data = result.getOrElse { error ->
+            try {
+                if (!privacySanitizer.awaitReady()) {
                     failUserMessage(
                         userMessageId = userMessage.id,
-                        text = "图片处理失败：${error.message ?: "无法读取图片"}",
+                        text = "无法加载服务器隐私配置，已停止发送。请稍后重试。",
                     )
                     return@launch
                 }
-                _state.update { current ->
-                    current.copy(
-                        messages = current.messages.map { message ->
-                            if (message.id == userMessage.id) {
-                                message.copy(imageDataUrl = data)
-                            } else {
-                                message
-                            }
-                        },
-                    )
-                }
-                if (imageId != null) {
-                    runCatching { imageStore.save(imageId, data) }
-                }
-                data
-            } else {
-                null
-            }
-
-            val history = _state.value.messages
-                .filterNot { it.isError }
-                .filter { it.text.isNotBlank() }
-                .takeLast(MAX_CONTEXT_MESSAGES)
-                .map { message ->
-                    AiChatMessage(
-                        role = message.role.apiRole,
-                        content = if (message.role == ChatRole.ASSISTANT) {
-                            privacySanitizer.sanitize(message.text)
-                        } else {
-                            message.text
-                        },
-                        imageDataUrl = message.imageDataUrl,
-                    )
-                }
-
-            answer(
-                userText = userText,
-                history = history,
-            ).fold(
-                onSuccess = { reply ->
-                    val streamedId = reply.streamedMessageId
-                    if (streamedId != null) {
-                        finalizeAssistant(
-                            id = streamedId,
-                            text = reply.text.trim(),
-                            toolActivities = reply.toolActivities,
-                            actionProposals = reply.actionProposals,
-                            historyImages = reply.historyImages,
+                val imageData = if (imageUri != null) {
+                    val result = imageEncoder.toDataUrl(imageUri)
+                    val data = result.getOrElse { error ->
+                        failUserMessage(
+                            userMessageId = userMessage.id,
+                            text = "图片处理失败：${error.message ?: "无法读取图片"}",
                         )
-                    } else {
-                        appendAssistant(
-                            text = reply.text.trim(),
-                            toolActivities = reply.toolActivities,
-                            actionProposals = reply.actionProposals,
-                            historyImages = reply.historyImages,
+                        return@launch
+                    }
+                    _state.update { current ->
+                        current.copy(
+                            messages = current.messages.map { message ->
+                                if (message.id == userMessage.id) {
+                                    message.copy(imageDataUrl = data)
+                                } else {
+                                    message
+                                }
+                            },
                         )
                     }
-                },
-                onFailure = { error ->
-                    appendAssistant(
-                        text = "调用失败：${error.message ?: "请检查网络和模型配置"}",
-                        isError = true,
-                    )
-                },
-            )
+                    if (imageId != null) {
+                        runCatching { imageStore.save(imageId, data) }
+                    }
+                    data
+                } else {
+                    null
+                }
+
+                val history = _state.value.messages
+                    .filterNot { it.isError }
+                    .filter { it.text.isNotBlank() }
+                    .takeLast(MAX_CONTEXT_MESSAGES)
+                    .map { message ->
+                        AiChatMessage(
+                            role = message.role.apiRole,
+                            content = if (message.role == ChatRole.ASSISTANT) {
+                                privacySanitizer.sanitize(message.text)
+                            } else {
+                                message.text
+                            },
+                            imageDataUrl = message.imageDataUrl,
+                        )
+                    }
+
+                answer(
+                    userText = userText,
+                    history = history,
+                ).fold(
+                    onSuccess = { reply ->
+                        val streamedId = reply.streamedMessageId
+                        if (streamedId != null) {
+                            finalizeAssistant(
+                                id = streamedId,
+                                text = reply.text.trim(),
+                                toolActivities = reply.toolActivities,
+                                actionProposals = reply.actionProposals.map {
+                                    it.copy(sessionId = sessionForProposals)
+                                },
+                                historyImages = reply.historyImages,
+                            )
+                        } else {
+                            appendAssistant(
+                                text = reply.text.trim(),
+                                toolActivities = reply.toolActivities,
+                                actionProposals = reply.actionProposals.map {
+                                    it.copy(sessionId = sessionForProposals)
+                                },
+                                historyImages = reply.historyImages,
+                            )
+                        }
+                    },
+                    onFailure = { error ->
+                        appendAssistant(
+                            text = "调用失败：${error.message ?: "请检查网络和模型配置"}",
+                            isError = true,
+                        )
+                    },
+                )
+            } finally {
+                // 终态落盘后再撤销发送登记，新实例切入时能读到完整回复。
+                try {
+                    awaitCurrentSave()
+                } finally {
+                    sendRegistry.finish(sendSessionId)
+                    sessionGate.release(lease)
+                }
+            }
         }
     }
 
@@ -286,42 +420,74 @@ class ChatViewModel(
     fun runTool(toolName: String, label: String) {
         if (_state.value.sending) return
         if (toolName !in ChatToolPolicy.readOnlyTools) return
+        if (hasExecutingAction()) return
+        val sendSessionId = synchronized(sessionLock) {
+            currentSessionId ?: UUID.randomUUID().toString().also { created ->
+                currentSessionId = created
+                _state.update { it.copy(currentSessionId = created) }
+            }
+        }
+        val lease = acquireSendLease(sendSessionId) ?: return
+        if (hasBackgroundOperation(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
+        if (!sendRegistry.begin(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
         val userMessage = ChatUiMessage(
-            id = nextMessageId++,
+            id = synchronized(sessionLock) { nextMessageId++ },
             role = ChatRole.USER,
             text = "使用工具：$label",
         )
-        _state.update {
-            it.copy(
-                messages = it.messages + userMessage,
-                sending = true,
-                status = toolStatus(toolName),
-            )
-        }
-        persistMessages()
-        appScope.launch {
-            val args = buildJsonObject {
-                taskPromptId?.let { put("promptId", it) }
+        try {
+            updateAndPersist {
+                it.copy(
+                    messages = it.messages + userMessage,
+                    sending = true,
+                    status = toolStatus(toolName),
+                )
             }
-            val call = AiToolCall(
-                id = "manual-${UUID.randomUUID()}",
-                name = toolName,
-                arguments = args.toString(),
-            )
-            val execution = toolRegistry.execute(
-                call = call,
-                fallbackPromptId = taskPromptId,
-                attachments = emptyList(),
-                direct = true,
-            )
-            val activity = toolRegistry.describe(call, taskPromptId)
-                .copy(isError = execution.isError)
-            appendAssistant(
-                text = execution.content,
-                isError = execution.isError,
-                toolActivities = listOf(activity),
-                historyImages = execution.historyImages,
-            )
+        } catch (throwable: Throwable) {
+            sendRegistry.finish(sendSessionId)
+            sessionGate.release(lease)
+            throw throwable
+        }
+        appScope.launch {
+            try {
+                val args = buildJsonObject {
+                    taskPromptId?.let { put("promptId", it) }
+                }
+                val call = AiToolCall(
+                    id = "manual-${UUID.randomUUID()}",
+                    name = toolName,
+                    arguments = args.toString(),
+                )
+                val execution = toolRegistry.execute(
+                    call = call,
+                    fallbackPromptId = taskPromptId,
+                    attachments = emptyList(),
+                    direct = true,
+                )
+                val activity = toolRegistry.describe(call, taskPromptId)
+                    .copy(isError = execution.isError)
+                appendAssistant(
+                    text = execution.content,
+                    isError = execution.isError,
+                    toolActivities = listOf(activity),
+                    historyImages = execution.historyImages,
+                )
+            } finally {
+                try {
+                    awaitCurrentSave()
+                } finally {
+                    sendRegistry.finish(sendSessionId)
+                    sessionGate.release(lease)
+                }
+            }
         }
     }
 
@@ -337,65 +503,97 @@ class ChatViewModel(
             "question" -> trimmedQuestion.takeIf { it.isNotBlank() } ?: return
             else -> return
         }
+        if (hasExecutingAction()) return
+        val sendSessionId = synchronized(sessionLock) {
+            currentSessionId ?: UUID.randomUUID().toString().also { created ->
+                currentSessionId = created
+                _state.update { it.copy(currentSessionId = created) }
+            }
+        }
+        val lease = acquireSendLease(sendSessionId) ?: return
+        if (hasBackgroundOperation(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
+        if (!sendRegistry.begin(sendSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
         val imageId = UUID.randomUUID().toString()
         val userMessage = ChatUiMessage(
-            id = nextMessageId++,
+            id = synchronized(sessionLock) { nextMessageId++ },
             role = ChatRole.USER,
             text = label,
             imageUri = imageUri,
             imageId = imageId,
         )
-        _state.update {
-            it.copy(
-                messages = it.messages + userMessage,
-                sending = true,
-                status = ChatStatus.VISION,
-            )
+        try {
+            updateAndPersist {
+                it.copy(
+                    messages = it.messages + userMessage,
+                    sending = true,
+                    status = ChatStatus.VISION,
+                )
+            }
+        } catch (throwable: Throwable) {
+            sendRegistry.finish(sendSessionId)
+            sessionGate.release(lease)
+            throw throwable
         }
-        persistMessages()
         appScope.launch {
-            val data = imageEncoder.toDataUrl(imageUri).getOrElse { error ->
+            try {
+                val data = imageEncoder.toDataUrl(imageUri).getOrElse { error ->
+                    appendAssistant(
+                        text = "图片处理失败：${error.message ?: "无法读取图片"}",
+                        isError = true,
+                    )
+                    return@launch
+                }
+                _state.update { current ->
+                    current.copy(
+                        messages = current.messages.map { message ->
+                            if (message.id == userMessage.id) {
+                                message.copy(imageDataUrl = data)
+                            } else {
+                                message
+                            }
+                        },
+                    )
+                }
+                runCatching { imageStore.save(imageId, data) }
+                val args = buildJsonObject {
+                    put("mode", mode)
+                    if (mode == "question") put("question", trimmedQuestion)
+                }
+                val call = AiToolCall(
+                    id = "manual-${UUID.randomUUID()}",
+                    name = "analyze_image",
+                    arguments = args.toString(),
+                )
+                val execution = toolRegistry.execute(
+                    call = call,
+                    fallbackPromptId = taskPromptId,
+                    attachments = currentImageAttachments(),
+                    direct = true,
+                )
+                val activity = toolRegistry.describe(call, taskPromptId)
+                    .copy(isError = execution.isError)
                 appendAssistant(
-                    text = "图片处理失败：${error.message ?: "无法读取图片"}",
-                    isError = true,
+                    text = execution.content,
+                    isError = execution.isError,
+                    toolActivities = listOf(activity),
+                    historyImages = execution.historyImages,
                 )
-                return@launch
+            } finally {
+                try {
+                    awaitCurrentSave()
+                } finally {
+                    sendRegistry.finish(sendSessionId)
+                    sessionGate.release(lease)
+                }
             }
-            _state.update { current ->
-                current.copy(
-                    messages = current.messages.map { message ->
-                        if (message.id == userMessage.id) {
-                            message.copy(imageDataUrl = data)
-                        } else {
-                            message
-                        }
-                    },
-                )
-            }
-            runCatching { imageStore.save(imageId, data) }
-            val args = buildJsonObject {
-                put("mode", mode)
-                if (mode == "question") put("question", trimmedQuestion)
-            }
-            val call = AiToolCall(
-                id = "manual-${UUID.randomUUID()}",
-                name = "analyze_image",
-                arguments = args.toString(),
-            )
-            val execution = toolRegistry.execute(
-                call = call,
-                fallbackPromptId = taskPromptId,
-                attachments = currentImageAttachments(),
-                direct = true,
-            )
-            val activity = toolRegistry.describe(call, taskPromptId)
-                .copy(isError = execution.isError)
-            appendAssistant(
-                text = execution.content,
-                isError = execution.isError,
-                toolActivities = listOf(activity),
-                historyImages = execution.historyImages,
-            )
         }
     }
 
@@ -725,8 +923,11 @@ class ChatViewModel(
     }
 
     fun clearTaskContext() {
-        taskPromptId = null
-        _state.update { it.copy(contextPromptId = null, taskContext = null) }
+        synchronized(sessionLock) {
+            if (_state.value.sending || hasBackgroundOperation(currentSessionId)) return
+            taskPromptId = null
+            _state.update { it.copy(contextPromptId = null, taskContext = null) }
+        }
     }
 
     private fun taskContextPrompt(context: ChatTaskContext): String = buildString {
@@ -786,7 +987,7 @@ class ChatViewModel(
         actionProposals: List<ChatActionProposal>,
         historyImages: List<ChatHistoryImage>,
     ) {
-        _state.update { state ->
+        updateAndPersist { state ->
             state.copy(
                 sending = false,
                 status = null,
@@ -805,30 +1006,290 @@ class ChatViewModel(
                 },
             )
         }
-        persistMessages()
+    }
+
+    /** 消息 mutation 与保存快照必须和 session 切换互斥。 */
+    private fun updateAndPersist(transform: (ChatUiState) -> ChatUiState) {
+        synchronized(sessionLock) {
+            _state.update(transform)
+            persistMessages()
+        }
     }
 
     private fun persistMessages() {
-        val snapshot = _state.value.messages
-        val promptId = taskPromptId
-        val sessionId = currentSessionId ?: UUID.randomUUID().toString().also { id ->
-            currentSessionId = id
-            _state.update { it.copy(currentSessionId = id) }
+        val job = synchronized(sessionLock) {
+            val snapshot = _state.value.messages
+            val promptId = taskPromptId
+            val modeSnapshot = mode
+            val title = sessionTitle(snapshot)
+            val sessionId = currentSessionId ?: UUID.randomUUID().toString().also { created ->
+                currentSessionId = created
+                _state.update { it.copy(currentSessionId = created) }
+            }
+            val revision = nextRevision++
+            val previous = pendingSaveJobs[sessionId]
+            // LAZY + 锁内登记，保证 awaitCurrentSave 不会在 job 登记前漏等待。
+            val pending = appScope.launch(start = CoroutineStart.LAZY) {
+                // 同一会话的保存串行化，避免旧 revision 晚到后制造伪失败提示。
+                previous?.join()
+                val result = historyStore.saveSession(
+                    sessionId = sessionId,
+                    promptId = promptId,
+                    title = title,
+                    mode = modeSnapshot,
+                    messages = snapshot,
+                    revision = revision,
+                )
+                pendingSaveResults.compute(sessionId) { _, existing ->
+                    if (existing == null || revision >= existing.revision) {
+                        SaveMeta(revision, result)
+                    } else {
+                        existing
+                    }
+                }
+                when (result) {
+                    is ChatSessionSaveResult.Saved,
+                    is ChatSessionSaveResult.Unchanged,
+                    -> {
+                        val sessions = historyStore.listSessions()
+                        // 只更新列表；绝不把旧 sessionId 写回当前会话。
+                        _state.update { it.copy(sessions = sessions) }
+                    }
+
+                    is ChatSessionSaveResult.Rejected -> reportSaveFailure(result.reason)
+                    is ChatSessionSaveResult.Failed -> reportSaveFailure(result.message)
+                }
+            }
+            pendingSaveJobs[sessionId] = pending
+            pending
         }
-        val title = sessionTitle(snapshot)
-        appScope.launch {
-            historyStore.saveSession(
-                sessionId = sessionId,
-                promptId = promptId,
-                title = title,
-                mode = mode,
-                messages = snapshot,
+        job.start()
+    }
+
+    private suspend fun awaitCurrentSave(): ChatSessionSaveResult? {
+        val (sessionId, job) = synchronized(sessionLock) {
+            val id = currentSessionId
+            id to id?.let(pendingSaveJobs::get)
+        }
+        sessionId ?: return null
+        job?.join()
+        return pendingSaveResults[sessionId]?.result
+    }
+
+    private suspend fun reportSaveFailure(message: String) {
+        val revision = historyStore.maxRevision() + 1L
+        synchronized(sessionLock) {
+            nextRevision = maxOf(nextRevision, revision)
+        }
+        _state.update { it.copy(sessionError = message) }
+    }
+
+    private fun saveFailureText(result: ChatSessionSaveResult?): String? = when (result) {
+        is ChatSessionSaveResult.Failed -> result.message
+        is ChatSessionSaveResult.Rejected -> result.reason
+        else -> null
+    }
+
+    private fun hasExecutingAction(): Boolean =
+        ChatActionGate.hasExecutingAction(_state.value.messages)
+
+    private fun acquireSendLease(sessionId: String): ChatSessionOperationGate.Lease? =
+        sessionGate.tryAcquire(
+            ChatSessionOperationGate.Kind.SEND,
+            sessionId,
+        ) ?: run {
+            reportBackgroundBusy()
+            null
+        }
+
+    private fun acquireSessionMutation(        kind: ChatSessionOperationGate.Kind,
+        sessionId: String? = null,
+    ): ChatSessionOperationGate.Lease? {
+        if (!ChatActionGate.canMutateSession(_state.value.sending, _state.value.messages)) {
+            return null
+        }
+        val currentId = synchronized(sessionLock) { currentSessionId }
+        if (hasBackgroundOperation(currentId)) {
+            reportBackgroundBusy()
+            return null
+        }
+        when (kind) {
+            ChatSessionOperationGate.Kind.SWITCH -> {
+                // 目标会话仍在后台发送时不能切入，避免看到半截消息后又被旧发送覆盖。
+                if (sessionId != null && sendRegistry.isActive(sessionId)) {
+                    reportBackgroundBusy()
+                    return null
+                }
+            }
+
+            ChatSessionOperationGate.Kind.DELETE -> {
+                if (hasBackgroundOperation(sessionId)) {
+                    reportBackgroundBusy()
+                    return null
+                }
+            }
+
+            else -> Unit
+        }
+        return sessionGate.tryAcquire(kind, setOfNotNull(currentId, sessionId)) ?: run {
+            reportBackgroundBusy()
+            null
+        }
+    }
+
+    private fun hasBackgroundOperation(sessionId: String?): Boolean =
+        sessionId != null && (
+            sendRegistry.isActive(sessionId) ||
+                actionRegistry.activeProposalIds(sessionId).isNotEmpty()
             )
-            val sessions = historyStore.listSessions()
+
+    private fun hasActiveSessionOperation(): Boolean {
+        val currentId = synchronized(sessionLock) { currentSessionId }
+        return hasExecutingAction() || hasBackgroundOperation(currentId)
+    }
+
+    private fun reportBackgroundBusy() {
+        _state.update { it.copy(sessionError = "后台操作尚未完成，请稍后再试") }
+    }
+
+    /** 后台动作/发送完成后，把原会话的终态和结果消息合并回当前 UI。 */
+    internal suspend fun refreshCurrentSessionFromStore(sessionId: String) {
+        // 先让本地编辑落盘；之后的合并仍保留调用期间产生的本地状态。
+        awaitCurrentSave()
+        val stored = runCatching {
+            hydrateStoredImages(
+                historyStore.loadSession(
+                    sessionId,
+                    actionRegistry.activeProposalIds(sessionId),
+                ),
+            )
+        }.getOrElse { error ->
             _state.update {
-                it.copy(sessions = sessions, currentSessionId = sessionId)
+                it.copy(sessionError = "刷新会话失败：${error.message ?: "未知错误"}")
+            }
+            return
+        }
+        synchronized(sessionLock) {
+            if (currentSessionId != sessionId || _state.value.sending) return@synchronized
+            val current = _state.value.messages
+            if (current.isEmpty()) {
+                nextMessageId = (stored.maxOfOrNull { it.id } ?: 0L) + 1L
+                _state.update {
+                    it.copy(
+                        messages = stored,
+                        taskContext = currentTaskContext(),
+                    )
+                }
+                return@synchronized
+            }
+
+            val storedProposals = stored
+                .flatMap { it.actionProposals }
+                .associateBy { it.id }
+            val merged = current.map { message ->
+                message.copy(
+                    actionProposals = message.actionProposals.map { proposal ->
+                        val remote = storedProposals[proposal.id]
+                        if (remote == null) {
+                            proposal
+                        } else {
+                            proposal.copy(
+                                state = mergeProposalState(
+                                    local = proposal,
+                                    remote = remote,
+                                    active = actionRegistry.isActive(
+                                        sessionId,
+                                        proposal.id,
+                                    ),
+                                ),
+                                resultMessage = remote.resultMessage
+                                    ?: proposal.resultMessage,
+                                presetSaved = proposal.presetSaved || remote.presetSaved,
+                                presetName = proposal.presetName ?: remote.presetName,
+                                presetSaving = false,
+                                presetError = remote.presetError ?: proposal.presetError,
+                            )
+                        }
+                    },
+                )
+            }
+            val localIds = current.mapTo(mutableSetOf()) { it.id }
+            val localSignatures = current.mapTo(mutableSetOf()) { it.role to it.text }
+            val extras = stored.mapNotNull { message ->
+                val signature = message.role to message.text
+                if (message.id !in localIds && signature !in localSignatures) {
+                    message.copy(id = nextMessageId++)
+                } else {
+                    null
+                }
+            }
+            val mergedMessages = merged + extras
+            nextMessageId = maxOf(
+                nextMessageId,
+                (mergedMessages.maxOfOrNull { it.id } ?: 0L) + 1L,
+            )
+            _state.update {
+                it.copy(
+                    messages = mergedMessages,
+                    taskContext = currentTaskContext(),
+                )
             }
         }
+    }
+
+    /**
+     * 远程 PENDING 不能覆盖本地终态/执行态；远程终态优先。
+     */
+    private fun mergeProposalState(
+        local: ChatActionProposal,
+        remote: ChatActionProposal,
+        active: Boolean,
+    ): ChatActionState = when (remote.state) {
+        ChatActionState.SUCCESS,
+        ChatActionState.FAILED,
+        ChatActionState.EXECUTING,
+        ChatActionState.CANCELLED,
+        -> remote.state
+
+        ChatActionState.PENDING -> when (local.state) {
+            ChatActionState.CANCELLED -> ChatActionState.CANCELLED
+            ChatActionState.EXECUTING -> if (active) {
+                ChatActionState.EXECUTING
+            } else {
+                ChatActionState.FAILED
+            }
+
+            ChatActionState.SUCCESS,
+            ChatActionState.FAILED,
+            -> local.state
+
+            ChatActionState.PENDING -> ChatActionState.PENDING
+        }
+    }
+
+    private fun markActionFailed(
+        actionSessionId: String,
+        messageId: Long,
+        proposalId: String,
+        message: String,
+    ) {
+        if (synchronized(sessionLock) { currentSessionId } != actionSessionId) return
+        runCatching {
+            updateActionProposal(messageId, proposalId) { proposal ->
+                if (proposal.state == ChatActionState.EXECUTING) {
+                    proposal.copy(
+                        state = ChatActionState.FAILED,
+                        resultMessage = message,
+                    )
+                } else {
+                    proposal
+                }
+            }
+        }
+    }
+
+    fun clearSessionError() {
+        _state.update { it.copy(sessionError = null) }
     }
 
     private fun sessionTitle(messages: List<ChatUiMessage>): String {
@@ -845,87 +1306,228 @@ class ChatViewModel(
     }
 
     fun newSession() {
-        if (_state.value.sending) return
-        currentSessionId = null
-        mode = defaultMode
-        _state.update {
-            it.copy(
-                messages = emptyList(),
-                currentSessionId = null,
-                sending = false,
-                status = null,
-                streamingMessageId = null,
-                mode = defaultMode,
-            )
+        val lease = acquireSessionMutation(ChatSessionOperationGate.Kind.SWITCH) ?: return
+        viewModelScope.launch {
+            try {
+                val result = awaitCurrentSave()
+                if (!sessionGate.isCurrent(lease)) return@launch
+                saveFailureText(result)?.let { error ->
+                    _state.update { it.copy(sessionError = error) }
+                    return@launch
+                }
+                val applied = synchronized(sessionLock) {
+                    if (!sessionGate.isCurrent(lease) ||
+                        !ChatActionGate.canMutateSession(
+                            _state.value.sending,
+                            _state.value.messages,
+                        )
+                    ) {
+                        return@synchronized false
+                    }
+                    currentSessionId = null
+                    mode = defaultMode
+                    _state.update {
+                        it.copy(
+                            messages = emptyList(),
+                            currentSessionId = null,
+                            sending = false,
+                            status = null,
+                            streamingMessageId = null,
+                            mode = defaultMode,
+                            sessionError = null,
+                        )
+                    }
+                    true
+                }
+                if (!applied) return@launch
+            } finally {
+                sessionGate.release(lease)
+            }
         }
     }
 
     fun switchMode(newMode: ChatMode) {
-        if (_state.value.sending || mode == newMode) return
-        mode = newMode
-        _state.update {
-            it.copy(
-                mode = newMode,
-                status = null,
-            )
+        if (!ChatActionGate.canSwitchMode(_state.value.sending, _state.value.messages) ||
+            mode == newMode
+        ) {
+            return
         }
-        if (currentSessionId != null) {
-            persistMessages()
+        val currentId = synchronized(sessionLock) { currentSessionId }
+        if (hasBackgroundOperation(currentId)) {
+            reportBackgroundBusy()
+            return
+        }
+        val lease = sessionGate.tryAcquire(
+            ChatSessionOperationGate.Kind.SWITCH,
+            currentId,
+        ) ?: run {
+            reportBackgroundBusy()
+            return
+        }
+        try {
+            synchronized(sessionLock) {
+                if (!ChatActionGate.canSwitchMode(_state.value.sending, _state.value.messages)) {
+                    return
+                }
+                mode = newMode
+                _state.update {
+                    it.copy(
+                        mode = newMode,
+                        status = null,
+                    )
+                }
+                if (currentSessionId != null) {
+                    persistMessages()
+                }
+            }
+        } finally {
+            sessionGate.release(lease)
         }
     }
 
     fun switchSession(sessionId: String) {
-        val state = _state.value
-        if (state.sending || state.currentSessionId == sessionId) return
+        if (_state.value.currentSessionId == sessionId) return
+        val lease = acquireSessionMutation(
+            ChatSessionOperationGate.Kind.SWITCH,
+            sessionId,
+        ) ?: return
         viewModelScope.launch {
-            val summary = state.sessions.firstOrNull { it.id == sessionId }
-                ?: return@launch
-            val messages = hydrateStoredImages(historyStore.loadSession(sessionId))
-            taskPromptId = summary.promptId
-            mode = summary.mode
-            nextMessageId = (messages.maxOfOrNull { it.id } ?: 0L) + 1L
-            currentSessionId = sessionId
-            _state.update {
-                it.copy(
-                    messages = messages,
-                    currentSessionId = sessionId,
-                    contextPromptId = summary.promptId,
-                    taskContext = currentTaskContext(),
-                    mode = mode,
-                    sending = false,
-                    status = null,
-                    streamingMessageId = null,
-                )
+            try {
+                val saveResult = awaitCurrentSave()
+                if (!sessionGate.isCurrent(lease)) return@launch
+                saveFailureText(saveResult)?.let { error ->
+                    _state.update { it.copy(sessionError = error) }
+                    return@launch
+                }
+                val summary = _state.value.sessions.firstOrNull { it.id == sessionId }
+                    ?: return@launch
+                var applied = false
+                var attempts = 0
+                while (!applied && attempts < MAX_SESSION_LOAD_ATTEMPTS) {
+                    attempts++
+                    val version = actionRegistry.version(sessionId)
+                    val activeProposalIds = actionRegistry.activeProposalIds(sessionId)
+                    val messages = runCatching {
+                        hydrateStoredImages(historyStore.loadSession(sessionId, activeProposalIds))
+                    }.getOrElse { error ->
+                        _state.update {
+                            it.copy(sessionError = "加载会话失败：${error.message ?: "未知错误"}")
+                        }
+                        return@launch
+                    }
+                    if (!sessionGate.isCurrent(lease)) return@launch
+                    var shouldReturn = false
+                    var changedDuringApply = false
+                    applied = synchronized(sessionLock) {
+                        if (!sessionGate.isCurrent(lease) ||
+                            !ChatActionGate.canMutateSession(
+                                _state.value.sending,
+                                _state.value.messages,
+                            )
+                        ) {
+                            shouldReturn = true
+                            return@synchronized false
+                        }
+                        if (actionRegistry.version(sessionId) != version) {
+                            changedDuringApply = true
+                            return@synchronized false
+                        }
+                        taskPromptId = summary.promptId
+                        mode = summary.mode
+                        nextMessageId = (messages.maxOfOrNull { it.id } ?: 0L) + 1L
+                        currentSessionId = sessionId
+                        _state.update {
+                            it.copy(
+                                messages = messages,
+                                currentSessionId = sessionId,
+                                contextPromptId = summary.promptId,
+                                taskContext = currentTaskContext(),
+                                mode = summary.mode,
+                                sending = false,
+                                status = null,
+                                streamingMessageId = null,
+                            )
+                        }
+                        true
+                    }
+                    if (shouldReturn) return@launch
+                    if (applied && actionRegistry.version(sessionId) != version) {
+                        // load 期间动作已完成：丢弃旧快照，重新读取终态。
+                        applied = false
+                        changedDuringApply = true
+                    }
+                    if (!applied && !changedDuringApply) return@launch
+                }
+                if (!applied) {
+                    _state.update { it.copy(sessionError = "会话正在更新，请稍后重试") }
+                }
+            } finally {
+                sessionGate.release(lease)
             }
         }
     }
 
     fun deleteSession(sessionId: String) {
         if (_state.value.sending) return
+        if (actionRegistry.activeProposalIds(sessionId).isNotEmpty()) return
+        val lease = acquireSessionMutation(
+            ChatSessionOperationGate.Kind.DELETE,
+            sessionId,
+        ) ?: return
         viewModelScope.launch {
-            val messages = runCatching { historyStore.loadSession(sessionId) }
-                .getOrDefault(emptyList())
-            val imageIds = messages.mapNotNull { it.imageId }
-            historyStore.deleteSession(sessionId)
-            imageStore.delete(imageIds)
-            val sessions = historyStore.listSessions()
-            if (_state.value.currentSessionId == sessionId) {
-                currentSessionId = null
-                nextMessageId = 1L
-                mode = defaultMode
-                _state.update {
-                    it.copy(
-                        messages = emptyList(),
-                        currentSessionId = null,
-                        sessions = sessions,
-                        sending = false,
-                        status = null,
-                        streamingMessageId = null,
-                        mode = defaultMode,
+            try {
+                val messages = runCatching {
+                    historyStore.loadSession(
+                        sessionId,
+                        actionRegistry.activeProposalIds(sessionId),
                     )
+                }.getOrDefault(emptyList())
+                if (!sessionGate.isCurrent(lease)) return@launch
+                if (!ChatActionGate.canMutateSession(
+                        _state.value.sending,
+                        _state.value.messages,
+                    )
+                ) {
+                    return@launch
                 }
-            } else {
-                _state.update { it.copy(sessions = sessions) }
+                if (actionRegistry.activeProposalIds(sessionId).isNotEmpty()) {
+                    return@launch
+                }
+                val imageIds = messages.mapNotNull { it.imageId }
+                val result = historyStore.deleteSession(sessionId)
+                if (result is ChatSessionSaveResult.Failed) {
+                    _state.update { it.copy(sessionError = result.message) }
+                    return@launch
+                }
+                val revisionAfterDelete = historyStore.maxRevision() + 1L
+                synchronized(sessionLock) {
+                    nextRevision = maxOf(nextRevision, revisionAfterDelete)
+                }
+                imageStore.delete(imageIds)
+                val sessions = historyStore.listSessions()
+                synchronized(sessionLock) {
+                    if (!sessionGate.isCurrent(lease)) return@synchronized
+                    if (currentSessionId == sessionId) {
+                        currentSessionId = null
+                        nextMessageId = 1L
+                        mode = defaultMode
+                        _state.update {
+                            it.copy(
+                                messages = emptyList(),
+                                currentSessionId = null,
+                                sessions = sessions,
+                                sending = false,
+                                status = null,
+                                streamingMessageId = null,
+                                mode = defaultMode,
+                            )
+                        }
+                    } else {
+                        _state.update { it.copy(sessions = sessions) }
+                    }
+                }
+            } finally {
+                sessionGate.release(lease)
             }
         }
     }
@@ -933,16 +1535,36 @@ class ChatViewModel(
     fun renameSession(sessionId: String, title: String) {
         val trimmed = title.trim()
         if (trimmed.isBlank()) return
+        if (hasBackgroundOperation(sessionId)) {
+            reportBackgroundBusy()
+            return
+        }
         viewModelScope.launch {
-            historyStore.renameSession(sessionId, trimmed)
+            runCatching { historyStore.renameSession(sessionId, trimmed) }
+                .onFailure {
+                    _state.update { state -> state.copy(sessionError = "重命名会话失败") }
+                    return@launch
+                }
+            val revision = historyStore.maxRevision() + 1L
+            synchronized(sessionLock) { nextRevision = maxOf(nextRevision, revision) }
             val sessions = historyStore.listSessions()
             _state.update { it.copy(sessions = sessions) }
         }
     }
 
     fun togglePinned(sessionId: String, pinned: Boolean) {
+        if (hasBackgroundOperation(sessionId)) {
+            reportBackgroundBusy()
+            return
+        }
         viewModelScope.launch {
-            historyStore.setPinned(sessionId, pinned)
+            runCatching { historyStore.setPinned(sessionId, pinned) }
+                .onFailure {
+                    _state.update { state -> state.copy(sessionError = "更新会话置顶失败") }
+                    return@launch
+                }
+            val revision = historyStore.maxRevision() + 1L
+            synchronized(sessionLock) { nextRevision = maxOf(nextRevision, revision) }
             val sessions = historyStore.listSessions()
             _state.update { it.copy(sessions = sessions) }
         }
@@ -950,52 +1572,221 @@ class ChatViewModel(
 
     fun confirmAction(messageId: Long, proposalId: String) {
         if (mode != ChatMode.AGENT) return
-        val proposal = _state.value.messages
-            .firstOrNull { it.id == messageId }
-            ?.actionProposals
-            ?.firstOrNull { it.id == proposalId }
-            ?: return
-        if (proposal.state != ChatActionState.PENDING) return
+        val currentId = synchronized(sessionLock) { currentSessionId }
+        if (hasBackgroundOperation(currentId)) {
+            reportBackgroundBusy()
+            return
+        }
+        val lease = sessionGate.tryAcquire(
+            ChatSessionOperationGate.Kind.ACTION,
+            currentId,
+        ) ?: run {
+            reportBackgroundBusy()
+            return
+        }
+        val located = ChatActionLocator.find(
+            messages = _state.value.messages,
+            sessionId = synchronized(sessionLock) { currentSessionId },
+            proposalId = proposalId,
+        )
+        if (located == null ||
+            located.message.id != messageId ||
+            located.proposal.state != ChatActionState.PENDING ||
+            hasExecutingAction()
+        ) {
+            sessionGate.release(lease)
+            return
+        }
+        val proposal = located.proposal
+        val actionSessionId = synchronized(sessionLock) {
+            currentSessionId ?: UUID.randomUUID().toString().also { created ->
+                currentSessionId = created
+                _state.update { it.copy(currentSessionId = created) }
+            }
+        }
+        if (hasBackgroundOperation(actionSessionId)) {
+            sessionGate.release(lease)
+            reportBackgroundBusy()
+            return
+        }
+        if (!actionRegistry.begin(actionSessionId, proposalId)) {
+            sessionGate.release(lease)
+            return
+        }
         updateActionProposal(messageId, proposalId) {
             it.copy(state = ChatActionState.EXECUTING, resultMessage = null)
         }
-        persistMessages()
-        viewModelScope.launch {
-            val result = actionHandler.execute(proposal)
-            val successText = result.getOrNull()
-            val outcomeId = successText?.let { nextMessageId++ }
-            updateActionProposal(messageId, proposalId) { current ->
-                result.fold(
-                    onSuccess = { message ->
-                        current.copy(
-                            state = ChatActionState.SUCCESS,
-                            resultMessage = message,
+        operationScope.launch {
+            try {
+                val result = try {
+                    actionHandler.execute(proposal)
+                } catch (throwable: Throwable) {
+                    if (throwable is CancellationException) {
+                        markActionFailed(
+                            actionSessionId = actionSessionId,
+                            messageId = messageId,
+                            proposalId = proposalId,
+                            message = "操作已取消",
                         )
-                    },
-                    onFailure = { error ->
-                        current.copy(
-                            state = ChatActionState.FAILED,
-                            resultMessage = error.message ?: "执行失败",
-                        )
-                    },
-                )
-            }
-            if (successText != null && outcomeId != null) {
-                _state.update { state ->
-                    state.copy(
-                        messages = state.messages + ChatUiMessage(
-                            id = outcomeId,
+                        throw throwable
+                    }
+                    Result.failure(throwable)
+                }
+                if (synchronized(sessionLock) { currentSessionId } != actionSessionId) {
+                    persistActionOutcomeToSession(actionSessionId, proposalId, result)
+                    return@launch
+                }
+                // 状态和成功后的结果消息一次写入、一次保存，避免双 persist 乱序。
+                updateAndPersist { state ->
+                    val updated = state.messages.map { message ->
+                        if (message.id != messageId) {
+                            message
+                        } else {
+                            message.copy(
+                                actionProposals = message.actionProposals.map { current ->
+                                    if (current.id != proposalId) {
+                                        current
+                                    } else {
+                                        result.fold(
+                                            onSuccess = { text ->
+                                                current.copy(
+                                                    state = ChatActionState.SUCCESS,
+                                                    resultMessage = text,
+                                                )
+                                            },
+                                            onFailure = { error ->
+                                                current.copy(
+                                                    state = ChatActionState.FAILED,
+                                                    resultMessage = error.message ?: "执行失败",
+                                                )
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    val withOutcome = result.getOrNull()?.let { text ->
+                        updated + ChatUiMessage(
+                            id = nextMessageId++,
                             role = ChatRole.ASSISTANT,
-                            text = successText,
-                        ),
+                            text = text,
+                        )
+                    } ?: updated
+                    state.copy(messages = withOutcome)
+                }
+                // 等终态落盘后再释放 registry，避免切换会话时把 EXECUTING 误判为进程死亡。
+                awaitCurrentSave()
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                if (synchronized(sessionLock) { currentSessionId } == actionSessionId) {
+                    markActionFailed(
+                        actionSessionId = actionSessionId,
+                        messageId = messageId,
+                        proposalId = proposalId,
+                        message = throwable.message ?: "执行失败",
+                    )
+                } else {
+                    runCatching {
+                        persistActionOutcomeToSession(
+                            actionSessionId,
+                            proposalId,
+                            Result.failure(throwable),
+                        )
+                    }
+                }
+            } finally {
+                actionRegistry.finish(actionSessionId, proposalId)
+                sessionGate.release(lease)
+            }
+        }
+    }
+
+    internal suspend fun persistActionOutcomeToSession(
+        sessionId: String?,
+        proposalId: String,
+        result: Result<String>,
+    ) {
+        val targetId = sessionId
+        if (targetId == null) {
+            _state.update { it.copy(sessionError = "找不到动作所属会话") }
+            return
+        }
+        val summary = _state.value.sessions.firstOrNull { it.id == targetId }
+            ?: historyStore.listSessions().firstOrNull { it.id == targetId }
+        if (summary == null) {
+            _state.update { it.copy(sessionError = "找不到原会话，动作结果未保存") }
+            return
+        }
+        val messages = historyStore.loadSession(
+            targetId,
+            actionRegistry.activeProposalIds(targetId),
+        ).toMutableList()
+        val index = messages.indexOfFirst { message ->
+            message.actionProposals.any { it.id == proposalId }
+        }
+        if (index < 0) {
+            _state.update { it.copy(sessionError = "找不到原会话中的动作结果") }
+            return
+        }
+        val message = messages[index]
+        messages[index] = message.copy(
+            actionProposals = message.actionProposals.map { proposal ->
+                if (proposal.id != proposalId) {
+                    proposal
+                } else {
+                    result.fold(
+                        onSuccess = { text ->
+                            proposal.copy(state = ChatActionState.SUCCESS, resultMessage = text)
+                        },
+                        onFailure = { error ->
+                            proposal.copy(
+                                state = ChatActionState.FAILED,
+                                resultMessage = error.message ?: "执行失败",
+                            )
+                        },
                     )
                 }
+            },
+        )
+        result.getOrNull()?.let { text ->
+            val nextId = (messages.maxOfOrNull { it.id } ?: 0L) + 1L
+            messages += ChatUiMessage(
+                id = nextId,
+                role = ChatRole.ASSISTANT,
+                text = text,
+            )
+        }
+        // 先等该会话已有的保存完成，再由 store 在写锁内分配最新 revision。
+        synchronized(sessionLock) { pendingSaveJobs[targetId] }?.join()
+        val saved = historyStore.saveSessionWithNextRevision(
+            sessionId = targetId,
+            promptId = summary.promptId,
+            title = summary.title,
+            mode = summary.mode,
+            messages = messages,
+        )
+        val revisionAfterSave = historyStore.maxRevision() + 1L
+        synchronized(sessionLock) {
+            nextRevision = maxOf(nextRevision, revisionAfterSave)
+        }
+        if (saved is ChatSessionSaveResult.Saved ||
+            saved is ChatSessionSaveResult.Unchanged
+        ) {
+            val sessions = historyStore.listSessions()
+            _state.update {
+                it.copy(
+                    sessions = sessions,
+                    sessionError = "动作结果已写入原会话",
+                )
             }
-            persistMessages()
+        } else {
+            _state.update { it.copy(sessionError = "动作结果写回原会话失败") }
         }
     }
 
     fun cancelAction(messageId: Long, proposalId: String) {
+        if (hasActiveSessionOperation()) return
         val proposal = _state.value.messages
             .firstOrNull { it.id == messageId }
             ?.actionProposals
@@ -1005,7 +1796,6 @@ class ChatViewModel(
         updateActionProposal(messageId, proposalId) {
             it.copy(state = ChatActionState.CANCELLED)
         }
-        persistMessages()
     }
 
     fun selectPromptCandidate(
@@ -1013,6 +1803,7 @@ class ChatViewModel(
         proposalId: String,
         candidateId: String,
     ) {
+        if (hasActiveSessionOperation()) return
         val proposal = _state.value.messages
             .firstOrNull { it.id == messageId }
             ?.actionProposals
@@ -1030,11 +1821,11 @@ class ChatViewModel(
                 promptCandidateLabel = option.label,
             )
         }
-        persistMessages()
     }
 
     fun toggleInstallRestart(messageId: Long, proposalId: String) {
         if (mode != ChatMode.AGENT) return
+        if (hasActiveSessionOperation()) return
         val proposal = _state.value.messages
             .firstOrNull { it.id == messageId }
             ?.actionProposals
@@ -1048,11 +1839,14 @@ class ChatViewModel(
         updateActionProposal(messageId, proposalId) {
             it.copy(restartAfterInstall = !it.restartAfterInstall)
         }
-        persistMessages()
     }
 
     fun savePreset(messageId: Long, proposalId: String, name: String) {
         if (mode != ChatMode.AGENT) return
+        if (hasActiveSessionOperation()) {
+            reportBackgroundBusy()
+            return
+        }
         val proposal = _state.value.messages
             .firstOrNull { it.id == messageId }
             ?.actionProposals
@@ -1089,7 +1883,6 @@ class ChatViewModel(
                     },
                 )
             }
-            persistMessages()
         }
     }
 
@@ -1098,7 +1891,7 @@ class ChatViewModel(
         proposalId: String,
         transform: (ChatActionProposal) -> ChatActionProposal,
     ) {
-        _state.update { state ->
+        updateAndPersist { state ->
             state.copy(
                 messages = state.messages.map { message ->
                     if (message.id != messageId) {
@@ -1122,7 +1915,7 @@ class ChatViewModel(
         actionProposals: List<ChatActionProposal> = emptyList(),
         historyImages: List<ChatHistoryImage> = emptyList(),
     ) {
-        _state.update {
+        updateAndPersist {
             it.copy(
                 sending = false,
                 status = null,
@@ -1138,7 +1931,6 @@ class ChatViewModel(
                 ),
             )
         }
-        persistMessages()
     }
 
     /**
@@ -1146,7 +1938,7 @@ class ChatViewModel(
      * controlled error, so the UI never stays in the "sending" state.
      */
     private fun failUserMessage(userMessageId: Long, text: String) {
-        _state.update { current ->
+        updateAndPersist { current ->
             current.copy(
                 sending = false,
                 status = null,
@@ -1165,7 +1957,6 @@ class ChatViewModel(
                 ),
             )
         }
-        persistMessages()
     }
 
     companion object {
@@ -1173,6 +1964,7 @@ class ChatViewModel(
         private const val MAX_CONTEXT_MESSAGES = 40
         private const val MAX_IMAGE_ATTACHMENTS = 4
         private const val MAX_HYDRATED_IMAGES = 8
+        private const val MAX_SESSION_LOAD_ATTEMPTS = 3
 
         private const val CHAT_SYSTEM_PROMPT =
             "你是 Neko I 的 Chat 模式，NekoPaint 的只读 AI 助手。NekoPaint 是连接局域网 ComfyUI 的 Android 客户端。" +
@@ -1263,8 +2055,8 @@ class ChatViewModel(
                     store = container.aiAssistantStore,
                 )
                 ChatViewModel(
-                    store = container.aiAssistantStore,
-                    settingsStore = container.settingsStore,
+                    configFlow = container.aiAssistantStore.config,
+                    defaultAgentModeFlow = container.settingsStore.agentModeByDefault,
                     client = container.aiAssistantClient,
                     imageEncoder = container.chatImageEncoder,
                     imageStore = container.chatImageStore,
@@ -1279,6 +2071,10 @@ class ChatViewModel(
                     historyStore = container.chatHistoryStore,
                     actionHandler = actionHandler,
                     appScope = container.appScope,
+                    operationScope = container.operationScope,
+                    actionRegistry = container.chatActionExecutionRegistry,
+                    sendRegistry = container.chatSendExecutionRegistry,
+                    operationGate = container.chatSessionOperationGate,
                     privacySanitizer = container.aiPrivacySanitizer,
                     contextPromptId = promptId,
                 )

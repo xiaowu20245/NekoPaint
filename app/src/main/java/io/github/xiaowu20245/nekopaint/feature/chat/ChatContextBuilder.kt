@@ -20,9 +20,9 @@ class ChatContextBuilder(
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
     private val privacySanitizer: AiPrivacySanitizer,
-) {
+) : ChatContextSource {
 
-    suspend fun build(intent: ChatIntent, userText: String): String? = when (intent) {
+    override suspend fun build(intent: ChatIntent, userText: String): String? = when (intent) {
         ChatIntent.QUEUE -> queueSnapshot()
         ChatIntent.HISTORY -> historySnapshot()
         ChatIntent.WORKFLOW -> workflowSummary(userText)
@@ -124,7 +124,7 @@ class ChatContextBuilder(
     /**
      * 读取指定任务的只读上下文；任务不在本地历史中时返回 null。
      */
-    fun taskContext(promptId: String): ChatTaskContext? {        val entry = taskManager.history.value.firstOrNull { it.promptId == promptId }
+    override fun taskContext(promptId: String): ChatTaskContext? {        val entry = taskManager.history.value.firstOrNull { it.promptId == promptId }
             ?: return null
         val task = taskManager.tasks.value.firstOrNull { it.promptId == promptId }
         return ChatTaskContext.from(

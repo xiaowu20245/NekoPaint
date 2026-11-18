@@ -861,3 +861,85 @@ git diff --check
 - **独立复审**：**APPROVED**（`docs/FIX_REVIEW.md` 第 66 节）。
 - 第二轮第 3 批 commit 已提交为 `fix: 控制图片内存与分辨率`（`8842943`）。
 - 非阻塞残余：R3B-01 `sourceSize` 优先级缺直接 UI/策略断言；R3B-02 NonCancellable 取消窗口缺专门测试；R3B-03 文档“四角黑色”已修正为角点断言。R3B-01/02 留第 4 批跟踪。
+
+### 42. 第二轮第 4 批：会话与参数保存（工作区，待复审）
+
+- **CR-015 会话 revision/tombstone**
+  - `StoredSession` 增加 `revision/deleted/deleteGeneration`；`ChatSessionSummary` 暴露 revision；`listSessions` 过滤 deleted，`loadSession` 忽略 tombstone。
+  - `ChatHistoryCodec` 新增 `saveSessionWithResult/deleteSessionWithResult/maxRevision`：新 revision 写入、相同 revision 内容一致幂等/不一致拒绝、旧 revision 拒绝、tombstone generation 拒绝在途保存。
+  - `ChatHistoryStore.saveSession/deleteSession` 返回 `ChatSessionSaveResult`，并保留旧 `saveSession` 包装给测试/旧调用；`renameSession/setPinned` 递增 revision。
+  - `ChatViewModel` 初始化 `nextRevision=maxRevision()+1`；`persistMessages` 捕获 sessionId+revision+snapshot，异步保存后只更新 sessions，不把旧 ID 写回 current；Rejected/Failed 设置 `sessionError` 并 Toast。
+  - `newSession/switchSession` 等待当前保存，Failed/Rejected 保持当前；`deleteSession` tombstone + 递增 generation；D2-06：执行中的动作禁止 new/switch/delete。
+  - 新增 `ChatActionLocator`（sessionId+proposalId，旧数据 sessionId 为空按当前会话兼容），`confirmAction` 使用定位器。
+- **CR-020 参数/元数据 patch**
+  - `WorkflowTemplateStore` 新增 `patchPrimaryPrompt/patchPreset/deletePreset/patchActivePreset/patchPromptTagGroups/patchExecutionValues/patchApplyPreset/patchSavePreset`，全部在现有 Mutex/原子写内，只读写对应字段。
+  - `patchExecutionValues` 只取快照的 value/selected，不写 label/type/readOnly；提交成功后的执行值落盘改用 `patchExecutionValues`，不再整体 `updateTemplate`。
+  - ViewModel：selectPreset 原子写值+active（dirty=false/saved=true）；saveNewPreset 原子写 preset+values；rename/delete preset 与标签组只 patch 元数据，不清 dirty；`setPrimaryPrompt` 只 patch primary。
+  - 新增 `WorkflowDirtyPolicy` 纯策略并用于 selectPreset/saveNewPreset。
+- **R4 修复（第 67 节 CONDITIONAL 后）**：
+  - R4-01：tombstone 后任何保存都拒绝（不再允许高 revision 复活）；空消息保存先做 revision/删除校验并按 tombstone 写入，旧 revision 不能删除较新会话。
+  - R4-02：`persistMessages` 捕获 `modeSnapshot`，异步 job 不再读取可变 mode。
+  - R4-03：sessionId/revision/pending job 注册使用 `sessionLock` 串行化；save 结果按 revision 取最新，旧 job 不会覆盖新结果。
+  - R4-04：动作执行前捕获 sessionId；结果返回时若当前会话已变化，加载原会话、按 proposalId 更新并保存（revision），提示“动作结果已写入原会话”。
+  - R4-05：`WorkflowTemplateStore.patch` 复用 `WorkflowCandidateSafety.validate`、primary/preset/active sanitize 和 `repairRequired` 保护，patch 不再绕过候选安全边界。
+  - R4-06：新增 `ChatHistoryStoreInstrumentedTest` 在 `NekoPaint_API_28` 真实 DataStore 上验证 revision 递增、tombstone、拒绝复活；`connectedDebugAndroidTest` 8/8 通过。
+- **R4B 修复（第 68 节 CONDITIONAL 后）**：
+  - R4B-01：`persistMessages` 在 `sessionLock` 内同时读取 snapshot/promptId/mode/title、分配 sessionId/revision，并用 `CoroutineStart.LAZY` 创建 job、锁内登记后再 start；`awaitCurrentSave` 锁内取 currentSessionId+job，避免快照/登记竞态。
+  - R4B-03：跨会话动作结果写回原会话并保存 revision；目标会话/动作缺失时通过 `sessionError` 提示，不再静默返回。
+  - R4B-04：`WorkflowTemplateStore.patch` 已复用候选 validate/sanitize/repair 保护；补 metadata patch 测试覆盖 executionValues 只写 value/selected、缺失模板失败。
+  - R4B-02：DataStore instrumentation 覆盖 revision/tombstone；ChatViewModel 并发保存的 UI 级测试仍未直接构造（依赖较重），记录为残余验收项。
+- **R4C 修复（第 69 节 CONDITIONAL 后）**：
+  - R4C-01：`newSession`/`switchSession`/`deleteSession` 的 messages/currentSessionId/taskPromptId/mode/nextMessageId 更新全部移入 `sessionLock`；与 `persistMessages` 的快照读取互斥，避免旧 snapshot 配到新 session。
+  - R4C-02：ChatViewModel 并发保存/D2-06 UI 测试仍缺（依赖较重），继续记录为残余验收项；DataStore instrumentation 保持 8/8。
+- **R4D 修复（第 70 节 CONDITIONAL 后）**：
+  - R4D-01：新增 `updateAndPersist`，消息 mutation 与 persist 快照在同一 `sessionLock` 内；发送用户消息、工具消息、视觉消息、finalizeAssistant、appendAssistant、failUserMessage 均已迁移；`switchMode` 的 mode 更新与 persist 也在锁内。
+  - R4D-02：ChatViewModel 并发 UI 测试仍缺，保留为残余验收项；DataStore instrumentation 与全量测试保持通过。
+- **R4E 自动化验证**：新增 `ChatActionGate`，执行中统一禁止 new/switch/delete 与 switchMode；`ChatActionGateTest` 3 项覆盖 EXECUTING 阻止、PENDING/SUCCESS/FAILED/CANCELLED 放行、sending 阻止。
+- 测试：`ChatHistoryCodecRevisionTest` 4、`ChatActionLocatorTest` 2、`ChatActionGateTest` 3、`WorkflowMetadataPatchTest` 6、`WorkflowDirtyPolicyTest` 5；Android instrumentation 8。
+- 验证：115 suites / 626 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3（新增一条依赖版本提示，非代码问题）；assembleDebug 成功；`git diff --check` 通过；`connectedDebugAndroidTest` 8/8 通过。
+- **R4F 修复（第 72 节 CONDITIONAL 后）**：
+  - R4F-01：`newSession`/`switchSession` 在 `awaitCurrentSave` 返回后、`deleteSession` 在加载会话后重新检查 `hasExecutingAction`；`send`/`confirmAction` 在执行中直接拒绝，避免 await 窗口启动新操作。
+  - R4F-03：Chat 页新增 `BackHandler`，动作执行中返回被拦截并 Toast“动作执行中，请等待完成”。
+  - R4F-04：`updateActionProposal` 已接 `updateAndPersist`；调用点仍会多一次 persist，属低优先级残余。
+- 说明：D2-06 的代码门禁已自动化验证；Chat 顶栏在动作执行中已禁用模式切换、新建会话、会话列表、重命名/删除当前会话，返回也已拦截。
+- **R4G 修复（第 73 节 CONDITIONAL 后）**：
+  - R4G-01：`send`/`runTool`/`runImageTool` 先获取 SEND lease；`confirmAction` 使用 ACTION lease；`newSession`/`switchSession`/`switchMode` 使用 SWITCH lease；`deleteSession` 使用 DELETE lease。lease 在 await/load/store 删除之前获取，apply 前用 token 校验，`finally` 释放；`send`/`confirmAction` 在切换/删除等待期间直接拒绝。
+  - R4G-02：新增 `ChatViewModelSessionTest` 5 项，直接构造生产 ChatViewModel，用可挂起 fake store/client/action 覆盖：switch await 中 send 拒绝、保存中 newSession 不恢复旧快照、发送期间切换/删除拒绝且回复留在原会话、动作执行中 new/switch/delete/switchMode/send 全部拒绝、删除 load 中 send/confirm 拒绝。新增 `BackDispatchTest` 2 项覆盖顶栏返回消费/放行。
+  - R4G-03：`ChatScreen` 新增 `onBackHandlerChange`，与 `BackHandler` 共用“动作执行中禁止离开”门禁；`NekoPaintNavHost` 传入，`NekoPaintApp` 顶栏返回统一走 `dispatchScreenBack`。
+  - R4G-04：移除 `confirmAction`/`cancelAction`/`selectPromptCandidate`/`toggleInstallRestart`/`savePreset` 的重复 persist；动作终态与结果消息一次 `updateAndPersist`，并在释放 registry 前 `awaitCurrentSave()`；同会话保存串行化。
+  - R4G-05：`ChatSessionSheet` 新增 `actionExecuting`，新建/切换/菜单在动作执行中禁用。
+  - R4G-06：tombstone 单独占用 30 个名额，不再挤掉正常会话；跨会话动作 target 缺失写 `sessionError`；rename/pin 失败提示；补 repairRequired 保留与非法预设条目清理测试。
+  - 测试 seam：新增 `ChatSessionStore`/`ChatActionExecutor`/`ChatContextSource`/`ChatToolRuntime` 接口与 `ChatCompletionClient`/`ChatPrivacyGuard`/`ChatImageEncoderApi`/`ChatImageStorage` 契约；`ChatHistoryStore.loadSession` 支持 `activeProposalIds`，后台动作仍活跃时保留 EXECUTING，进程死亡才降级 FAILED。
+  - 验证：119 suites / 644 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 8/8。
+- **R4H 修复（第 74 节 CONDITIONAL 后）**：
+  - R4H-01：`ChatViewModel.init` 加载会话时传入 `actionRegistry.activeProposalIds`；`ChatHistoryCodec.loadSession` 对活跃 proposal 强制恢复 EXECUTING（含存储态仍为 PENDING 的情况）；`send`/`confirmAction`/`switchMode`/`acquireSessionMutation` 统一复核当前/目标会话的 registry 活跃动作。
+  - R4H-02：新增 `ChatSendExecutionRegistry`（AppContainer 单例）。send/runTool/runImageTool 登记 session；新 ViewModel 在 send 仍活跃时拒绝切换/删除该会话，并提示“后台操作尚未完成”；发送终态保存完成后才撤销登记。
+  - R4H-03：`ChatSessionStore.saveSessionWithNextRevision` 在 DataStore 写锁内分配 revision，后台动作结果写回不再使用旧 ViewModel 计数器；`ChatActionExecutionRegistry` 增加 `activeState` 与 `completions`，新 ViewModel 收到完成事件后刷新原会话。
+  - R4H-04：动作执行异常/取消路径会写 FAILED 并释放 registry/lease；不再留下永久 EXECUTING。
+  - R4H-05：新增跨实例发送/动作测试、动作异常/取消、保存/删除/加载失败测试；新增 `ChatBackHandlerInstrumentedTest` 验证动作执行中系统返回被消费、顶栏 handler 返回 true；`ChatHistoryStoreInstrumentedTest` 增加 store 分配 revision 用例。
+  - 验证：120 suites / 656 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 10/10。
+- **R4I 修复（第 75 节 CONDITIONAL 后）**：
+  - R4I-01：`ChatActionExecutionRegistry` 增加会话级 `version`；`switchSession` 在 load 前后校验 version，动作在 load 期间完成时丢弃旧快照并重试读取终态；新增 `completionDuringSwitchLoadIsNotLost`。
+  - R4I-02：`ChatScreen` 增加 `viewModelOverride` 测试 seam；新增 `ChatScreenBackInstrumentedTest`，用真实 ChatScreen + EXECUTING 状态验证系统返回被消费、顶栏 handler 返回 true；`actionOutcomeWaitsForPendingSaveAndUsesNextRevision` 覆盖 pending save 与 revision 分配。
+  - R4I-03：`persistActionOutcomeToSession` 保存前 join 目标会话已有 `pendingSaveJobs`，再由 `saveSessionWithNextRevision` 在 store 写锁内分配 revision；方法改为 internal 供并发测试直接验证。
+  - R4I-04：`ChatSendExecutionRegistry` 增加 `completions`；ChatViewModel 在新实例停留在原会话时刷新发送终态。
+  - R4I-05：`savePreset` 增加后台操作门禁；rename/pin/clearTaskContext 已在前一轮处理；repairRequired value patch 语义继续作为低优先级残余记录。
+  - 验证：120 suites / 659 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R4I-06/R4I-07 修复（第 76 节 CONDITIONAL 后）**：
+  - R4I-06：`ChatSessionOperationGate` 改为 AppContainer 单例并通过 `ChatViewModel` 构造注入；所有 ChatViewModel 共享 SEND/ACTION/SWITCH/DELETE 许可，跨实例“检查通过后另一实例 begin”被 gate 原子拦截；lease 获取失败时提示后台忙。
+  - R4I-07：ChatViewModel 订阅 `ChatActionExecutionRegistry.activeState`，其他实例 begin 时把本地同 session/proposal 的 PENDING 提升为 EXECUTING（只更新 UI，不写盘，避免跨实例 revision 冲突）；completion 后刷新终态。
+  - R4I-04：`ChatSendExecutionRegistry.completions` 增加跨实例发送完成刷新测试。
+  - 新增测试：`sharedGateBlocksNewInstanceWhileActionRunsThenLoadsResult`、`beginAfterApplyIsObservedByOtherInstance`、`sendCompletionRefreshesOtherInstanceOnSameSession`；`ChatViewModelSessionTest` 16 项。
+  - 验证：120 suites / 661 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R4I-08/R4I-09 修复（第 77 节 CONDITIONAL 后）**：
+  - R4I-08：`ChatActionExecutionRegistry.completions` 不再要求本地已是 EXECUTING；当前会话匹配且不在发送时一律按 store 终态刷新，覆盖快速 begin/finish 被 StateFlow 合并的路径；新增 `fastActionCompletionRefreshesPendingState`。
+  - R4I-09：`ChatSessionOperationGate` 改为按 session 的 SEND/ACTION lease + 全局 mutation lease；SWITCH/DELETE 只检查本次涉及的会话（当前+目标），不同会话的发送/切换不再互相阻塞。新增 `differentSessionsCanSendConcurrently`、`unrelatedSessionSwitchIsAllowedWhileActionRuns`、gate 的 per-session 测试。
+  - 验证：120 suites / 666 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R4I-10/R4I-11 修复（第 78 节 CONDITIONAL 后）**：
+  - R4I-10：`refreshCurrentSessionFromStore` 先 `awaitCurrentSave()`，再按 proposalId 合并远程终态/结果，保留本地候选选择、安装重启开关、预设字段；成功结果消息去重追加。动作/发送期间 `cancelAction`/`selectPromptCandidate`/`toggleInstallRestart`/`savePreset` 统一拒绝本地 proposal 编辑。新增 `refreshMergesActionStateWithoutLosingLocalProposalEdit`。
+  - R4I-11：`ChatSessionOperationGate` 的 mutation 也按涉及会话分区；不同会话的 switch/delete 可并行，mutation 只阻塞涉及会话的 SEND/ACTION。新增 `mutationOnOneSessionDoesNotBlockSendOnAnother`、`disjointMutationsCanRunConcurrently`，`ChatSessionOperationGateTest` 8 项。
+  - 验证：120 suites / 669 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R4I-12/R4I-13 修复（第 79 节 CONDITIONAL 后）**：
+  - R4I-12：refresh 始终使用合并而不是整份替换；远程 PENDING 不覆盖本地 CANCELLED/SUCCESS/FAILED，本地 EXECUTING 仅在 registry 仍活跃时保留，否则降级 FAILED；发送完成也走同一合并，并追加 store 中缺失的消息（按 ID + role/text 去重）。新增 `refreshKeepsLocalCancelledAndActiveExecutingStates`。
+  - R4I-13：新增生产 ChatViewModel 集成测试：`mutationOnOneSessionDoesNotBlockSendOnAnotherAtViewModelLevel`、`sameSessionMutationBlocksSendAtViewModelLevel`、`disjointMutationsCanRunConcurrentlyAtViewModelLevel`；`ChatViewModelSessionTest` 24 项。
+  - 验证：120 suites / 673 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。

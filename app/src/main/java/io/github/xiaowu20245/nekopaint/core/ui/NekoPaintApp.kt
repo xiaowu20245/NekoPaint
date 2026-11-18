@@ -37,6 +37,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import io.github.xiaowu20245.nekopaint.core.ui.navigation.NekoPaintDestination
 import io.github.xiaowu20245.nekopaint.core.ui.navigation.NekoPaintNavHost
+import io.github.xiaowu20245.nekopaint.core.ui.navigation.dispatchScreenBack
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.R
 
@@ -85,8 +86,7 @@ fun NekoPaintApp(reduceMotion: Boolean = false) {
                     if (!isMainDestination) {
                         IconButton(
                             onClick = {
-                                val handled = screenBackHandler?.invoke() == true
-                                if (!handled) {
+                                dispatchScreenBack(screenBackHandler) {
                                     navController.popBackStack()
                                 }
                             },
