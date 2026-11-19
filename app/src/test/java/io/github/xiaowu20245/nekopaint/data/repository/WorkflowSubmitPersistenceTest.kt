@@ -78,7 +78,7 @@ class WorkflowSubmitPersistenceTest {
     fun prewriteFailureDoesNotPost() = runTest {
         File(filesDir, "servers").writeText("blocked")
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Error)
         assertEquals(
@@ -86,6 +86,27 @@ class WorkflowSubmitPersistenceTest {
             (result as WorkflowSubmitResult.Error).message.key,
         )
         assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun batchContextPersistsIndexAndCount() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"prompt_id":"p1","number":1}"""),
+        )
+        val template = template()
+
+        val result = repository.submitSelected(
+            template = template,
+            selected = template.selectedCandidates,
+            context = SubmissionRunContext(batchIndex = 1, batchCount = 3),
+        )
+
+        assertTrue(result is WorkflowSubmitResult.Success)
+        val stored = taskRecords().single()
+        assertEquals(1, stored.batchIndex)
+        assertEquals(3, stored.batchCount)
     }
 
     @Test
@@ -102,7 +123,7 @@ class WorkflowSubmitPersistenceTest {
                 .setBody("""{"prompt_id":"$promptId","number":1}""")
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Success)
         val success = result as WorkflowSubmitResult.Success
@@ -122,7 +143,7 @@ class WorkflowSubmitPersistenceTest {
                 MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Unknown)
         val unknown = result as WorkflowSubmitResult.Unknown
@@ -152,7 +173,7 @@ class WorkflowSubmitPersistenceTest {
             }
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Success)
         assertEquals(2, ids.size)
@@ -174,7 +195,7 @@ class WorkflowSubmitPersistenceTest {
             }
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Unknown)
         assertEquals(2, calls)
@@ -193,7 +214,7 @@ class WorkflowSubmitPersistenceTest {
                 ),
         )
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Validation)
         val validation = result as WorkflowSubmitResult.Validation
@@ -219,7 +240,7 @@ class WorkflowSubmitPersistenceTest {
                 .setBody("""{"error":{}}"""),
         )
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Validation)
         val stored = taskRecords().single()
@@ -235,7 +256,7 @@ class WorkflowSubmitPersistenceTest {
                 .setBody("""{"error":{"message":"   "}}"""),
         )
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Validation)
         val stored = taskRecords().single()
@@ -250,7 +271,7 @@ class WorkflowSubmitPersistenceTest {
                 .setBody("""{"prompt_id":"server-new","number":2}""")
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Success)
         val success = result as WorkflowSubmitResult.Success
@@ -266,7 +287,7 @@ class WorkflowSubmitPersistenceTest {
     fun emptySuccessBodyBecomesUnknown() = runTest {
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Unknown)
         val unknown = result as WorkflowSubmitResult.Unknown
@@ -440,7 +461,7 @@ class WorkflowSubmitPersistenceTest {
             }
         }
 
-        val result = repository.submit(template())
+        val result = submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Success)
         assertNotNull((result as WorkflowSubmitResult.Success).localRecordWarning)
@@ -556,4 +577,7 @@ class WorkflowSubmitPersistenceTest {
         const val RAW_JSON =
             """{"1":{"class_type":"TestSampler","inputs":{"seed":1,"steps":20}}}"""
     }
+
+    private suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
+        repository.submitSelected(template, template.selectedCandidates)
 }

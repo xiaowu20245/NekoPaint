@@ -9,7 +9,6 @@ import io.github.xiaowu20245.nekopaint.data.mapper.toDomain
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
 
 class InvalidComfyResponseException : IllegalStateException("Response is not ComfyUI system_stats")
 
@@ -62,8 +61,4 @@ class ServerRepository(
         }
     }
 
-    /**
-     * 仅用于测试/诊断：判断 HTTP 状态是否属于可重试的服务端错误。
-     */
-    fun isServerError(code: Int): Boolean = code >= HttpURLConnection.HTTP_INTERNAL_ERROR
 }

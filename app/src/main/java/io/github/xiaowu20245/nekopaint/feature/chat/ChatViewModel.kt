@@ -2056,6 +2056,7 @@ class ChatViewModel(
                         taskManager = container.taskManager,
                         workflowRepository = container.workflowRepository,
                         queueRepository = container.queueRepository,
+                        submitter = container.workflowSubmitter,
                     ),
                     nodeInstaller = container.nodeInstallRepository,
                     messageFormatter = io.github.xiaowu20245.nekopaint.feature.common

@@ -10,14 +10,14 @@ class ServerFormTest {
     fun toConfigOrNull_returnsNullForMissingHost() {
         val form = ServerForm(host = "", port = "8188")
 
-        assertNull(form.toConfigOrNull())
+        assertNull(ServerFormPolicy.validate(form).config)
     }
 
     @Test
     fun toConfigOrNull_usesDefaultNameWhenBlank() {
         val form = ServerForm(name = "  ", host = "192.168.1.10", port = "8188")
 
-        assertEquals("我的 ComfyUI", form.toConfigOrNull()?.name)
+        assertEquals("我的 ComfyUI", ServerFormPolicy.validate(form).config?.name)
     }
 
     @Test
@@ -31,20 +31,20 @@ class ServerFormTest {
 
         val form = ServerForm.fromConfig(config)
 
-        assertEquals(config, form.toConfigOrNull())
+        assertEquals(config, ServerFormPolicy.validate(form).config)
     }
 
     @Test
     fun toConfigOrNull_rejectsInvalidHostCharacters() {
         val form = ServerForm(host = "foo#bar", port = "8188")
 
-        assertNull(form.toConfigOrNull())
+        assertNull(ServerFormPolicy.validate(form).config)
     }
 
     @Test
     fun toConfigOrNull_normalizesBareIpv6() {
         val form = ServerForm(host = "::1", port = "8188")
 
-        assertEquals("[::1]", form.toConfigOrNull()?.host)
+        assertEquals("[::1]", ServerFormPolicy.validate(form).config?.host)
     }
 }

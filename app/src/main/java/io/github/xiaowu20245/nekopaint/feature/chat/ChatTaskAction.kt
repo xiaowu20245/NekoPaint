@@ -10,6 +10,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
+import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
@@ -18,9 +19,11 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.repository.NodeInstaller
 import io.github.xiaowu20245.nekopaint.data.repository.QueueRepository
+import io.github.xiaowu20245.nekopaint.data.repository.SubmissionRunContext
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
 import java.util.UUID
@@ -858,7 +861,14 @@ class ChatTaskActionHandler(
 
     private suspend fun submit(proposal: ChatActionProposal): Result<String> {
         val template = prepareSubmission(proposal).getOrElse { return Result.failure(it) }
-        return when (val result = dataSource.submit(template)) {
+        val overrides = template.selectedCandidates
+        return when (
+            val result = dataSource.submit(
+                template = template,
+                overrides = overrides,
+                context = SubmissionRunContext(),
+            )
+        ) {
             is WorkflowSubmitResult.Success -> {
                 dataSource.refresh()
                 Result.success(
@@ -1051,6 +1061,12 @@ interface ChatTaskActionDataSource {
 
     suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult
 
+    suspend fun submit(
+        template: WorkflowTemplate,
+        overrides: List<ParameterCandidate>,
+        context: SubmissionRunContext,
+    ): WorkflowSubmitResult = submit(template)
+
     suspend fun updateTemplate(template: WorkflowTemplate): Result<Unit>
 
     fun refresh()
@@ -1060,6 +1076,7 @@ class DefaultChatTaskActionDataSource(
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
     private val queueRepository: QueueRepository,
+    private val submitter: WorkflowSubmitter,
 ) : ChatTaskActionDataSource {
 
     override val localClientId: String?
@@ -1100,7 +1117,18 @@ class DefaultChatTaskActionDataSource(
         workflowRepository.getTemplate(templateId)
 
     override suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
-        workflowRepository.submit(template)
+        submitter.submit(template)
+
+    override suspend fun submit(
+        template: WorkflowTemplate,
+        overrides: List<ParameterCandidate>,
+        context: SubmissionRunContext,
+    ): WorkflowSubmitResult = submitter.submit(
+        template = template,
+        overrides = overrides,
+        seedStrategy = SeedStrategy.FIXED,
+        context = context,
+    )
 
     override suspend fun updateTemplate(template: WorkflowTemplate): Result<Unit> =
         runCatching { workflowRepository.updateTemplate(template) }

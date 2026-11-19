@@ -5,8 +5,9 @@ import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
-import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
+import io.github.xiaowu20245.nekopaint.data.repository.SubmissionRunContext
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -59,7 +60,7 @@ data class SubmissionOperationState(
  */
 class OperationCenter(
     private val scope: CoroutineScope,
-    private val submit: suspend (WorkflowTemplate) -> WorkflowSubmitResult,
+    private val submitter: WorkflowSubmitter,
     private val persistExecutionValues: suspend (WorkflowTemplate) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
 ) {
@@ -153,18 +154,22 @@ class OperationCenter(
         try {
             for (index in 0 until total) {
                 runSucceeded = false
-                val runTemplate = WorkflowPresetMatcher.applySeedForRun(
+                val prepared = submitter.prepare(
                     template = template,
-                    strategy = seedStrategy,
-                    runIndex = index,
+                    seedStrategy = seedStrategy,
+                    context = SubmissionRunContext(
+                        runIndex = index,
+                        batchIndex = index,
+                        batchCount = total,
+                    ),
                 )
-                when (val result = submit(runTemplate)) {
+                when (val result = submitter.submit(prepared)) {
                     is WorkflowSubmitResult.Success -> {
                         processed += 1
                         success += 1
                         runSucceeded = true
                         lastSuccess = result
-                        lastTemplate = runTemplate
+                        lastTemplate = prepared.template
                         if (result.localRecordWarning != null) {
                             localRecordWarning = result.localRecordWarning
                         }

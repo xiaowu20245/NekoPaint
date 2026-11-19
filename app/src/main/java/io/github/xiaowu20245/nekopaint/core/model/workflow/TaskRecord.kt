@@ -10,6 +10,10 @@ data class TaskRecord(
     val templateName: String,
     val clientId: String,
     val queueNumber: Int? = null,
+    /** 批量提交中的序号；单次提交为 null。 */
+    val batchIndex: Int? = null,
+    /** 批量提交总数；单次提交为 null。 */
+    val batchCount: Int? = null,
     val submittedAt: Long,
     val status: String = "queued",
     val values: Map<String, String> = emptyMap(),

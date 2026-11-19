@@ -1070,3 +1070,27 @@ git diff --check
   - 验证：**137 suites / 801 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 99 节 R11-01～R11-03 均已修复；第 100 节复审 **APPROVED**。
 - **提交**：3B-2 已提交为 `refactor: 迁移工作流与 Chat 用户文案`（`a3728c2`）。
+
+### 48. 第三轮 3C：提交职责与死代码（CR-036/050）
+
+- **WorkflowSubmitter**
+  - 新增 `WorkflowSubmitter`、`PreparedSubmission`、`SubmissionRunContext(runIndex, batchIndex, batchCount)`；单次 context 为 `(0, 0, 1)`。
+  - `prepare` 严格先 seed、后合并 overrides：`applySeedForRun` → `seeded.selectedCandidates` → 按 candidateId 合并 overrides → 去重；seed 候选不会被 detail/quickRun/Chat 任一 derived selection 覆盖。
+  - `OperationCenter` 注入 submitter，不再自己调用 `WorkflowPresetMatcher`；批量循环、1..16 限制、取消、进度、`lastSuccess/lastValidation`、`persistExecutionValues` 仍归 OperationCenter。
+  - `WorkflowDetailViewModel.submit`、`WorkflowsViewModel.quickRun` 仍通过 OperationCenter；Chat 通过 `DefaultChatTaskActionDataSource` 直接调用 submitter（单次 context），保留确认卡片与失败分类。
+  - `WorkflowRepository.submitSelected` 增加 `context`，创建 `TaskRecord` 时写入 `batchIndex/batchCount`；单次为 null，批量 `batchIndex in 0 until batchCount`。`TaskRecord` 新增可选字段，旧记录兼容。
+  - 删除冗余 `WorkflowRepository.submit(template)`，生产/测试统一走 submitter 或 `submitSelected`。
+- **ServerFormPolicy**
+  - 新增 `ServerFormPolicy.validate`，合并原 `ServerForm.toConfigOrNull` 与 `ServerViewModel.validateForm`；生产与测试共用同一 host/port/endpoint 校验。
+  - 删除 `ServerForm.toConfigOrNull`；`ServerViewModel.validateForm` 只负责更新 UI 错误并返回 policy 结果。
+- **死代码与依赖**
+  - 删除 `TaskManager.historyFetched`（只写不读）与 `ServerRepository.isServerError`（无调用）。
+  - 删除未使用的 `ACCESS_NETWORK_STATE`（全项目无 ConnectivityManager/网络状态读取）。
+  - 删除未使用的 `turbine` 版本/依赖（全项目无引用）。
+  - 保留 `GenerateScreen`/`PlaceholderScreen`（导航仍注册）、`androidTest` 依赖、`sourceHash`、`TaskRecord.currentNode/progressValue/progressMax`、`QueueItem.number`；未修改 `TaskStatusSyncPolicy`/`QueueMapper` 行为。
+- **测试**
+  - 新增 `WorkflowSubmitterTest` 7 项：detail seed 选中、quickRun 两轮 seed 不同、Chat overrides 合并且保留 seed、批量 context、validation/error/unknown 原样返回。
+  - 新增 `ServerFormPolicyTest` 4 项：空 host、非法 host、非法 port、合法表单规范化/默认名。
+  - `OperationCenterTest` 适配 submitter 注入并新增 1 项：批量两轮 seed/context 透传；`WorkflowSubmitPersistenceTest` 改用 `submitSelected` 并新增 1 项批量 `batchIndex/batchCount` 落盘；`ServerFormTest`、`WorkflowsViewModelTest`、`WorkflowSubmitResultConsumerTest` 适配 submitter。
+  - 验证：**139 suites / 814 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **复审**：第 101 节复审 **APPROVED**。

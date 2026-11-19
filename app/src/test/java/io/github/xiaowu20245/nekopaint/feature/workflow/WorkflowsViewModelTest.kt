@@ -60,7 +60,11 @@ class WorkflowsViewModelTest {
             val gate = CompletableDeferred<Unit>()
             val operationCenter = OperationCenter(
                 scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
-                submit = {
+                submitter = io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter {
+                        _,
+                        _,
+                        _,
+                    ->
                     gate.await()
                     WorkflowSubmitResult.Success("p1", 1)
                 },

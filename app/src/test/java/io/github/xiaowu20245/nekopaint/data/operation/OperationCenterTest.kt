@@ -2,9 +2,14 @@ package io.github.xiaowu20245.nekopaint.data.operation
 
 import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
+import io.github.xiaowu20245.nekopaint.data.repository.SubmissionRunContext
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -35,7 +40,7 @@ class OperationCenterTest {
         var calls = 0
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 calls += 1
                 if (calls == 3) {
                     WorkflowSubmitResult.Validation(
@@ -65,7 +70,7 @@ class OperationCenterTest {
     fun zeroSuccessIsFailed() = runTest {
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 WorkflowSubmitResult.Error(
                     NekoMessage(NekoMessageKey.WORKFLOW_FAILED),
                 )
@@ -86,7 +91,7 @@ class OperationCenterTest {
     fun unknownResultIsCountedAndReportedAsUnknown() = runTest {
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 WorkflowSubmitResult.Unknown(
                     "p1",
                     NekoMessage(NekoMessageKey.WORKFLOW_UNKNOWN_RESULT),
@@ -109,7 +114,7 @@ class OperationCenterTest {
         var calls = 0
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 calls += 1
                 if (calls == 1) {
                     WorkflowSubmitResult.Success("p1", 1)
@@ -138,7 +143,7 @@ class OperationCenterTest {
         var calls = 0
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 calls += 1
                 WorkflowSubmitResult.Success("p$calls", calls)
             },
@@ -160,7 +165,7 @@ class OperationCenterTest {
         var calls = 0
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 calls += 1
                 if (calls == 2) error("boom")
                 WorkflowSubmitResult.Success("p$calls", calls)
@@ -178,7 +183,7 @@ class OperationCenterTest {
         var validationCalls = 0
         val validationCenter = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 validationCalls += 1
                 WorkflowSubmitResult.Validation(
                     NekoMessage(NekoMessageKey.WORKFLOW_SERVER_REJECTED, listOf("400")),
@@ -202,7 +207,7 @@ class OperationCenterTest {
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 gate.await()
                 WorkflowSubmitResult.Success("p", 1)
             },
@@ -222,7 +227,7 @@ class OperationCenterTest {
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 // 模拟真实网络/落盘在取消后仍完成，最终写入必须尊重 CANCELLED。
                 withContext(NonCancellable) { gate.await() }
                 WorkflowSubmitResult.Success("p", 1)
@@ -243,7 +248,7 @@ class OperationCenterTest {
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = {
+            submitter = testSubmitter {
                 gate.await()
                 WorkflowSubmitResult.Success("p", 1)
             },
@@ -258,4 +263,41 @@ class OperationCenterTest {
         gate.complete(Unit)
         advanceUntilIdle()
     }
+
+    @Test
+    fun batchPassesSeedAndContextToSingleSubmitter() = runTest {
+        val seeds = mutableListOf<String>()
+        val contexts = mutableListOf<SubmissionRunContext>()
+        val seededTemplate = template.copy(
+            candidates = listOf(
+                ParameterCandidate(
+                    id = "1:seed",
+                    nodeId = "1",
+                    inputName = "seed",
+                    label = "种子",
+                    type = ParameterType.INT,
+                    group = ParameterGroup.SAMPLING,
+                    value = "10",
+                ),
+            ),
+        )
+        val center = OperationCenter(
+            scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
+            submitter = WorkflowSubmitter { _, selected, context ->
+                contexts += context
+                seeds += selected.first { it.id == "1:seed" }.value
+                WorkflowSubmitResult.Success("p${context.runIndex}", 1)
+            },
+        )
+
+        center.start(seededTemplate, 2, SeedStrategy.INCREMENT).getOrThrow()
+        advanceUntilIdle()
+
+        assertEquals(listOf("10", "11"), seeds)
+        assertEquals(listOf(0, 1), contexts.map { it.batchIndex })
+        assertEquals(listOf(2, 2), contexts.map { it.batchCount })
+    }
+
+    private fun testSubmitter(block: suspend () -> WorkflowSubmitResult) =
+        WorkflowSubmitter { _, _, _ -> block() }
 }

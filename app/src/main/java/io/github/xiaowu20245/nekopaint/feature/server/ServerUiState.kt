@@ -3,7 +3,6 @@ package io.github.xiaowu20245.nekopaint.feature.server
 import io.github.xiaowu20245.nekopaint.core.model.ConnectionSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
-import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 
 data class ServerForm(
     val name: String = ServerConfig.DEFAULT_NAME,
@@ -14,24 +13,6 @@ data class ServerForm(
     val hostError: ServerError? = null,
     val portError: ServerError? = null,
 ) {
-    fun toConfigOrNull(): ServerConfig? {
-        val trimmedHost = host.trim()
-        val parsedPort = port.trim().toIntOrNull()
-        if (trimmedHost.isEmpty() || parsedPort == null || parsedPort !in 1..65535) {
-            return null
-        }
-        val endpoint = ServerEndpointValidator.parse(scheme, trimmedHost, parsedPort)
-            .getOrNull()
-            ?: return null
-        return ServerConfig(
-            name = name.trim().ifEmpty { ServerConfig.DEFAULT_NAME },
-            scheme = endpoint.scheme,
-            host = endpoint.displayHost,
-            port = endpoint.port,
-            avatarUri = avatarUri,
-        )
-    }
-
     companion object {
         fun fromConfig(config: ServerConfig): ServerForm = ServerForm(
             name = config.name,

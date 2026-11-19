@@ -87,9 +87,6 @@ class TaskManager(
 
     private var refreshJob: Job? = null
 
-    @Volatile
-    private var historyFetched = false
-
     private var historyLimit = HISTORY_PAGE_SIZE
 
     @Volatile
@@ -273,7 +270,6 @@ class TaskManager(
         _hasMoreHistory.value = false
         _loadingMoreHistory.value = false
         historyLimit = HISTORY_PAGE_SIZE
-        historyFetched = false
     }
 
     /**
@@ -406,7 +402,6 @@ class TaskManager(
                             .map { entry -> entry.copy(serverId = serverId) }
                         val previous = _history.value
                         val merged = mergeHistory(previous, entries)
-                        historyFetched = true
                         _history.value = merged
                         _hasMoreHistory.value = hasMore
                         _historyError.value = null

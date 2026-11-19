@@ -426,9 +426,6 @@ class WorkflowRepository private constructor(
             }
         }
 
-    suspend fun submit(template: WorkflowTemplate): WorkflowSubmitResult =
-        submitSelected(template, template.selectedCandidates)
-
     /**
      * 使用历史记录里的参数快照重新提交。
      *
@@ -531,6 +528,11 @@ class WorkflowRepository private constructor(
         submitSelected(
             template = template,
             selected = selected,
+            context = SubmissionRunContext(
+                runIndex = 0,
+                batchIndex = current.batchIndex ?: 0,
+                batchCount = current.batchCount ?: 1,
+            ),
             // 迁移后的新记录必须复用自身 new ID；原始请求两者相同。
             existingPromptId = current.promptId,
             // 但记录里的 requestedPromptId 要保留 old→new 映射，供旧记录阻断使用。
@@ -540,9 +542,10 @@ class WorkflowRepository private constructor(
         )
     }
 
-    private suspend fun submitSelected(
+    internal suspend fun submitSelected(
         template: WorkflowTemplate,
         selected: List<ParameterCandidate>,
+        context: SubmissionRunContext = SubmissionRunContext(),
         existingPromptId: String? = null,
         preservedRequestedPromptId: String? = null,
     ): WorkflowSubmitResult = withContext(Dispatchers.IO) {
@@ -626,6 +629,8 @@ class WorkflowRepository private constructor(
             templateId = template.id,
             templateName = template.name,
             clientId = clientId,
+            batchIndex = context.batchIndex.takeIf { context.batchCount > 1 },
+            batchCount = context.batchCount.takeIf { context.batchCount > 1 },
             submittedAt = attemptedAt,
             requestedAt = attemptedAt,
             requestedPromptId = preservedRequestedPromptId ?: requestedPromptId,

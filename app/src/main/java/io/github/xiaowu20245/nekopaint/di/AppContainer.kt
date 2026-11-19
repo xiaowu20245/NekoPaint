@@ -34,6 +34,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.TaskRecordRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStore
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
+import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatActionExecutionRegistry
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatHistoryStore
 import io.github.xiaowu20245.nekopaint.feature.chat.ChatSendExecutionRegistry
@@ -200,9 +201,13 @@ class AppContainer(context: Context) {
         taskRecordRepository = taskRecordRepository,
     )
 
+    val workflowSubmitter = WorkflowSubmitter { template, selected, context ->
+        workflowRepository.submitSelected(template, selected, context)
+    }
+
     val operationCenter = OperationCenter(
         scope = operationScope,
-        submit = { template -> workflowRepository.submit(template) },
+        submitter = workflowSubmitter,
         persistExecutionValues = { template ->
             workflowRepository.patchExecutionValues(template.id, template.candidates).getOrThrow()
         },

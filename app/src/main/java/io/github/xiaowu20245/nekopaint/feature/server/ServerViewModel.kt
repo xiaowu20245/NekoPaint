@@ -551,56 +551,17 @@ class ServerViewModel(
 
     private fun validateForm(): ServerConfig? {
         val form = _uiState.value.form
-        val host = form.host.trim()
-        val port = form.port.trim().toIntOrNull()
-        val validPort = port != null && port in 1..65535
-        val hostCheck = if (host.isNotEmpty()) {
-            ServerEndpointValidator.parse(
-                scheme = form.scheme,
-                rawHost = host,
-                port = port?.takeIf { it in 1..65535 } ?: ServerConfig.DEFAULT_PORT,
-            )
-        } else {
-            null
-        }
-
-        val hostError = when {
-            host.isEmpty() -> ServerError.EmptyHost
-            hostCheck?.isFailure == true -> ServerError.InvalidHost
-            else -> null
-        }
-        val portError = if (!validPort) {
-            ServerError.InvalidPort
-        } else {
-            null
-        }
-
+        val validation = ServerFormPolicy.validate(form)
         _uiState.update {
             it.copy(
-                form = form.copy(hostError = hostError, portError = portError),
+                form = form.copy(
+                    hostError = validation.hostError,
+                    portError = validation.portError,
+                ),
                 formError = null,
             )
         }
-
-        if (hostError != null || portError != null) {
-            return null
-        }
-
-        val endpoint = ServerEndpointValidator.parse(form.scheme, host, port!!)
-            .getOrNull()
-            ?: run {
-                _uiState.update {
-                    it.copy(form = it.form.copy(hostError = ServerError.InvalidHost))
-                }
-                return null
-            }
-        return ServerConfig(
-            name = form.name.trim().ifEmpty { ServerConfig.DEFAULT_NAME },
-            scheme = endpoint.scheme,
-            host = endpoint.displayHost,
-            port = endpoint.port,
-            avatarUri = form.avatarUri,
-        )
+        return validation.config
     }
 
     private fun updateForm(transform: (ServerForm) -> ServerForm) {

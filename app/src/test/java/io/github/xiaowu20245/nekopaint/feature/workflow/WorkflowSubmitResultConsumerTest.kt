@@ -332,7 +332,13 @@ class WorkflowSubmitResultConsumerTest {
     ): SubmissionOperationState {
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = { result },
+            submitter = io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitter {
+                    _,
+                    _,
+                    _,
+                ->
+                result
+            },
         )
         val id = center.start(template, 1, SeedStrategy.FIXED).getOrThrow()
         advanceUntilIdle()
