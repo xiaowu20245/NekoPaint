@@ -62,6 +62,10 @@ class ChatTaskActionBatchRetryTest {
     ) : ChatTaskActionDataSource {
         var refreshed = false
 
+        override val localClientId: String? = null
+
+        override fun queueClientId(promptId: String): String? = null
+
         override fun findTask(promptId: String): TaskRecord? =
             task.takeIf { it.promptId == promptId }
 

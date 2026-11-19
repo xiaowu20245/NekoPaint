@@ -19,6 +19,7 @@ interface ChatToolRuntime {
     fun definitions(mode: ChatMode): List<AiToolDefinition>
 
     suspend fun execute(
+        mode: ChatMode,
         call: AiToolCall,
         fallbackPromptId: String? = null,
         attachments: List<ChatImageAttachment> = emptyList(),

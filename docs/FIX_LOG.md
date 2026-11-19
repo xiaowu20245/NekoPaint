@@ -996,3 +996,25 @@ git diff --check
   - 验证：**128 suites / 728 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 connected 仍为 11/11 基线，本轮未新增 instrumentation。
 - **复审**：R8-01 已在 `docs/FIX_REVIEW.md` 第 91 节复审闭环；R8-02 已在第 92 节确认，3A-1 获 **APPROVED**。
 - **提交**：3A-1 已提交为 `fix: 修正节点槽位、队列状态与历史选择`（`e65ee21`）。
+
+### 45. 第三轮 3A-2：历史筛选与 Chat 权限（CR-022/033/034/046/047）
+
+- **CR-022 temp 筛选与顶部开关**
+  - 新增 `HistoryVisibilityPolicy`：TEMP 筛选强制显示 temp 图；ALL/OUTPUTS 仍受全局 `showTempPreviews` 控制；TEMP 下开关禁用且提示“强制显示”，不写回全局设置。
+  - `HistoryScreen` 的历史子栏增加“临时图”FilterChip；所有卡片、灯箱、批量导出统一使用 `showTempImages`。
+- **CR-033 Chat 工具执行层白名单**
+  - `ChatToolPolicy.allowsExecution`：只读工具两模式放行；写工具仅 Agent；未知工具两模式拒绝；`allows` 复用同一白名单。
+  - `ChatToolRuntime.execute` 增加 `mode: ChatMode`；`ChatToolExecutionGuard` 在执行入口拒绝未授权工具，不创建 action proposal；ChatViewModel 三个调用点与测试 fake 已更新。
+- **CR-034 Chat 任务来源**
+  - `ChatActionProposal`/`ChatBatchTarget` 增加 `source: LOCAL/OTHER/UNKNOWN`；`ChatTaskActionDataSource` 增加 `localClientId` 与 `queueClientId`。
+  - 来源优先 `TaskRecord.clientId`，缺失时回退 `QueueItem.clientId`；单任务/批量目标均按该规则，空/未知 clientId 归 UNKNOWN；批量任一 OTHER 即 OTHER。
+  - 确认卡显示来源；其他客户端任务红色提示，并在中断/删除/批量删除前弹二次确认。
+- **CR-046 标签组名称边界**
+  - `PromptTagExpander` 改为词边界正则：`#foo` 不匹配 `#foobar`、`##foo`、`#foo_bar` 或 `#foo画质`；长组名优先，未知占位保持原样。
+  - `referencedGroups` 复用同一占位正则，避免引用计数误判。
+- **CR-047 新会话清理任务上下文**
+  - `newSession` 和删除当前会话时清空 `taskPromptId/contextPromptId/taskContext`；`AGENT_SYSTEM_PROMPT` 删除“后续版本接入”过期文案。
+- **测试**
+  - 新增 `HistoryVisibilityPolicyTest` 6、`ChatToolPolicyTest` 4、`ChatToolExecutionGuardTest` 3、`ChatTaskActionHandlerTest` +8（含 queue-only INTERRUPT/DELETE 与批量来源）、`ChatViewModelSessionTest` +2、`PromptTagExpanderTest` +2、`ChatTaskActionSerializationTest` 1（旧 JSON 缺 source 默认 UNKNOWN）；`ChatScreenBackInstrumentedTest` fake 适配 mode 参数。
+  - 验证：**132 suites / 754 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **复审**：第 93 节 R9-01～R9-04、第 94 节 R9-05/R9-06 均已修复；第 95 节复审 **APPROVED**。

@@ -69,10 +69,34 @@ data class ChatParameterOverride(
 )
 
 @Serializable
+enum class ChatTaskSource {
+    LOCAL,
+    OTHER,
+    UNKNOWN,
+}
+
+private fun sourceFor(
+    task: TaskRecord?,
+    queueClientId: String?,
+    localClientId: String?,
+): ChatTaskSource {
+    // 其他客户端任务通常只存在于 Queue，没有本地 TaskRecord；必须回退队列 clientId。
+    val sourceClient = task?.clientId?.trim().orEmpty()
+        .ifBlank { queueClientId?.trim().orEmpty() }
+    val local = localClientId?.trim().orEmpty()
+    return when {
+        sourceClient.isBlank() || local.isBlank() -> ChatTaskSource.UNKNOWN
+        sourceClient == local -> ChatTaskSource.LOCAL
+        else -> ChatTaskSource.OTHER
+    }
+}
+
+@Serializable
 data class ChatBatchTarget(
     val promptId: String,
     val title: String,
     val status: String,
+    val source: ChatTaskSource = ChatTaskSource.UNKNOWN,
 )
 
 @Serializable
@@ -84,6 +108,7 @@ data class ChatActionProposal(
     val promptId: String,
     val title: String,
     val status: String,
+    val source: ChatTaskSource = ChatTaskSource.UNKNOWN,
     val state: ChatActionState = ChatActionState.PENDING,
     val resultMessage: String? = null,
     val workflowId: String? = null,
@@ -106,6 +131,17 @@ data class ChatActionProposal(
 ) {
     val shortId: String
         get() = if (promptId.length <= 8) promptId else promptId.take(8)
+
+    val hasOtherClientSource: Boolean
+        get() = source == ChatTaskSource.OTHER ||
+            batchTargets.any { it.source == ChatTaskSource.OTHER }
+
+    val requiresOtherClientConfirmation: Boolean
+        get() = hasOtherClientSource && action in setOf(
+            ChatTaskAction.INTERRUPT,
+            ChatTaskAction.DELETE,
+            ChatTaskAction.BATCH_DELETE,
+        )
 }
 
 /**
@@ -345,6 +381,7 @@ class ChatTaskActionHandler(
                 promptId = promptId,
                 title = task?.templateName?.takeIf { it.isNotBlank() } ?: "未命名任务",
                 status = status,
+                source = sourceFor(task, dataSource.queueClientId(promptId), dataSource.localClientId),
             ),
         )
     }
@@ -401,6 +438,7 @@ class ChatTaskActionHandler(
                 promptId = "",
                 title = template.name,
                 status = "text_to_image",
+                source = ChatTaskSource.LOCAL,
                 workflowId = template.id,
                 promptText = trimmedPrompt,
                 promptCandidateId = selected.id,
@@ -453,6 +491,7 @@ class ChatTaskActionHandler(
                                 promptId = promptId,
                                 title = task.templateName.ifBlank { "未命名任务" },
                                 status = status,
+                                source = sourceFor(task, dataSource.queueClientId(promptId), dataSource.localClientId),
                             )
                         }
                     }
@@ -467,6 +506,7 @@ class ChatTaskActionHandler(
                             title = task?.templateName?.takeIf { it.isNotBlank() }
                                 ?: "未命名任务",
                             status = "queued",
+                            source = sourceFor(task, dataSource.queueClientId(promptId), dataSource.localClientId),
                         )
                     }
                 }
@@ -481,6 +521,11 @@ class ChatTaskActionHandler(
                 ),
             )
         }
+        val source = when {
+            targets.any { it.source == ChatTaskSource.OTHER } -> ChatTaskSource.OTHER
+            targets.any { it.source == ChatTaskSource.UNKNOWN } -> ChatTaskSource.UNKNOWN
+            else -> ChatTaskSource.LOCAL
+        }
         return Result.success(
             ChatActionProposal(
                 id = UUID.randomUUID().toString(),
@@ -488,6 +533,7 @@ class ChatTaskActionHandler(
                 promptId = "",
                 title = "${targets.size} 个任务",
                 status = "batch",
+                source = source,
                 batchTargets = targets,
             ),
         )
@@ -505,6 +551,7 @@ class ChatTaskActionHandler(
                 promptId = "",
                 title = plan.templateName,
                 status = "missing_nodes",
+                source = ChatTaskSource.LOCAL,
                 workflowId = plan.templateId,
                 installPackages = plan.packages,
                 unresolvedNodeTypes = plan.unresolvedNodeTypes,
@@ -940,6 +987,11 @@ class ChatTaskActionHandler(
 }
 
 interface ChatTaskActionDataSource {
+    val localClientId: String?
+
+    /** Queue-only 任务没有本地 TaskRecord 时用于判断来源。 */
+    fun queueClientId(promptId: String): String?
+
     fun findTask(promptId: String): TaskRecord?
 
     fun findHistory(promptId: String): HistoryEntry?
@@ -970,6 +1022,16 @@ class DefaultChatTaskActionDataSource(
     private val workflowRepository: WorkflowRepository,
     private val queueRepository: QueueRepository,
 ) : ChatTaskActionDataSource {
+
+    override val localClientId: String?
+        get() = taskManager.localClientId.value
+
+    override fun queueClientId(promptId: String): String? {
+        val queue = taskManager.queue.value ?: return null
+        return (queue.running.firstOrNull { it.promptId == promptId }
+            ?: queue.pending.firstOrNull { it.promptId == promptId })
+            ?.clientId
+    }
 
     override fun findTask(promptId: String): TaskRecord? =
         taskManager.tasks.value.firstOrNull { it.promptId == promptId }

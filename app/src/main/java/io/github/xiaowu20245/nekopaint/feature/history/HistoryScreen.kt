@@ -281,6 +281,11 @@ fun HistoryScreen(
             }
         }
     }
+    val showTempImages = HistoryVisibilityPolicy.effectiveShowTemp(
+        filter = state.filter,
+        globalShowTemp = state.showTempPreviews,
+    )
+    val tempSwitchEnabled = HistoryVisibilityPolicy.isTempSwitchEnabled(state.filter)
     val activeHostEntries = remember(state.entries, activeServerIds) {
         state.entries.filter { isOperable(it.serverId) }
     }
@@ -302,7 +307,7 @@ fun HistoryScreen(
         state.tasks.associateBy { it.promptId }
     }
     val openLightbox: (HistoryEntry, Int) -> Unit = { entry, index ->
-        entry.visibleImages(state.showTempPreviews)
+        entry.visibleImages(showTempImages)
             .getOrNull(index)
             ?.let { lightboxTarget = entry to it }
     }
@@ -404,7 +409,7 @@ fun HistoryScreen(
         selectableEntries,
         state.exporting,
         state.deletingPromptIds,
-        state.showTempPreviews,
+        showTempImages,
         canClearHistory,
         state.refreshing,
         state.viewMode,
@@ -433,7 +438,7 @@ fun HistoryScreen(
                         onClick = {
                             val selectedImages = filteredEntries
                                 .filter { it.promptId in selectedIds }
-                                .flatMap { it.visibleImages(state.showTempPreviews) }
+                                .flatMap { it.visibleImages(showTempImages) }
                             viewModel.exportImages(selectedImages) { success, _ ->
                                 scope.launch {
                                     snackbarHostState.showSnackbar(
@@ -525,8 +530,11 @@ fun HistoryScreen(
                 selectedCount = if (selectionMode) selectedIds.size else null,
                 hosts = state.hosts,
                 selectedHostId = state.selectedHostId,
+                showTempPreviews = showTempImages,
+                tempSwitchEnabled = tempSwitchEnabled,
                 onHostChange = viewModel::setHostFilter,
                 onFilterChange = viewModel::setFilter,
+                onShowTempChange = viewModel::setShowTempPreviews,
             )
 
             val errorMessage = state.error
@@ -594,7 +602,7 @@ fun HistoryScreen(
                                 tasksById = tasksById,
                                 hostNames = hostDisplayNames,
                                 activeServerIds = activeServerIds,
-                                showTempPreviews = state.showTempPreviews,
+                                showTempPreviews = showTempImages,
                                 selectionMode = selectionMode,
                                 selectedIds = selectedIds,
                                 onToggleSelect = toggleSelection,
@@ -617,7 +625,7 @@ fun HistoryScreen(
                                 tasksById = tasksById,
                                 hostNames = hostDisplayNames,
                                 activeServerIds = activeServerIds,
-                                showTempPreviews = state.showTempPreviews,
+                                showTempPreviews = showTempImages,
                                 selectionMode = selectionMode,
                                 selectedIds = selectedIds,
                                 onToggleSelect = toggleSelection,
@@ -637,7 +645,7 @@ fun HistoryScreen(
                                 entries = filteredEntries,
                                 hostNames = hostDisplayNames,
                                 activeServerIds = activeServerIds,
-                                showTempPreviews = state.showTempPreviews,
+                                showTempPreviews = showTempImages,
                                 selectionMode = selectionMode,
                                 selectedIds = selectedIds,
                                 onToggleSelect = toggleSelection,
@@ -664,7 +672,7 @@ fun HistoryScreen(
     // ModalBottomSheet Parameter Drawer
     activeSheetEntry?.let { (entry, imgIndex) ->
         val task = tasksById[entry.promptId]
-        val images = entry.visibleImages(state.showTempPreviews)
+        val images = entry.visibleImages(showTempImages)
         val selectedImage = images.getOrNull(imgIndex) ?: images.firstOrNull()
 
         ModalBottomSheet(
@@ -839,8 +847,11 @@ private fun HistorySubHeader(
     selectedCount: Int?,
     hosts: List<HistoryHost>,
     selectedHostId: String?,
+    showTempPreviews: Boolean,
+    tempSwitchEnabled: Boolean,
     onHostChange: (String?) -> Unit,
     onFilterChange: (HistoryFilter) -> Unit,
+    onShowTempChange: (Boolean) -> Unit,
 ) {
     var hostMenuExpanded by remember { mutableStateOf(false) }
     val selectedHost = hosts.firstOrNull { it.id == selectedHostId }
@@ -1000,6 +1011,37 @@ private fun HistorySubHeader(
                 selected = filter == HistoryFilter.TEMP,
                 onClick = { onFilterChange(HistoryFilter.TEMP) },
             )
+            FilterChip(
+                selected = showTempPreviews,
+                enabled = tempSwitchEnabled,
+                onClick = { onShowTempChange(!showTempPreviews) },
+                label = {
+                    Text(
+                        text = stringResource(R.string.history_show_temp_switch),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
+                shape = RoundedCornerShape(50),
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color.Transparent,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = tempSwitchEnabled,
+                    selected = showTempPreviews,
+                    borderColor = MaterialTheme.colorScheme.outlineVariant,
+                    selectedBorderColor = Color.Transparent,
+                ),
+            )
+            if (!tempSwitchEnabled) {
+                Text(
+                    text = stringResource(R.string.history_temp_forced_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

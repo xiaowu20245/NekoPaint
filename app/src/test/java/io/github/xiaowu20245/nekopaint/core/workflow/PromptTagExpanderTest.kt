@@ -48,6 +48,27 @@ class PromptTagExpanderTest {
     }
 
     @Test
+    fun `expand does not replace prefix of a longer placeholder`() {
+        val groups = listOf(PromptTagGroup("1", "foo", listOf("foo-tag")))
+
+        assertEquals("#foobar, smile", PromptTagExpander.expand("#foobar, smile", groups))
+        assertEquals("foo-tag, smile", PromptTagExpander.expand("#foo, smile", groups))
+        assertTrue(PromptTagExpander.referencedGroups("#foobar", groups).isEmpty())
+        assertEquals(listOf("1"), PromptTagExpander.referencedGroups("#foo", groups).map { it.id })
+    }
+
+    @Test
+    fun `expand enforces word boundary and keeps unknown placeholders`() {
+        val groups = listOf(PromptTagGroup("1", "foo", listOf("foo-tag")))
+
+        assertEquals("#foo_bar", PromptTagExpander.expand("#foo_bar", groups))
+        assertEquals("#foo画质", PromptTagExpander.expand("#foo画质", groups))
+        assertEquals("##foo", PromptTagExpander.expand("##foo", groups))
+        assertTrue(PromptTagExpander.referencedGroups("##foo", groups).isEmpty())
+        assertEquals("foo-tag，smile", PromptTagExpander.expand("#foo，smile", groups))
+    }
+
+    @Test
     fun `referencedGroups returns only groups present in prompt`() {
         val groups = listOf(
             PromptTagGroup("1", "起手画质组", listOf("masterpiece")),

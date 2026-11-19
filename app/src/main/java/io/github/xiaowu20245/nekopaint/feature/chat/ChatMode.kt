@@ -33,5 +33,13 @@ object ChatToolPolicy {
     )
 
     fun allows(toolName: String, mode: ChatMode): Boolean =
-        mode == ChatMode.AGENT || toolName in readOnlyTools
+        allowsExecution(toolName, mode)
+
+    /**
+     * 执行层白名单：只读工具两模式放行；写工具仅 Agent；未知工具一律拒绝。
+     * 不依赖模型是否遵守提示词，也不依赖注册层是否遗漏。
+     */
+    fun allowsExecution(toolName: String, mode: ChatMode): Boolean =
+        toolName in readOnlyTools ||
+            (mode == ChatMode.AGENT && toolName in writeTools)
 }

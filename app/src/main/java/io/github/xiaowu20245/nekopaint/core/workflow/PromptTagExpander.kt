@@ -20,7 +20,7 @@ object PromptTagExpander {
             .sortedByDescending { it.name.length }
             .forEach { group ->
                 val replacement = group.tags.joinToString(", ")
-                result = result.replace("#${group.name}", replacement)
+                result = placeholderRegex(group.name).replace(result) { replacement }
             }
 
         return result
@@ -31,7 +31,21 @@ object PromptTagExpander {
     }
 
     fun referencedGroups(value: String, groups: List<PromptTagGroup>): List<PromptTagGroup> =
-        groups.filter { it.name.isNotBlank() && value.contains("#${it.name}") }
+        groups.filter { it.name.isNotBlank() && containsPlaceholder(value, it.name) }
+
+    /**
+     * `#foo` 只匹配独立占位符，不匹配 `#foobar`、`##foo` 或 `#foo_bar`。
+     * CJK 组名同样按字母/数字/下划线视为词内字符，避免前缀误替换。
+     */
+    private fun placeholderRegex(name: String): Regex =
+        Regex(
+            "(?<![#\\p{L}\\p{N}_])#" +
+                Regex.escape(name) +
+                "(?![\\p{L}\\p{N}_])",
+        )
+
+    private fun containsPlaceholder(value: String, name: String): Boolean =
+        placeholderRegex(name).containsMatchIn(value)
 
     fun promptPartCount(value: String): Int =
         value.split(',').count { it.isNotBlank() }

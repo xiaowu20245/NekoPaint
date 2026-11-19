@@ -1899,6 +1899,9 @@ private fun ChatActionProposalCard(
         proposal.action == ChatTaskAction.BATCH_DELETE
     val isInstall = proposal.action == ChatTaskAction.INSTALL_NODES
     val statusLabel = chatStatusLabel(proposal.status)
+    var showOtherClientConfirm by remember(proposal.id, proposal.state) {
+        mutableStateOf(false)
+    }
     val confirmLabel = stringResource(
         when {
             isSubmit -> R.string.chat_action_confirm_submit
@@ -1970,6 +1973,23 @@ private fun ChatActionProposalCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (!isSubmit && !isInstall) {
+                    Text(
+                        text = stringResource(
+                            when (proposal.source) {
+                                ChatTaskSource.LOCAL -> R.string.chat_action_source_local
+                                ChatTaskSource.OTHER -> R.string.chat_action_source_other
+                                ChatTaskSource.UNKNOWN -> R.string.chat_action_source_unknown
+                            },
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (proposal.hasOtherClientSource) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
 
             if (isBatch && proposal.batchTargets.isNotEmpty()) {
@@ -2206,7 +2226,13 @@ private fun ChatActionProposalCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         FilledTonalButton(
-                            onClick = onConfirm,
+                            onClick = {
+                                if (proposal.requiresOtherClientConfirmation) {
+                                    showOtherClientConfirm = true
+                                } else {
+                                    onConfirm()
+                                }
+                            },
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             modifier = Modifier.height(34.dp),
@@ -2363,6 +2389,29 @@ private fun ChatActionProposalCard(
                 }
             }
         }
+    }
+
+    if (showOtherClientConfirm) {
+        AlertDialog(
+            onDismissRequest = { showOtherClientConfirm = false },
+            title = { Text(stringResource(R.string.chat_action_other_client_title)) },
+            text = { Text(stringResource(R.string.chat_action_other_client_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showOtherClientConfirm = false
+                        onConfirm()
+                    },
+                ) {
+                    Text(stringResource(R.string.chat_action_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOtherClientConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 }
 

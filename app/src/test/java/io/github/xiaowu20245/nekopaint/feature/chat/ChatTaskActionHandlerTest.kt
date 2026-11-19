@@ -17,6 +17,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.NodeInstaller
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,6 +74,122 @@ class ChatTaskActionHandlerTest {
         source.pending = true
         val proposal = handler.propose(ChatTaskAction.DELETE, "task-1").getOrThrow()
         assertEquals("queued", proposal.status)
+    }
+
+    @Test
+    fun `local client task does not require extra confirmation`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.task = task()
+        source.running = true
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.INTERRUPT, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.LOCAL, proposal.source)
+        assertFalse(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `other client task requires extra confirmation`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.task = task().copy(clientId = "other-client")
+        source.running = true
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.INTERRUPT, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.OTHER, proposal.source)
+        assertTrue(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `missing local client id is unknown and does not claim local`() {
+        val source = FakeSource()
+        source.localClientIdValue = null
+        source.task = task()
+        source.running = true
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.INTERRUPT, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.UNKNOWN, proposal.source)
+        assertFalse(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `queue only other client task requires extra confirmation`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.running = true
+        source.queueClientIds = mapOf("task-1" to "other-client")
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.INTERRUPT, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.OTHER, proposal.source)
+        assertTrue(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `queue only local client task stays local`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.running = true
+        source.queueClientIds = mapOf("task-1" to "client-1")
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.INTERRUPT, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.LOCAL, proposal.source)
+        assertFalse(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `queue only other client delete requires extra confirmation`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.pending = true
+        source.queueClientIds = mapOf("task-1" to "other-client")
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.DELETE, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.OTHER, proposal.source)
+        assertTrue(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `queue only local client delete stays local`() {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.pending = true
+        source.queueClientIds = mapOf("task-1" to "client-1")
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.propose(ChatTaskAction.DELETE, "task-1").getOrThrow()
+
+        assertEquals(ChatTaskSource.LOCAL, proposal.source)
+        assertFalse(proposal.requiresOtherClientConfirmation)
+    }
+
+    @Test
+    fun `batch with other client target marks proposal other`() = runTest {
+        val source = FakeSource()
+        source.localClientIdValue = "client-1"
+        source.pending = true
+        source.queueClientIds = mapOf("task-1" to "other-client")
+        val handler = ChatTaskActionHandler(source)
+
+        val proposal = handler.proposeBatch(
+            ChatTaskAction.BATCH_DELETE,
+            listOf("task-1"),
+        ).getOrThrow()
+
+        assertEquals(ChatTaskSource.OTHER, proposal.source)
+        assertEquals(ChatTaskSource.OTHER, proposal.batchTargets.single().source)
+        assertTrue(proposal.requiresOtherClientConfirmation)
     }
 
     @Test
@@ -565,6 +682,11 @@ class ChatTaskActionHandlerTest {
     }
 
     private class FakeSource : ChatTaskActionDataSource {
+        var localClientIdValue: String? = null
+        override val localClientId: String?
+            get() = localClientIdValue
+        var queueClientIds: Map<String, String> = emptyMap()
+        override fun queueClientId(promptId: String): String? = queueClientIds[promptId]
         var task: TaskRecord? = null
         var history: HistoryEntry? = null
         var running: Boolean = false

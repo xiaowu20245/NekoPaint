@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -114,6 +115,65 @@ class ChatViewModelSessionTest {
         assertTrue(viewModel.state.value.messages.isEmpty())
         assertTrue(store.entries.containsKey("s-a"))
         assertNull(viewModel.state.value.sessionError)
+    }
+
+    @Test
+    fun newSessionClearsTaskContextFromTaskEntry() = runChatTest {
+        val store = FakeSessionStore().apply {
+            seed("s-a", "A hello", ChatMode.AGENT, proposal = false)
+            entries["s-a"] = entries.getValue("s-a").copy(promptId = "p1")
+        }
+        val contextBuilder = object : ChatContextSource {
+            override suspend fun build(intent: ChatIntent, userText: String): String? = null
+
+            override fun taskContext(promptId: String): ChatTaskContext =
+                ChatTaskContext(promptId, "task", "failed", "summary")
+        }
+        val viewModel = createViewModel(
+            store = store,
+            scope = backgroundScope,
+            contextBuilder = contextBuilder,
+        )
+
+        viewModel.switchSession("s-a")
+        advanceUntilIdle()
+        assertEquals("p1", viewModel.state.value.contextPromptId)
+        assertNotNull(viewModel.state.value.taskContext)
+
+        viewModel.newSession()
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.contextPromptId)
+        assertNull(viewModel.state.value.taskContext)
+    }
+
+    @Test
+    fun deleteCurrentSessionClearsTaskContext() = runChatTest {
+        val store = FakeSessionStore().apply {
+            seed("s-a", "A hello", ChatMode.AGENT, proposal = false)
+            entries["s-a"] = entries.getValue("s-a").copy(promptId = "p1")
+        }
+        val contextBuilder = object : ChatContextSource {
+            override suspend fun build(intent: ChatIntent, userText: String): String? = null
+
+            override fun taskContext(promptId: String): ChatTaskContext =
+                ChatTaskContext(promptId, "task", "failed", "summary")
+        }
+        val viewModel = createViewModel(
+            store = store,
+            scope = backgroundScope,
+            contextBuilder = contextBuilder,
+        )
+
+        viewModel.switchSession("s-a")
+        advanceUntilIdle()
+        assertNotNull(viewModel.state.value.taskContext)
+
+        viewModel.deleteSession("s-a")
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.contextPromptId)
+        assertNull(viewModel.state.value.taskContext)
     }
 
     @Test
@@ -1113,13 +1173,14 @@ class ChatViewModelSessionTest {
         operationGate: ChatSessionOperationGate = ChatSessionOperationGate(),
         scope: CoroutineScope,
         operationScope: CoroutineScope = scope,
+        contextBuilder: ChatContextSource = FakeContextSource,
     ): ChatViewModel = ChatViewModel(
         configFlow = flowOf(CONFIGURED),
         defaultAgentModeFlow = flowOf(false),
         client = client,
         imageEncoder = FakeImageEncoder,
         imageStore = FakeImageStorage,
-        contextBuilder = FakeContextSource,
+        contextBuilder = contextBuilder,
         toolRegistry = FakeToolRuntime,
         historyStore = store,
         actionHandler = actions,
@@ -1396,6 +1457,7 @@ class ChatViewModelSessionTest {
         override fun definitions(mode: ChatMode): List<AiToolDefinition> = emptyList()
 
         override suspend fun execute(
+            mode: ChatMode,
             call: AiToolCall,
             fallbackPromptId: String?,
             attachments: List<ChatImageAttachment>,

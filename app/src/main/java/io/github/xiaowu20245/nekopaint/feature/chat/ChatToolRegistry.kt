@@ -286,11 +286,13 @@ class ChatToolRegistry(
     )
 
     override suspend fun execute(
+        mode: ChatMode,
         call: AiToolCall,
         fallbackPromptId: String?,
         attachments: List<ChatImageAttachment>,
         direct: Boolean,
     ): ChatToolExecution {
+        ChatToolExecutionGuard.rejection(mode, call.name)?.let { return it }
         val args = parseArguments(call.arguments)
         var actionProposal: ChatActionProposal? = null
         var historyImages: List<ChatHistoryImage> = emptyList()
@@ -506,6 +508,20 @@ class ChatToolRegistry(
         const val BATCH_ERROR_PREFIX = "无法创建批量操作建议："
         const val INSTALL_ERROR_PREFIX = "无法创建节点安装建议："
     }
+}
+
+internal object ChatToolExecutionGuard {
+
+    /** 返回 null 表示允许进入执行路径；否则返回拒绝结果（不携带 action proposal）。 */
+    fun rejection(mode: ChatMode, toolName: String): ChatToolExecution? =
+        if (ChatToolPolicy.allowsExecution(toolName, mode)) {
+            null
+        } else {
+            ChatToolExecution(
+                content = "工具执行被拒绝：当前模式不允许 $toolName",
+                isError = true,
+            )
+        }
 }
 
 data class ChatToolExecution(

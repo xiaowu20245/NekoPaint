@@ -170,6 +170,7 @@ class ChatScreenBackInstrumentedTest {
         override fun definitions(mode: ChatMode): List<AiToolDefinition> = emptyList()
 
         override suspend fun execute(
+            mode: ChatMode,
             call: AiToolCall,
             fallbackPromptId: String?,
             attachments: List<ChatImageAttachment>,

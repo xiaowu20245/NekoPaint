@@ -467,6 +467,7 @@ class ChatViewModel(
                     arguments = args.toString(),
                 )
                 val execution = toolRegistry.execute(
+                    mode = mode,
                     call = call,
                     fallbackPromptId = taskPromptId,
                     attachments = emptyList(),
@@ -573,6 +574,7 @@ class ChatViewModel(
                     arguments = args.toString(),
                 )
                 val execution = toolRegistry.execute(
+                    mode = this@ChatViewModel.mode,
                     call = call,
                     fallbackPromptId = taskPromptId,
                     attachments = currentImageAttachments(),
@@ -712,6 +714,7 @@ class ChatViewModel(
             completion.toolCalls.forEach { call ->
                 _state.update { it.copy(status = toolStatus(call.name)) }
                 val execution = toolRegistry.execute(
+                    mode = mode,
                     call = call,
                     fallbackPromptId = taskPromptId,
                     attachments = attachments,
@@ -1325,11 +1328,14 @@ class ChatViewModel(
                         return@synchronized false
                     }
                     currentSessionId = null
+                    taskPromptId = null
                     mode = defaultMode
                     _state.update {
                         it.copy(
                             messages = emptyList(),
                             currentSessionId = null,
+                            contextPromptId = null,
+                            taskContext = null,
                             sending = false,
                             status = null,
                             streamingMessageId = null,
@@ -1509,12 +1515,15 @@ class ChatViewModel(
                     if (!sessionGate.isCurrent(lease)) return@synchronized
                     if (currentSessionId == sessionId) {
                         currentSessionId = null
+                        taskPromptId = null
                         nextMessageId = 1L
                         mode = defaultMode
                         _state.update {
                             it.copy(
                                 messages = emptyList(),
                                 currentSessionId = null,
+                                contextPromptId = null,
+                                taskContext = null,
                                 sessions = sessions,
                                 sending = false,
                                 status = null,
@@ -1979,7 +1988,7 @@ class ChatViewModel(
                 "回答使用中文，简洁、可执行，尽量使用短句和换行。" +
                 "可以使用简单 Markdown：标题、列表、加粗、行内代码和代码块；不要使用表格或图片。" +
                 "如果本轮提供了「本地只读状态」，必须严格依据它回答，不要编造服务器、队列或历史状态；" +
-                "如果没有提供状态，就提示用户到对应页面查看，或说明该能力将在后续版本接入。"
+                "如果没有提供状态，就提示用户到对应页面查看，或使用已注册工具获取。"
 
         private const val VISION_TAG_SYSTEM_PROMPT =
             "你是 Neko I 的图片标签分析助手。用户会发一张图片，请输出可直接用于 AI 绘图的标签。" +

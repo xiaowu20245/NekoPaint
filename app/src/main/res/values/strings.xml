@@ -286,6 +286,8 @@
     <string name="history_filter_all_count">全部 (%1$d)</string>
     <string name="history_filter_output_label">仅成图</string>
     <string name="history_filter_temp_label">草稿预览</string>
+    <string name="history_show_temp_switch">临时图</string>
+    <string name="history_temp_forced_hint">TEMP 筛选强制显示临时图</string>
     <string name="history_host_all">全部主机</string>
     <string name="history_host_current">当前</string>
     <string name="history_host_same_address">同一地址</string>
@@ -721,6 +723,11 @@
     <string name="chat_action_preset_name">预设名称</string>
     <string name="chat_action_preset_save">保存</string>
     <string name="chat_action_confirm">确认执行</string>
+    <string name="chat_action_source_local">本地任务</string>
+    <string name="chat_action_source_other">其他客户端任务</string>
+    <string name="chat_action_source_unknown">来源未知</string>
+    <string name="chat_action_other_client_title">操作其他客户端任务</string>
+    <string name="chat_action_other_client_message">该任务由其他客户端提交。确认仍要中断或删除吗？</string>
     <string name="chat_action_executing">正在执行…</string>
     <string name="chat_action_leave_blocked">动作执行中，请等待完成</string>
     <string name="chat_action_success">已执行</string>
