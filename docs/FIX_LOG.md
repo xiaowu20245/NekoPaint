@@ -1094,3 +1094,4 @@ git diff --check
   - `OperationCenterTest` 适配 submitter 注入并新增 1 项：批量两轮 seed/context 透传；`WorkflowSubmitPersistenceTest` 改用 `submitSelected` 并新增 1 项批量 `batchIndex/batchCount` 落盘；`ServerFormTest`、`WorkflowsViewModelTest`、`WorkflowSubmitResultConsumerTest` 适配 submitter。
   - 验证：**139 suites / 814 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 101 节复审 **APPROVED**。
+- **提交**：3C 已提交为 `refactor: 统一提交入口并清理死代码`（`20568d5`）。
