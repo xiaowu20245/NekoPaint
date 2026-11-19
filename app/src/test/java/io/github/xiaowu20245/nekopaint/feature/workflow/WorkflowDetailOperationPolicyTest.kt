@@ -4,6 +4,8 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.data.operation.OperationStatus
 import io.github.xiaowu20245.nekopaint.data.operation.SubmissionOperationState
 import io.github.xiaowu20245.nekopaint.data.repository.NodeErrorInfo
@@ -104,7 +106,10 @@ class WorkflowDetailOperationPolicyTest {
             total = 3,
             skipped = 1,
             lastValidation = WorkflowSubmitResult.Validation(
-                summary = "bad seed",
+                summary = NekoMessage(
+                    NekoMessageKey.WORKFLOW_VALIDATION_FAILED,
+                    listOf("bad seed"),
+                ),
                 nodeErrors = listOf(NodeErrorInfo("1", "seed invalid")),
             ),
         )
@@ -119,9 +124,14 @@ class WorkflowDetailOperationPolicyTest {
             FieldError.Server("seed invalid"),
             result.state.fieldErrors["1:seed"],
         )
-        assertTrue(result.state.submitError?.message.orEmpty().contains("成功 1"))
-        assertTrue(result.state.submitError?.message.orEmpty().contains("失败 1"))
-        assertTrue(result.state.submitError?.message.orEmpty().contains("跳过 1"))
+        val stats = result.state.submitError?.batchStats
+        assertEquals(1, stats?.success)
+        assertEquals(1, stats?.failed)
+        assertEquals(1, stats?.skipped)
+        assertEquals(
+            NekoMessageKey.OPERATION_PARTIAL_FAILED,
+            result.state.submitError?.message?.key,
+        )
     }
 
     @Test
@@ -132,7 +142,10 @@ class WorkflowDetailOperationPolicyTest {
             failed = 1,
             processed = 1,
             lastValidation = WorkflowSubmitResult.Validation(
-                summary = "bad seed",
+                summary = NekoMessage(
+                    NekoMessageKey.WORKFLOW_VALIDATION_FAILED,
+                    listOf("bad seed"),
+                ),
                 nodeErrors = listOf(
                     NodeErrorInfo("1", "seed invalid", inputName = "seed"),
                 ),
@@ -156,7 +169,7 @@ class WorkflowDetailOperationPolicyTest {
             failed = 1,
             processed = 1,
             lastValidation = WorkflowSubmitResult.Validation(
-                summary = "node invalid",
+                summary = NekoMessage(NekoMessageKey.WORKFLOW_VALIDATION_FAILED, listOf("node invalid")),
                 nodeErrors = listOf(
                     NodeErrorInfo("1", "node invalid", inputName = null),
                 ),
@@ -187,9 +200,15 @@ class WorkflowDetailOperationPolicyTest {
         )
 
         assertFalse(result.state.submitting)
-        val message = result.state.submitError?.message.orEmpty()
-        assertTrue(message.contains("结果未知"))
-        assertTrue(message.contains("避免重复提交"))
+        assertEquals(
+            NekoMessageKey.WORKFLOW_UNKNOWN_RESULT,
+            result.state.submitError?.message?.key,
+        )
+        assertTrue(
+            result.state.submitError?.extraMessages
+                ?.any { it.key == NekoMessageKey.WORKFLOW_UNKNOWN_CONFIRM } == true,
+        )
+        assertEquals(1, result.state.submitError?.batchStats?.unknown)
     }
 
     @Test
@@ -201,7 +220,9 @@ class WorkflowDetailOperationPolicyTest {
             lastSuccess = WorkflowSubmitResult.Success(
                 promptId = "p1",
                 queueNumber = 1,
-                localRecordWarning = "本地存在一条旧请求记录",
+                localRecordWarning = NekoMessage(
+                    NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED,
+                ),
             ),
             executionValuesPersisted = false,
         )
@@ -211,9 +232,9 @@ class WorkflowDetailOperationPolicyTest {
             operation,
         )
 
-        val message = result.state.submitError?.message.orEmpty()
-        assertTrue(message.contains("本地执行参数保存失败"))
-        assertTrue(message.contains("本地存在一条旧请求记录"))
+        val messages = result.state.submitError?.extraMessages.orEmpty()
+        assertTrue(messages.any { it.key == NekoMessageKey.WORKFLOW_EXECUTION_VALUES_FAILED })
+        assertTrue(messages.any { it.key == NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED })
         assertTrue(result.state.dirty)
         assertFalse(result.state.saved)
     }

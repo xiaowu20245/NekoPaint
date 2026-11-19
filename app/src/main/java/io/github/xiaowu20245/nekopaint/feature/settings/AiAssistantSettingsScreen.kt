@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoTheme
 
@@ -75,9 +76,10 @@ fun AiAssistantSettingsScreen() {
         }
     }
 
-    LaunchedEffect(state.error) {
-        state.error?.let { message ->
-            snackbarHostState.showSnackbar(message)
+    val errorText = state.error?.asString()
+    LaunchedEffect(errorText) {
+        if (errorText != null) {
+            snackbarHostState.showSnackbar(errorText)
             viewModel.consumeError()
         }
     }
@@ -161,7 +163,7 @@ fun AiAssistantSettingsScreen() {
                     )
                     state.baseUrlError?.let { message ->
                         Text(
-                            text = message,
+                            text = message.asString(),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(horizontal = 4.dp),
@@ -278,10 +280,7 @@ fun AiAssistantSettingsScreen() {
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                text = stringResource(
-                                    R.string.ai_assistant_test_failed,
-                                    state.testError.orEmpty(),
-                                ),
+                                text = state.testError?.asString().orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                             )

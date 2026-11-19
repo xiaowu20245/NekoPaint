@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.operation
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
@@ -36,7 +38,10 @@ class OperationCenterTest {
             submit = {
                 calls += 1
                 if (calls == 3) {
-                    WorkflowSubmitResult.Validation("bad", emptyList())
+                    WorkflowSubmitResult.Validation(
+                        NekoMessage(NekoMessageKey.WORKFLOW_SERVER_REJECTED, listOf("400")),
+                        emptyList(),
+                    )
                 } else {
                     WorkflowSubmitResult.Success("p$calls", calls)
                 }
@@ -53,14 +58,18 @@ class OperationCenterTest {
         assertEquals(2, state.success)
         assertEquals(1, state.failed)
         assertEquals(2, state.skipped)
-        assertTrue(state.message?.contains("bad") == true)
+        assertEquals(NekoMessageKey.WORKFLOW_SERVER_REJECTED, state.message?.key)
     }
 
     @Test
     fun zeroSuccessIsFailed() = runTest {
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
-            submit = { WorkflowSubmitResult.Error("down") },
+            submit = {
+                WorkflowSubmitResult.Error(
+                    NekoMessage(NekoMessageKey.WORKFLOW_FAILED),
+                )
+            },
         )
 
         val id = center.start(template, 3, SeedStrategy.FIXED).getOrThrow()
@@ -78,7 +87,10 @@ class OperationCenterTest {
         val center = OperationCenter(
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
             submit = {
-                WorkflowSubmitResult.Unknown("p1", "提交结果未知")
+                WorkflowSubmitResult.Unknown(
+                    "p1",
+                    NekoMessage(NekoMessageKey.WORKFLOW_UNKNOWN_RESULT),
+                )
             },
         )
 
@@ -102,7 +114,10 @@ class OperationCenterTest {
                 if (calls == 1) {
                     WorkflowSubmitResult.Success("p1", 1)
                 } else {
-                    WorkflowSubmitResult.Unknown("p2", "结果未知")
+                    WorkflowSubmitResult.Unknown(
+                        "p2",
+                        NekoMessage(NekoMessageKey.WORKFLOW_UNKNOWN_RESULT),
+                    )
                 }
             },
         )
@@ -165,14 +180,20 @@ class OperationCenterTest {
             scope = CoroutineScope(StandardTestDispatcher(testScheduler)),
             submit = {
                 validationCalls += 1
-                WorkflowSubmitResult.Validation("bad", emptyList())
+                WorkflowSubmitResult.Validation(
+                    NekoMessage(NekoMessageKey.WORKFLOW_SERVER_REJECTED, listOf("400")),
+                    emptyList(),
+                )
             },
         )
         val validationId = validationCenter.start(template, 1, SeedStrategy.FIXED).getOrThrow()
         advanceUntilIdle()
         val validationState = validationCenter.states.value.getValue(validationId)
         assertEquals(OperationStatus.FAILED, validationState.status)
-        assertEquals("bad", validationState.lastValidation?.summary)
+        assertEquals(
+            NekoMessageKey.WORKFLOW_SERVER_REJECTED,
+            validationState.lastValidation?.summary?.key,
+        )
     }
 
 

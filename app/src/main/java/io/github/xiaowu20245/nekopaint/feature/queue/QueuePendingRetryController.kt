@@ -16,6 +16,14 @@ import kotlinx.coroutines.launch
 sealed interface QueueNotice {
     data class Text(val value: String) : QueueNotice
     data class Message(val value: NekoMessage) : QueueNotice
+    data class Submitted(
+        val promptId: String,
+        val warning: NekoMessage? = null,
+    ) : QueueNotice
+    data class Unknown(
+        val promptId: String,
+        val message: NekoMessage,
+    ) : QueueNotice
 }
 
 internal data class QueuePendingRetryState(
@@ -70,7 +78,7 @@ internal class QueuePendingRetryController(
         scope.launch {
             var notice: QueueNotice? = null
             try {
-                notice = describe(retrySubmission(task))
+                notice = queueRetryNotice(retrySubmission(task))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
@@ -99,20 +107,23 @@ internal class QueuePendingRetryController(
         _state.update { it.copy(notice = null) }
     }
 
-    private fun describe(result: WorkflowSubmitResult): QueueNotice = QueueNotice.Text(
-        when (result) {
-            is WorkflowSubmitResult.Success -> buildString {
-                append("已重新提交，任务 ID：")
-                append(result.promptId.take(8))
-                result.localRecordWarning?.let { warning ->
-                    append("；").append(warning)
-                }
-            }
+}
 
-            is WorkflowSubmitResult.Unknown -> "结果仍未知：${result.message}"
-            WorkflowSubmitResult.NoServer -> "尚未连接服务器"
-            is WorkflowSubmitResult.Validation -> result.summary
-            is WorkflowSubmitResult.Error -> result.message
-        },
+internal fun queueRetryNotice(result: WorkflowSubmitResult): QueueNotice = when (result) {
+    is WorkflowSubmitResult.Success -> QueueNotice.Submitted(
+        promptId = result.promptId,
+        warning = result.localRecordWarning,
     )
+
+    is WorkflowSubmitResult.Unknown -> QueueNotice.Unknown(
+        promptId = result.promptId,
+        message = result.message,
+    )
+
+    WorkflowSubmitResult.NoServer -> QueueNotice.Message(
+        NekoMessage(NekoMessageKey.WORKFLOW_NO_SERVER),
+    )
+
+    is WorkflowSubmitResult.Validation -> QueueNotice.Message(result.summary)
+    is WorkflowSubmitResult.Error -> QueueNotice.Message(result.message)
 }

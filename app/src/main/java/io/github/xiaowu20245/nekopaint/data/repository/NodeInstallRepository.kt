@@ -1,5 +1,8 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoException
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
@@ -163,11 +166,15 @@ class NodeInstallRepository internal constructor(
     ): Result<NodeInstallPlan> =
         withContext(Dispatchers.IO) {
             val profile = activeProfile()
-                ?: return@withContext Result.failure(IllegalStateException("请先配置服务器"))
+                ?: return@withContext Result.failure(
+                    nodeError(NekoMessageKey.NODE_INSTALL_SERVER_REQUIRED),
+                )
             val binding = ServerBindingPolicy.fromProfile(profile)
             val config = ServerBindingPolicy.toConfig(binding)
             val template = deps.templateProvider(templateId)
-                ?: return@withContext Result.failure(IllegalStateException("找不到工作流模板"))
+                ?: return@withContext Result.failure(
+                    nodeError(NekoMessageKey.NODE_INSTALL_TEMPLATE_NOT_FOUND),
+                )
 
             // 刚在详情页完成过 compat 复检时可跳过 object_info 的第二次请求。
             val analyzed = if (reanalyze) {
@@ -186,31 +193,34 @@ class NodeInstallRepository internal constructor(
                 }
                 deps.saveCompatibility(templateId, analyzed, binding)
                 return@withContext Result.failure(
-                    IllegalStateException("节点已经齐全，无需安装"),
+                    nodeError(NekoMessageKey.NODE_INSTALL_ALREADY_COMPLETE),
                 )
             }
             if (missing.isEmpty()) {
                 return@withContext Result.failure(
-                    IllegalStateException("该工作流当前没有记录到缺失节点"),
+                    nodeError(NekoMessageKey.NODE_INSTALL_NO_MISSING),
                 )
             }
 
             val manager = runCatching { deps.apiFactory.createManager(config) }.getOrElse { error ->
                 return@withContext Result.failure(
-                    IllegalStateException(
-                        "服务器配置无效：${error.message ?: "请检查地址"}",
-                        error,
+                    nodeError(
+                        NekoMessageKey.NODE_INSTALL_CONFIG_INVALID,
+                        error.message ?: error.javaClass.simpleName,
                     ),
                 )
             }
             val versionResponse = runCatching { manager.version() }.getOrElse { error ->
                 return@withContext Result.failure(
-                    IllegalStateException("无法连接 ComfyUI-Manager：${error.message ?: "网络错误"}"),
+                    nodeError(
+                        NekoMessageKey.NODE_INSTALL_MANAGER_UNREACHABLE,
+                        error.message ?: error.javaClass.simpleName,
+                    ),
                 )
             }
             if (!versionResponse.isSuccessful) {
                 return@withContext Result.failure(
-                    IllegalStateException(managerUnavailableMessage(versionResponse.code())),
+                    managerUnavailableError(versionResponse.code()),
                 )
             }
             val managerVersion = versionResponse.body()?.string()?.trim().orEmpty()
@@ -245,10 +255,9 @@ class NodeInstallRepository internal constructor(
             }
             if (!plan.canInstall) {
                 return@withContext Result.failure(
-                    IllegalStateException(
-                        "ComfyUI-Manager 的映射里找不到这些节点的安装包：" +
-                            plan.unresolvedNodeTypes.take(8).joinToString("、") +
-                            "。请在主机手动安装对应插件，或更新 Manager 节点列表后重试",
+                    nodeError(
+                        NekoMessageKey.NODE_INSTALL_MAPPING_MISSING_PACKAGES,
+                        plan.unresolvedNodeTypes.take(8).joinToString("、"),
                     ),
                 )
             }
@@ -270,11 +279,13 @@ class NodeInstallRepository internal constructor(
         onProgress: (String) -> Unit,
     ): Result<NodeInstallOutcome> = withContext(Dispatchers.IO) {
         if (plan.packages.isEmpty()) {
-            return@withContext Result.failure(IllegalStateException("安装计划为空"))
+            return@withContext Result.failure(
+                nodeError(NekoMessageKey.NODE_INSTALL_PLAN_EMPTY),
+            )
         }
         val binding = plan.binding
             ?: return@withContext Result.failure(
-                IllegalStateException("安装计划缺少服务器绑定，请重新检查后生成新计划"),
+                nodeError(NekoMessageKey.NODE_INSTALL_PLAN_NO_BINDING_NEW),
             )
         if (!bindingStillActive(binding)) {
             return@withContext Result.failure(serverChangedError())
@@ -282,17 +293,17 @@ class NodeInstallRepository internal constructor(
         val config = ServerBindingPolicy.toConfig(binding)
         val manager = runCatching { deps.apiFactory.createManager(config) }.getOrElse { error ->
             return@withContext Result.failure(
-                IllegalStateException(
-                    "服务器配置无效：${error.message ?: "请检查地址"}",
-                    error,
+                nodeError(
+                    NekoMessageKey.NODE_INSTALL_CONFIG_INVALID,
+                    error.message ?: error.javaClass.simpleName,
                 ),
             )
         }
         val comfyApi = runCatching { deps.apiFactory.create(config) }.getOrElse { error ->
             return@withContext Result.failure(
-                IllegalStateException(
-                    "服务器配置无效：${error.message ?: "请检查地址"}",
-                    error,
+                nodeError(
+                    NekoMessageKey.NODE_INSTALL_CONFIG_INVALID,
+                    error.message ?: error.javaClass.simpleName,
                 ),
             )
         }
@@ -341,9 +352,10 @@ class NodeInstallRepository internal constructor(
         }
         if (queued.isEmpty()) {
             return@withContext Result.failure(
-                IllegalStateException(
-                    "安装请求全部失败：" +
-                        failures.take(3).joinToString("；").ifBlank { "服务器没有响应" },
+                nodeError(
+                    NekoMessageKey.NODE_INSTALL_ALL_FAILED,
+                    failures.take(3).joinToString("；")
+                        .ifBlank { "no response" },
                 ),
             )
         }
@@ -493,7 +505,7 @@ class NodeInstallRepository internal constructor(
         withContext(Dispatchers.IO) {
             val target = binding
                 ?: return@withContext Result.failure(
-                    IllegalStateException("安装计划缺少服务器绑定，请重新检查后重试"),
+                    nodeError(NekoMessageKey.NODE_INSTALL_PLAN_NO_BINDING_RETRY),
                 )
             if (!bindingStillActive(target)) {
                 return@withContext Result.failure(serverChangedError())
@@ -505,7 +517,7 @@ class NodeInstallRepository internal constructor(
                     return@withContext Result.failure(serverChangedError())
                 }
                 return@withContext Result.failure(
-                    IllegalStateException("服务器尚未恢复连接，无法重新检查节点"),
+                    nodeError(NekoMessageKey.NODE_INSTALL_SERVER_NOT_RECONNECTED),
                 )
             }
             if (!bindingStillActive(target)) {
@@ -528,22 +540,23 @@ class NodeInstallRepository internal constructor(
         val response = runCatching { manager.mappings(mode) }.getOrNull()
         return when {
             response == null -> Result.failure(
-                IllegalStateException("无法读取 ComfyUI-Manager 的节点映射（$mode）"),
+                nodeError(NekoMessageKey.NODE_INSTALL_MAPPING_READ_FAILED, mode),
             )
 
             response.isSuccessful -> {
                 response.body()?.let { Result.success(it) }
-                    ?: Result.failure(IllegalStateException("ComfyUI-Manager 返回了空映射"))
+                    ?: Result.failure(nodeError(NekoMessageKey.NODE_INSTALL_MAPPING_EMPTY))
             }
 
             response.code() == 404 -> Result.failure(
-                IllegalStateException("当前 ComfyUI-Manager 不支持节点映射接口，请先更新 Manager"),
+                nodeError(NekoMessageKey.NODE_INSTALL_MAPPING_UNSUPPORTED),
             )
 
             else -> Result.failure(
-                IllegalStateException(
-                    "读取节点映射失败（HTTP ${response.code()}，$mode），" +
-                        "请检查 Manager 状态和主机网络",
+                nodeError(
+                    NekoMessageKey.NODE_INSTALL_MAPPING_HTTP_FAILED,
+                    response.code().toString(),
+                    mode,
                 ),
             )
         }
@@ -621,14 +634,17 @@ class NodeInstallRepository internal constructor(
     private suspend fun bindingStillActive(binding: ServerBinding): Boolean =
         ServerBindingPolicy.matches(activeProfile(), binding)
 
-    private fun serverChangedError(): IllegalStateException =
-        IllegalStateException("服务器已切换，请切回原服务器重新检查后再操作")
+    private fun serverChangedError(): NekoException =
+        nodeError(NekoMessageKey.NODE_INSTALL_SERVER_CHANGED)
 
-    private fun managerUnavailableMessage(code: Int): String = when (code) {
-        401, 403 -> "ComfyUI-Manager 拒绝了访问，请检查主机安全策略或反向代理权限"
-        404 -> "主机没有启用 ComfyUI-Manager。请先在主机安装并启用 Manager，再重启 ComfyUI"
-        else -> "无法访问 ComfyUI-Manager（HTTP $code）"
+    private fun managerUnavailableError(code: Int): NekoException = when (code) {
+        401, 403 -> nodeError(NekoMessageKey.NODE_INSTALL_MANAGER_FORBIDDEN)
+        404 -> nodeError(NekoMessageKey.NODE_INSTALL_MANAGER_DISABLED)
+        else -> nodeError(NekoMessageKey.NODE_INSTALL_MANAGER_HTTP, code.toString())
     }
+
+    private fun nodeError(key: NekoMessageKey, vararg args: String): NekoException =
+        NekoException(NekoMessage(key, args.toList()))
 
     private fun installErrorMessage(code: Int): String = when (code) {
         403 -> "安全策略禁止安装，请在主机把 security_level 调整为 normal 或更宽松并重启 ComfyUI"

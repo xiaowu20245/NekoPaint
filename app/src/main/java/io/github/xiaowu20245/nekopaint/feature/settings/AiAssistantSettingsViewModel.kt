@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantSettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiDisclosurePolicy
@@ -33,9 +36,9 @@ data class AiAssistantFormState(
     val testing: Boolean = false,
     val saving: Boolean = false,
     val testLatencyMs: Long? = null,
-    val testError: String? = null,
-    val error: String? = null,
-    val baseUrlError: String? = null,
+    val testError: NekoMessage? = null,
+    val error: NekoMessage? = null,
+    val baseUrlError: NekoMessage? = null,
     val credentialMessage: String? = null,
     val policyMessage: String? = null,
     val policyBlocked: Boolean = false,
@@ -162,7 +165,9 @@ class AiAssistantSettingsViewModel(
     fun acknowledgeDisclosure() {
         val endpoint = AiEndpointValidator.parse(_uiState.value.baseUrl).getOrNull()
         if (endpoint == null) {
-            _uiState.update { it.copy(error = "请先填写有效的 Base URL") }
+            _uiState.update {
+                it.copy(error = NekoMessage(NekoMessageKey.SETTINGS_AI_BASE_URL_REQUIRED))
+            }
             return
         }
         viewModelScope.launch {
@@ -174,7 +179,11 @@ class AiAssistantSettingsViewModel(
                 }
                 .onFailure { error ->
                     _uiState.update {
-                        it.copy(error = "无法保存数据披露确认：${error.message ?: "请重试"}")
+                        it.copy(
+                            error = error.toSettingsMessage(
+                                NekoMessageKey.SETTINGS_DISCLOSURE_SAVE_FAILED,
+                            ),
+                        )
                     }
                 }
         }
@@ -196,7 +205,11 @@ class AiAssistantSettingsViewModel(
                     }
                     .onFailure { error ->
                         _uiState.update {
-                            it.copy(error = "清除 AI 配置失败：${error.message ?: "请重试"}")
+                            it.copy(
+                                error = error.toSettingsMessage(
+                                    NekoMessageKey.SETTINGS_AI_CLEAR_FAILED,
+                                ),
+                            )
                         }
                     }
             }
@@ -285,9 +298,16 @@ class AiAssistantSettingsViewModel(
                 withDerived(
                     it.copy(
                         error = when {
-                            it.policyBlocked -> it.policyMessage ?: "当前 AI 地址被安全策略阻止"
-                            it.baseUrl.isBlank() -> "请填写 Base URL 和文本模型"
-                            else -> "Base URL 格式无效，请检查地址"
+                            it.policyBlocked -> NekoMessage(
+                                NekoMessageKey.SETTINGS_AI_BLOCKED,
+                                listOf(it.policyMessage ?: "blocked"),
+                            )
+                            it.baseUrl.isBlank() -> NekoMessage(
+                                NekoMessageKey.SETTINGS_AI_BASE_URL_REQUIRED,
+                            )
+                            else -> NekoMessage(
+                                NekoMessageKey.SETTINGS_AI_BASE_URL_INVALID,
+                            )
                         },
                     ),
                 )
@@ -315,7 +335,9 @@ class AiAssistantSettingsViewModel(
                         _uiState.update { withDerived(cleared) }
                         if (test) {
                             _uiState.update {
-                                it.copy(error = "旧 API Key 已清空，请重新输入后再测试")
+                                it.copy(
+                                    error = NekoMessage(NekoMessageKey.SETTINGS_AI_OLD_KEY_CLEARED),
+                                )
                             }
                         } else {
                             prepareRequest(false)
@@ -349,7 +371,9 @@ class AiAssistantSettingsViewModel(
                     _uiState.update { withDerived(cleared) }
                     if (test) {
                         _uiState.update {
-                            it.copy(error = "API Key 已清空，请重新输入后再测试")
+                            it.copy(
+                                error = NekoMessage(NekoMessageKey.SETTINGS_AI_KEY_CLEARED),
+                            )
                         }
                     } else {
                         prepareRequest(false)
@@ -365,7 +389,9 @@ class AiAssistantSettingsViewModel(
             }
 
             AiCredentialState.InvalidEndpoint -> {
-                _uiState.update { it.copy(error = "Base URL 格式无效，请检查地址") }
+                _uiState.update {
+                    it.copy(error = NekoMessage(NekoMessageKey.SETTINGS_AI_BASE_URL_INVALID))
+                }
                 return
             }
         }
@@ -376,7 +402,14 @@ class AiAssistantSettingsViewModel(
             consent = consent,
         )) {
             is AiEndpointPolicyResult.Blocked -> {
-                _uiState.update { it.copy(error = policy.message) }
+                _uiState.update {
+                    it.copy(
+                        error = NekoMessage(
+                            NekoMessageKey.SETTINGS_AI_BLOCKED,
+                            listOf(policy.message),
+                        ),
+                    )
+                }
             }
 
             is AiEndpointPolicyResult.NeedsLocalTrust,
@@ -398,7 +431,9 @@ class AiAssistantSettingsViewModel(
                         }.onFailure { error ->
                             _uiState.update {
                                 it.copy(
-                                    error = "无法保存 HTTP 安全确认：${error.message ?: "请重试"}",
+                                    error = error.toSettingsMessage(
+                                        NekoMessageKey.SETTINGS_HTTP_CONFIRM_SAVE_FAILED,
+                                    ),
                                 )
                             }
                         }
@@ -430,7 +465,9 @@ class AiAssistantSettingsViewModel(
                                 .onFailure { error ->
                                     _uiState.update {
                                         it.copy(
-                                            error = "无法保存数据披露确认：${error.message ?: "请重试"}",
+                                            error = error.toSettingsMessage(
+                                                NekoMessageKey.SETTINGS_DISCLOSURE_SAVE_FAILED,
+                                            ),
                                         )
                                     }
                                 }
@@ -474,7 +511,9 @@ class AiAssistantSettingsViewModel(
                     it.copy(
                         testing = false,
                         testLatencyMs = result.getOrNull(),
-                        testError = result.exceptionOrNull()?.message ?: "连接失败",
+                        testError = result.exceptionOrNull().toSettingsMessage(
+                            NekoMessageKey.SETTINGS_AI_TEST_FAILED,
+                        ),
                     ),
                 )
             }
@@ -496,7 +535,9 @@ class AiAssistantSettingsViewModel(
                     _uiState.update {
                         it.copy(
                             saving = false,
-                            error = throwable.message ?: "保存失败",
+                            error = throwable.toSettingsMessage(
+                                NekoMessageKey.SETTINGS_AI_SAVE_FAILED,
+                            ),
                         )
                     }
                 }
@@ -532,5 +573,15 @@ class AiAssistantSettingsViewModel(
                 )
             }
         }
+    }
+}
+
+private fun Throwable?.toSettingsMessage(fallback: NekoMessageKey): NekoMessage {
+    val throwable = this ?: return NekoMessage(fallback)
+    val typed = throwable.toNekoMessage(NekoMessageKey.GENERIC_ERROR)
+    return if (typed.key != NekoMessageKey.GENERIC_ERROR) {
+        typed
+    } else {
+        NekoMessage(fallback, listOf(throwable.message ?: throwable.javaClass.simpleName))
     }
 }

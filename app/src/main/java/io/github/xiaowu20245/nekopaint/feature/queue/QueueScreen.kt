@@ -117,6 +117,22 @@ fun QueueScreen(
     val localNoticeText = when (val notice = state.localNotice) {
         is QueueNotice.Text -> notice.value
         is QueueNotice.Message -> notice.value.asString()
+        is QueueNotice.Submitted -> buildString {
+            append(
+                stringResource(
+                    R.string.queue_retry_submitted,
+                    notice.promptId.take(8),
+                ),
+            )
+            notice.warning?.let { warning ->
+                append("；").append(warning.asString())
+            }
+        }
+        is QueueNotice.Unknown -> stringResource(
+            R.string.queue_retry_unknown,
+            notice.message.asString(),
+            notice.promptId.take(8),
+        )
         null -> null
     }
     LaunchedEffect(localNoticeText) {

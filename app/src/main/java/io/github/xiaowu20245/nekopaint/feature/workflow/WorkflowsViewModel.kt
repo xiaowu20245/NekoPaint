@@ -8,6 +8,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
@@ -41,7 +44,7 @@ data class WorkflowsUiState(
     val runningTemplateId: String? = null,
     val actionNotice: WorkflowActionNotice? = null,
     @param:StringRes val errorRes: Int? = null,
-    val errorDetail: String? = null,
+    val errorDetail: NekoMessage? = null,
     val importedTemplateId: String? = null,
 ) {
     val filteredTemplates: List<WorkflowTemplate>
@@ -51,6 +54,23 @@ data class WorkflowsUiState(
             templates.filter { it.compatibility?.mode == modeFilter }
         }
 }
+
+internal fun SubmissionOperationState.operationErrorRes(): Int? =
+    if (status == OperationStatus.FAILED &&
+        message?.key == NekoMessageKey.WORKFLOW_NO_SERVER
+    ) {
+        R.string.workflow_submit_no_server
+    } else {
+        null
+    }
+
+internal fun SubmissionOperationState.operationErrorDetail(): NekoMessage? =
+    localRecordWarning ?: message?.takeIf {
+        failed > 0 ||
+            unknown > 0 ||
+            skipped > 0 ||
+            status == OperationStatus.UNKNOWN
+    }
 
 sealed interface WorkflowActionNotice {
     data class Renamed(val name: String) : WorkflowActionNotice
@@ -171,9 +191,17 @@ class WorkflowsViewModel(
             )
             started.getOrElse { error ->
                 _uiState.update {
+                    val typed = error.toNekoMessage(NekoMessageKey.GENERIC_ERROR)
                     it.copy(
                         runningTemplateId = null,
-                        errorDetail = error.message ?: "无法启动快捷运行",
+                        errorDetail = if (typed.key == NekoMessageKey.GENERIC_ERROR) {
+                            NekoMessage(
+                                NekoMessageKey.WORKFLOW_QUICK_RUN_START_FAILED,
+                                listOf(error.message ?: error.javaClass.simpleName),
+                            )
+                        } else {
+                            typed
+                        },
                     )
                 }
                 return@launch
@@ -212,20 +240,8 @@ class WorkflowsViewModel(
                 } else {
                     it.actionNotice
                 },
-                errorRes = if (operation.status == OperationStatus.FAILED &&
-                    operation.message?.contains("服务器") == true
-                ) {
-                    R.string.workflow_submit_no_server
-                } else {
-                    null
-                },
-                errorDetail = operation.localRecordWarning ?: operation.message
-                    ?.takeIf {
-                        operation.failed > 0 ||
-                            operation.unknown > 0 ||
-                            operation.skipped > 0 ||
-                            operation.status == OperationStatus.UNKNOWN
-                    },
+                errorRes = operation.operationErrorRes(),
+                errorDetail = operation.operationErrorDetail(),
             )
         }
         if (operation.success > 0) {
@@ -320,7 +336,10 @@ class WorkflowsViewModel(
                     _uiState.update {
                         it.copy(
                             busyTemplateId = null,
-                            errorDetail = throwable.message ?: "重命名失败",
+                            errorDetail = NekoMessage(
+                                NekoMessageKey.WORKFLOW_RENAME_FAILED,
+                                listOf(throwable.message ?: throwable.javaClass.simpleName),
+                            ),
                         )
                     }
                 }
@@ -351,7 +370,10 @@ class WorkflowsViewModel(
                     _uiState.update {
                         it.copy(
                             busyTemplateId = null,
-                            errorDetail = throwable.message ?: "复制失败",
+                            errorDetail = NekoMessage(
+                                NekoMessageKey.WORKFLOW_COPY_FAILED,
+                                listOf(throwable.message ?: throwable.javaClass.simpleName),
+                            ),
                         )
                     }
                 }
@@ -382,7 +404,10 @@ class WorkflowsViewModel(
                     _uiState.update {
                         it.copy(
                             busyTemplateId = null,
-                            errorDetail = throwable.message ?: "删除失败",
+                            errorDetail = NekoMessage(
+                                NekoMessageKey.WORKFLOW_DELETE_FAILED,
+                                listOf(throwable.message ?: throwable.javaClass.simpleName),
+                            ),
                         )
                     }
                 }

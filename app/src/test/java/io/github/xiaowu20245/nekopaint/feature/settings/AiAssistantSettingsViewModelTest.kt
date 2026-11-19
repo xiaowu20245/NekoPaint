@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.settings
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantSettingsStore
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
@@ -133,7 +134,8 @@ class AiAssistantSettingsViewModelTest {
 
         assertNull(store.saved)
         assertEquals(0, client.calls)
-        assertTrue(vm.uiState.value.error.orEmpty().contains("公网"))
+        assertEquals(NekoMessageKey.SETTINGS_AI_BLOCKED, vm.uiState.value.error?.key)
+        assertTrue(vm.uiState.value.error?.args?.any { it.contains("公网") } == true)
     }
 
     @Test
@@ -158,7 +160,10 @@ class AiAssistantSettingsViewModelTest {
         vm.confirmPendingAction()
         advanceUntilIdle()
 
-        assertTrue(vm.uiState.value.error.orEmpty().contains("无法保存"))
+        assertEquals(
+            NekoMessageKey.SETTINGS_HTTP_CONFIRM_SAVE_FAILED,
+            vm.uiState.value.error?.key,
+        )
         assertNull(store.saved)
         assertEquals(0, client.calls)
     }
@@ -178,7 +183,10 @@ class AiAssistantSettingsViewModelTest {
         vm.acknowledgeDisclosure()
         advanceUntilIdle()
 
-        assertTrue(vm.uiState.value.error.orEmpty().contains("无法保存数据披露确认"))
+        assertEquals(
+            NekoMessageKey.SETTINGS_DISCLOSURE_SAVE_FAILED,
+            vm.uiState.value.error?.key,
+        )
         assertFalse(vm.uiState.value.disclosureAcknowledged)
     }
 
@@ -275,7 +283,7 @@ class AiAssistantSettingsViewModelTest {
         vm.confirmPendingAction()
         advanceUntilIdle()
 
-        assertTrue(vm.uiState.value.error.orEmpty().contains("清除 AI 配置失败"))
+        assertEquals(NekoMessageKey.SETTINGS_AI_CLEAR_FAILED, vm.uiState.value.error?.key)
         assertEquals("sk-test", vm.uiState.value.apiKey)
     }
 

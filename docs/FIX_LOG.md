@@ -1038,3 +1038,34 @@ git diff --check
   - 验证：**135 suites / 764 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 96 节 R10-01、第 97 节 R10-02 均已修复；第 98 节复审 **APPROVED**。
 - **提交**：3B-1 已提交为 `refactor: 建立用户文案错误模型`（`bbe1300`）。
+
+### 47. 第三轮 3B-2：工作流/Chat/设置文案迁移（CR-035 下半）
+
+- **WorkflowSubmitResult**
+  - `Success.localRecordWarning`、`Validation.summary`、`Unknown.message`、`Error.message` 全部改为 `NekoMessage`；`NoServer` 保持 object，由消费方映射 `WORKFLOW_NO_SERVER`。
+  - `WorkflowRepository.resubmit/retryUnknown/submitSelected` 的生产者全部改为 typed key：记录无快照、模板缺失、参数变化、任务记录缺失/被接管/状态不可重试、模板待修复、JSON 缺失、候选/标量参数、应用参数、客户端标识、本地记录、网络请求、提交未知、空响应、HTTP 拒绝、旧记录清理警告。
+  - `WorkflowImportResult.Error.message` 同步改为 `NekoMessage`；文件过大/环境不支持/读取失败/解析失败分别映射。
+  - `TaskRecord.errorMessage` 仍为持久化字符串字段；服务器校验失败时保留服务器原始摘要，网络创建失败时保留技术异常摘要，不写入中文 UI 文案。
+- **六个消费方**
+  - `OperationCenter`：`message/localRecordWarning` 改为 `NekoMessage?`；取消/异常/无服务器使用稳定 key。
+  - `WorkflowDetailOperationPolicy`：`SubmitErrorUi.message` 改为 `NekoMessage?`，新增 `extraMessages` 与结构化 `BatchSubmitStats`；`WorkflowDetailScreen` 通过 `asString()`/新增 `workflow_batch_stats` 渲染，不再在 policy 内拼接中文。
+  - `WorkflowsViewModel`：`errorDetail` 改为 `NekoMessage?`；新增 `operationErrorRes()`/`operationErrorDetail()` 纯函数；快捷运行/重命名/复制/删除错误 typed。
+  - `ChatTaskAction`：注入 `NekoMessageFormatter`，`WorkflowSubmitResult` 提交/重试/批量的成功警告、校验、错误、未知、无服务器均经统一映射；节点安装失败改为 typed。
+  - `HistoryViewModel`：`HistoryNotice.Success.warning`、`Error.message` typed；新增 `Unknown(promptId, message)` 与 `historyNoticeFor()`，保留任务 ID 提示。
+  - `QueuePendingRetryController`：新增 `QueueNotice.Submitted/Unknown` 与 `queueRetryNotice()`；Queue 页用字符串资源渲染任务 ID/警告/未知提示。
+- **设置与节点安装**
+  - `AiAssistantSettingsPolicy.baseUrlError` 与 `AiAssistantSettingsViewModel.error/testError/baseUrlError` 改为 `NekoMessage?`；Base URL、披露/HTTP 确认、清 Key、连接测试、保存、清除配置均映射 key。
+  - `NekoSettingsViewModel.error` 改为 `NekoMessage?`。
+  - `NodeInstallRepository` 的错误路径改为 `NekoException`：配置/模板/已齐全/无缺失/Manager 连接/映射读取/计划/服务器切换/重连/包映射/全失败等。
+  - `WorkflowDetailViewModel` 的 `NodeInstallUiState.error`、`imageUploadError`、`repairError`、`MaskExportState.error` 改为 `NekoMessage?`；MaskEditorDialog/详情页统一 `asString()`。
+  - `AppContainer` 暴露 `appContext`，Chat 工厂注入 `AndroidNekoMessageFormatter`。
+- **Allowlist 与豁免**
+  - 已迁移 CR-021～041 触及的工作流提交/批量操作/历史重提/队列重试/设置错误/节点安装错误，以及 `WorkflowSubmitResult` 四字段和全部六个消费方。
+  - 豁免：系统提示词/工具描述、日志、内部异常技术细节、测试数据；`NodeInstallOutcome.summary()` 与安装进度文本（结构化运行状态，非错误）；设置确认弹窗文案；`TaskRecord.errorMessage` 内服务器原始详情。
+- **测试**
+  - 新增 `WorkflowSubmitResultMapperTest` 3 项：成功字段、校验摘要/节点错误、未知/错误 typed message。
+  - 新增 `WorkflowSubmitResultConsumerTest` 32 项：OperationCenter、WorkflowDetailOperationPolicy、WorkflowsViewModel、ChatTaskAction、HistoryViewModel、QueuePendingRetryController 各覆盖 success/validation/error/unknown/NoServer；ChatTaskAction 另加单次 retry 的 NoServer/Unknown typed 断言。
+  - `WorkflowSubmitPersistenceTest` 补 2 项：400 无 `error.message` / 空白 message 时 `TaskRecord.errorMessage` 回退到可读 `HTTP 400`，不再写入裸 key。
+  - 适配 `OperationCenterTest`、`WorkflowSubmitPersistenceTest`、`NodeInstallRepositoryTest`、`ChatTaskActionBatchRetryTest`、`QueuePendingRetryControllerTest`、`AiAssistantSettingsViewModelTest`、`WorkflowDetailOperationPolicyTest` 的 typed 断言；未删除既有测试。
+  - 验证：**137 suites / 801 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **复审**：第 99 节 R11-01～R11-03 均已修复；第 100 节复审 **APPROVED**。

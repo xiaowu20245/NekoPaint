@@ -72,7 +72,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
 import coil3.compose.AsyncImage
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.data.repository.ImageDimensionReader
 import kotlinx.coroutines.delay
 import kotlin.math.min
@@ -86,7 +88,7 @@ import kotlin.math.min
 fun MaskEditorDialog(
     images: List<HistoryImage>,
     uploading: Boolean,
-    uploadError: String?,
+    uploadError: NekoMessage?,
     dimensionReader: ImageDimensionReader? = null,
     onDismiss: () -> Unit,
     onUpload: (List<MaskStroke>, IntSize) -> Unit,
@@ -488,7 +490,7 @@ private fun MaskTools(
     onClear: () -> Unit,
     uploading: Boolean,
     canUpload: Boolean,
-    uploadError: String?,
+    uploadError: NekoMessage?,
     onPickAnother: () -> Unit,
     onUpload: () -> Unit,
 ) {
@@ -562,7 +564,7 @@ private fun MaskTools(
         }
         if (uploadError != null) {
             Text(
-                text = stringResource(R.string.workflow_image_upload_failed, uploadError),
+                text = uploadError.asString(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )

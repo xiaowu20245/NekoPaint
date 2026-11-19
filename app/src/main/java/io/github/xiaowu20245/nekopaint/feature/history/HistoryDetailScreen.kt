@@ -162,7 +162,7 @@ fun HistoryDetailScreen(
                 stringResource(
                     R.string.history_resubmit_success_warning,
                     notice.promptId.take(8),
-                    notice.warning,
+                    notice.warning.asString(),
                 )
             } else {
                 stringResource(
@@ -172,9 +172,12 @@ fun HistoryDetailScreen(
             }
 
             HistoryNotice.NoServer -> stringResource(R.string.workflow_submit_no_server)
-            is HistoryNotice.Error -> stringResource(
-                R.string.workflow_submit_failed,
-                notice.message,
+            is HistoryNotice.Error -> notice.message.asString()
+
+            is HistoryNotice.Unknown -> stringResource(
+                R.string.history_resubmit_unknown,
+                notice.message.asString(),
+                notice.promptId.take(8),
             )
         }
     }

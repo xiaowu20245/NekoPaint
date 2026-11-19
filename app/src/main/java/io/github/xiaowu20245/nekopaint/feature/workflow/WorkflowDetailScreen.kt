@@ -97,6 +97,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
@@ -235,9 +237,7 @@ fun WorkflowDetailScreen(
     val uploadedImageMessage = state.uploadedImageName?.let { fileName ->
         stringResource(R.string.workflow_image_uploaded, fileName)
     }
-    val imageUploadErrorMessage = state.imageUploadError?.let { message ->
-        stringResource(R.string.workflow_image_upload_failed, message)
-    }
+    val imageUploadErrorMessage = state.imageUploadError?.asString()
     LaunchedEffect(uploadedImageMessage) {
         if (uploadedImageMessage != null) {
             if (maskEditorCandidateId != null) {
@@ -352,10 +352,7 @@ fun WorkflowDetailScreen(
                                 )
                                 state.repairError?.let { message ->
                                     Text(
-                                        text = stringResource(
-                                            R.string.workflow_repair_failed,
-                                            message,
-                                        ),
+                                        text = message.asString(),
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
@@ -2107,11 +2104,38 @@ private fun SubmitErrorCard(
         ) {
             Text(
                 text = error.messageRes?.let { stringResource(it) }
-                    ?: error.message
-                    ?: stringResource(R.string.workflow_submit_failed, "未知错误"),
+                    ?: error.message?.asString()
+                    ?: stringResource(R.string.error_workflow_failed),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
+            error.batchStats?.let { stats ->
+                Text(
+                    text = stringResource(
+                        R.string.workflow_batch_stats,
+                        stats.success,
+                        stats.failed,
+                        stats.unknown,
+                        stats.skipped,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                if (stats.unknownOutcome) {
+                    Text(
+                        text = stringResource(R.string.error_workflow_unknown_confirm),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+            error.extraMessages.forEach { message ->
+                Text(
+                    text = message.asString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
             error.nodeErrors.forEach { nodeError ->
                 Text(
                     text = if (nodeError.inputName != null) {
@@ -2246,13 +2270,13 @@ private fun NodeInstallDialog(
 
                 state.error?.let { error ->
                     Text(
-                        text = error,
+                        text = error.asString(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                     if (state.plan == null &&
                         !state.installing &&
-                        !error.contains("映射里找不到")
+                        error.key != NekoMessageKey.NODE_INSTALL_MAPPING_MISSING_PACKAGES
                     ) {
                         Text(
                             text = stringResource(R.string.workflow_install_prerequisites),

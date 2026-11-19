@@ -56,6 +56,8 @@ private const val MANAGER_READ_TIMEOUT_SECONDS = 60L
  */
 class AppContainer(context: Context) {
 
+    val appContext: Context = context.applicationContext
+
     // 应用级协程作用域：聊天请求在离开页面后仍继续完成并写盘。
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // 批量提交/安装等长操作使用独立作用域，异常不改变聊天等共享 appScope 语义。

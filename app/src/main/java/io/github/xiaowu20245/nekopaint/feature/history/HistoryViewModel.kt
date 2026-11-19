@@ -44,10 +44,25 @@ import kotlinx.coroutines.launch
 sealed interface HistoryNotice {
     data class Success(
         val promptId: String,
-        val warning: String? = null,
+        val warning: NekoMessage? = null,
     ) : HistoryNotice
     data object NoServer : HistoryNotice
-    data class Error(val message: String) : HistoryNotice
+    data class Error(val message: NekoMessage) : HistoryNotice
+    data class Unknown(
+        val promptId: String,
+        val message: NekoMessage,
+    ) : HistoryNotice
+}
+
+internal fun historyNoticeFor(result: WorkflowSubmitResult): HistoryNotice = when (result) {
+    is WorkflowSubmitResult.Success -> HistoryNotice.Success(
+        promptId = result.promptId,
+        warning = result.localRecordWarning,
+    )
+    WorkflowSubmitResult.NoServer -> HistoryNotice.NoServer
+    is WorkflowSubmitResult.Validation -> HistoryNotice.Error(result.summary)
+    is WorkflowSubmitResult.Unknown -> HistoryNotice.Unknown(result.promptId, result.message)
+    is WorkflowSubmitResult.Error -> HistoryNotice.Error(result.message)
 }
 
 sealed interface SaveNotice {
@@ -303,18 +318,7 @@ class HistoryViewModel(
         resubmitState.value = ResubmitState(submitting = true)
         viewModelScope.launch {
             val result = workflowRepository.resubmit(task)
-            val notice = when (result) {
-                is WorkflowSubmitResult.Success -> HistoryNotice.Success(
-                    promptId = result.promptId,
-                    warning = result.localRecordWarning,
-                )
-                is WorkflowSubmitResult.NoServer -> HistoryNotice.NoServer
-                is WorkflowSubmitResult.Validation -> HistoryNotice.Error(result.summary)
-                is WorkflowSubmitResult.Unknown -> HistoryNotice.Error(
-                    "${result.message}（结果未知，任务 ID ${result.promptId.take(8)}）",
-                )
-                is WorkflowSubmitResult.Error -> HistoryNotice.Error(result.message)
-            }
+            val notice = historyNoticeFor(result)
             resubmitState.value = ResubmitState(submitting = false, notice = notice)
             if (result is WorkflowSubmitResult.Success ||
                 result is WorkflowSubmitResult.Unknown

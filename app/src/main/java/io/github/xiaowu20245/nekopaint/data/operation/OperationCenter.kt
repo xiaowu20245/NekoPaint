@@ -1,5 +1,8 @@
 package io.github.xiaowu20245.nekopaint.data.operation
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoException
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
@@ -41,8 +44,8 @@ data class SubmissionOperationState(
     val lastValidation: WorkflowSubmitResult.Validation? = null,
     val lastTemplate: WorkflowTemplate? = null,
     val executionValuesPersisted: Boolean? = null,
-    val localRecordWarning: String? = null,
-    val message: String? = null,
+    val localRecordWarning: NekoMessage? = null,
+    val message: NekoMessage? = null,
     val updatedAt: Long = 0L,
 ) {
     val isTerminal: Boolean
@@ -81,7 +84,9 @@ class OperationCenter(
                 it.templateId == template.id && it.status == OperationStatus.RUNNING
             }
             if (active != null) {
-                return Result.failure(IllegalStateException("该工作流已有提交任务在执行"))
+                return Result.failure(
+                    NekoException(NekoMessage(NekoMessageKey.OPERATION_ALREADY_RUNNING)),
+                )
             }
             val initial = SubmissionOperationState(
                 operationId = operationId,
@@ -116,7 +121,7 @@ class OperationCenter(
                 operationId to current.copy(
                     status = OperationStatus.CANCELLED,
                     skipped = current.total - current.processed,
-                    message = "操作已取消",
+                    message = NekoMessage(NekoMessageKey.OPERATION_CANCELLED),
                     updatedAt = now(),
                 )
                 )
@@ -142,8 +147,8 @@ class OperationCenter(
         var lastValidation: WorkflowSubmitResult.Validation? = null
         var lastTemplate: WorkflowTemplate? = null
         var executionValuesPersisted: Boolean? = null
-        var localRecordWarning: String? = null
-        var message: String? = null
+        var localRecordWarning: NekoMessage? = null
+        var message: NekoMessage? = null
         var runSucceeded = false
         try {
             for (index in 0 until total) {
@@ -168,14 +173,14 @@ class OperationCenter(
                     WorkflowSubmitResult.NoServer -> {
                         processed += 1
                         failed += 1
-                        message = "提交失败：没有可用服务器"
+                        message = NekoMessage(NekoMessageKey.WORKFLOW_NO_SERVER)
                         break
                     }
 
                     is WorkflowSubmitResult.Validation -> {
                         processed += 1
                         failed += 1
-                        message = "提交校验失败：${result.summary}"
+                        message = result.summary
                         lastValidation = result
                         break
                     }
@@ -221,7 +226,7 @@ class OperationCenter(
                     lastSuccess = lastSuccess,
                     lastTemplate = lastTemplate,
                     localRecordWarning = localRecordWarning,
-                    message = "操作已取消",
+                    message = NekoMessage(NekoMessageKey.OPERATION_CANCELLED),
                     updatedAt = now(),
                 ),
             )
@@ -249,7 +254,10 @@ class OperationCenter(
                     lastTemplate = lastTemplate,
                     executionValuesPersisted = executionValuesPersisted,
                     localRecordWarning = localRecordWarning,
-                    message = throwable.message ?: "提交任务异常",
+                    message = NekoMessage(
+                        NekoMessageKey.OPERATION_EXCEPTION,
+                        listOf(throwable.message ?: throwable.javaClass.simpleName),
+                    ),
                     updatedAt = now(),
                 ),
             )

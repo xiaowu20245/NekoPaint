@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 
 @Composable
 fun NekoSettingsScreen() {
@@ -52,9 +53,10 @@ fun NekoSettingsScreen() {
             viewModel.consumeSaved()
         }
     }
-    LaunchedEffect(state.error) {
-        state.error?.let { message ->
-            snackbarHostState.showSnackbar(message)
+    val errorText = state.error?.asString()
+    LaunchedEffect(errorText) {
+        if (errorText != null) {
+            snackbarHostState.showSnackbar(errorText)
             viewModel.consumeError()
         }
     }

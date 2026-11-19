@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.queue
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStatus
@@ -27,7 +28,9 @@ class QueuePendingRetryControllerTest {
                 WorkflowSubmitResult.Success(
                     promptId = "new-task-id-123",
                     queueNumber = 1,
-                    localRecordWarning = "本地存在一条旧请求记录",
+                    localRecordWarning = NekoMessage(
+                        NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED,
+                    ),
                 )
             },
             refresh = {},
@@ -35,9 +38,12 @@ class QueuePendingRetryControllerTest {
 
         controller.retry(task())
 
-        val notice = controller.state.value.notice as QueueNotice.Text
-        assertTrue(notice.value.contains("new-task"))
-        assertTrue(notice.value.contains("旧请求记录"))
+        val notice = controller.state.value.notice as QueueNotice.Submitted
+        assertEquals("new-task-id-123", notice.promptId)
+        assertEquals(
+            NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED,
+            notice.warning?.key,
+        )
         assertNull(controller.state.value.retryingPromptId)
     }
 
@@ -46,15 +52,19 @@ class QueuePendingRetryControllerTest {
         val controller = QueuePendingRetryController(
             scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler)),
             retrySubmission = {
-                WorkflowSubmitResult.Unknown("p1", "网络断开")
+                WorkflowSubmitResult.Unknown(
+                    "p1",
+                    NekoMessage(NekoMessageKey.WORKFLOW_SUBMIT_UNKNOWN, listOf("网络断开")),
+                )
             },
             refresh = {},
         )
 
         controller.retry(task())
 
-        val notice = controller.state.value.notice as QueueNotice.Text
-        assertTrue(notice.value.contains("结果仍未知"))
+        val notice = controller.state.value.notice as QueueNotice.Unknown
+        assertEquals("p1", notice.promptId)
+        assertEquals(NekoMessageKey.WORKFLOW_SUBMIT_UNKNOWN, notice.message.key)
         assertNull(controller.state.value.retryingPromptId)
     }
 

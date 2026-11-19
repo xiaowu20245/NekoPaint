@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.workflow
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.data.operation.OperationStatus
 import io.github.xiaowu20245.nekopaint.data.operation.SubmissionOperationState
 
@@ -51,21 +53,16 @@ internal object WorkflowDetailOperationPolicy {
                     saved = operation.executionValuesPersisted != false,
                     fieldErrors = fieldErrors,
                     submitError = SubmitErrorUi(
-                        message = buildString {
-                            append(operation.message ?: "部分任务提交失败")
-                            append("（成功 ${operation.success}，失败 ${operation.failed}")
-                            if (operation.unknown > 0) {
-                                append("，结果未知 ${operation.unknown}")
-                            }
-                            append("，跳过 ${operation.skipped}）")
-                            if (operation.executionValuesPersisted == false) {
-                                append("；本地执行参数保存失败")
-                            }
-                            operation.warningText()?.let { warning ->
-                                append("；").append(warning)
-                            }
-                        },
+                        message = operation.message
+                            ?: NekoMessage(NekoMessageKey.OPERATION_PARTIAL_FAILED),
+                        extraMessages = operation.extraMessages(),
                         nodeErrors = validation?.nodeErrors.orEmpty(),
+                        batchStats = BatchSubmitStats(
+                            success = operation.success,
+                            failed = operation.failed,
+                            unknown = operation.unknown,
+                            skipped = operation.skipped,
+                        ),
                     ),
                 ),
                 refreshCompatibility = validation != null,
@@ -77,21 +74,18 @@ internal object WorkflowDetailOperationPolicy {
                 submitting = false,
                 submittedBatchCount = operation.success,
                 submitError = SubmitErrorUi(
-                    message = buildString {
-                        append(operation.message ?: "提交结果未知")
-                        append("（成功 ${operation.success}")
-                        if (operation.unknown > 0) {
-                            append("，结果未知 ${operation.unknown}")
-                        }
-                        if (operation.failed > 0) {
-                            append("，失败 ${operation.failed}")
-                        }
-                        append("，跳过 ${operation.skipped}）")
-                        operation.warningText()?.let { warning ->
-                            append("；").append(warning)
-                        }
-                        append("；服务器可能已接收任务，请先在任务列表确认，避免重复提交")
-                    },
+                    message = operation.message
+                        ?: NekoMessage(NekoMessageKey.WORKFLOW_UNKNOWN_RESULT),
+                    extraMessages = operation.extraMessages() + listOf(
+                        NekoMessage(NekoMessageKey.WORKFLOW_UNKNOWN_CONFIRM),
+                    ),
+                    batchStats = BatchSubmitStats(
+                        success = operation.success,
+                        failed = operation.failed,
+                        unknown = operation.unknown,
+                        skipped = operation.skipped,
+                        unknownOutcome = true,
+                    ),
                 ),
             ),
         )
@@ -107,7 +101,8 @@ internal object WorkflowDetailOperationPolicy {
                     submittedBatchCount = operation.success,
                     fieldErrors = fieldErrors,
                     submitError = SubmitErrorUi(
-                        message = operation.message ?: "提交失败",
+                        message = operation.message
+                            ?: NekoMessage(NekoMessageKey.WORKFLOW_FAILED),
                         nodeErrors = validation?.nodeErrors.orEmpty(),
                     ),
                 ),
@@ -116,20 +111,22 @@ internal object WorkflowDetailOperationPolicy {
         }
     }
 
-    private fun SubmissionOperationState.warningText(): String? =
+    private fun SubmissionOperationState.warningMessage(): NekoMessage? =
         localRecordWarning ?: lastSuccess?.localRecordWarning
 
-    private fun SubmissionOperationState.successSubmitError(): SubmitErrorUi? {
-        val messages = buildList {
-            if (executionValuesPersisted == false) {
-                add("任务已提交，但本地执行参数保存失败")
-            }
-            warningText()?.let(::add)
+    private fun SubmissionOperationState.extraMessages(): List<NekoMessage> = buildList {
+        if (executionValuesPersisted == false) {
+            add(NekoMessage(NekoMessageKey.WORKFLOW_EXECUTION_VALUES_FAILED))
         }
+        warningMessage()?.let(::add)
+    }
+
+    private fun SubmissionOperationState.successSubmitError(): SubmitErrorUi? {
+        val messages = extraMessages()
         return if (messages.isEmpty()) {
             null
         } else {
-            SubmitErrorUi(message = messages.joinToString("；"))
+            SubmitErrorUi(extraMessages = messages)
         }
     }
 

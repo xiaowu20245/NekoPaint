@@ -1,5 +1,9 @@
 package io.github.xiaowu20245.nekopaint.feature.chat
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageFormatter
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPackage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
@@ -328,6 +332,7 @@ private const val MAX_BATCH_TASKS = 10
 class ChatTaskActionHandler(
     private val dataSource: ChatTaskActionDataSource,
     private val nodeInstaller: NodeInstaller? = null,
+    private val messageFormatter: NekoMessageFormatter = NekoMessageFormatter { it.key.name },
 ) : ChatActionExecutor {
 
     fun propose(action: ChatTaskAction, promptId: String): Result<ChatActionProposal> {
@@ -625,7 +630,9 @@ class ChatTaskActionHandler(
             onSuccess = { outcome -> Result.success(outcome.summary()) },
             onFailure = { error ->
                 Result.failure(
-                    IllegalStateException(error.message ?: "节点安装失败"),
+                    IllegalStateException(
+                        error.toUserMessage(NekoMessageKey.NODE_INSTALL_FAILED),
+                    ),
                 )
             },
         )
@@ -690,27 +697,34 @@ class ChatTaskActionHandler(
                     buildString {
                         append("已重新提交「${proposal.title}」，新任务 ID：")
                         append(result.promptId.take(8))
-                        result.localRecordWarning?.let { append("；").append(it) }
+                        result.localRecordWarning?.let {
+                            append("；").append(messageFormatter.format(it))
+                        }
                     },
                 )
             }
 
             WorkflowSubmitResult.NoServer -> Result.failure(
-                IllegalStateException("尚未连接服务器"),
+                IllegalStateException(
+                    messageFormatter.format(
+                        NekoMessage(NekoMessageKey.WORKFLOW_NO_SERVER),
+                    ),
+                ),
             )
 
             is WorkflowSubmitResult.Validation -> Result.failure(
-                IllegalStateException(result.summary),
+                IllegalStateException(messageFormatter.format(result.summary)),
             )
 
             is WorkflowSubmitResult.Unknown -> Result.failure(
                 IllegalStateException(
-                    "${result.message}（任务 ID ${shortId(result.promptId)}，结果未知，请先在队列确认）",
+                    "${messageFormatter.format(result.message)}" +
+                        "（任务 ID ${shortId(result.promptId)}，请先在队列确认）",
                 ),
             )
 
             is WorkflowSubmitResult.Error -> Result.failure(
-                IllegalStateException(result.message),
+                IllegalStateException(messageFormatter.format(result.message)),
             )
         }
     }
@@ -763,21 +777,26 @@ class ChatTaskActionHandler(
                 is WorkflowSubmitResult.Success -> {
                     succeeded++
                     result.localRecordWarning?.let { warning ->
-                        warnings += "${target.title}：$warning"
+                        warnings += "${target.title}：${messageFormatter.format(warning)}"
                     }
                 }
 
-                WorkflowSubmitResult.NoServer -> errors += "未连接服务器"
+                WorkflowSubmitResult.NoServer -> {
+                    errors += messageFormatter.format(
+                        NekoMessage(NekoMessageKey.WORKFLOW_NO_SERVER),
+                    )
+                }
                 is WorkflowSubmitResult.Validation -> {
-                    errors += "${target.title}：${result.summary}"
+                    errors += "${target.title}：${messageFormatter.format(result.summary)}"
                 }
 
                 is WorkflowSubmitResult.Unknown -> {
-                    errors += "${target.title}：结果未知（${shortId(result.promptId)}）"
+                    errors += "${target.title}：${messageFormatter.format(result.message)}" +
+                        "（任务 ID ${shortId(result.promptId)}，请先在队列确认）"
                 }
 
                 is WorkflowSubmitResult.Error -> {
-                    errors += "${target.title}：${result.message}"
+                    errors += "${target.title}：${messageFormatter.format(result.message)}"
                 }
             }
         }
@@ -846,27 +865,34 @@ class ChatTaskActionHandler(
                     buildString {
                         append("已提交「${template.name}」，任务 ID：")
                         append(result.promptId.take(8))
-                        result.localRecordWarning?.let { append("；").append(it) }
+                        result.localRecordWarning?.let {
+                            append("；").append(messageFormatter.format(it))
+                        }
                     },
                 )
             }
 
             WorkflowSubmitResult.NoServer -> Result.failure(
-                IllegalStateException("尚未连接服务器"),
+                IllegalStateException(
+                    messageFormatter.format(
+                        NekoMessage(NekoMessageKey.WORKFLOW_NO_SERVER),
+                    ),
+                ),
             )
 
             is WorkflowSubmitResult.Validation -> Result.failure(
-                IllegalStateException(result.summary),
+                IllegalStateException(messageFormatter.format(result.summary)),
             )
 
             is WorkflowSubmitResult.Unknown -> Result.failure(
                 IllegalStateException(
-                    "${result.message}（任务 ID ${shortId(result.promptId)}，结果未知，请先在队列确认）",
+                    "${messageFormatter.format(result.message)}" +
+                        "（任务 ID ${shortId(result.promptId)}，请先在队列确认）",
                 ),
             )
 
             is WorkflowSubmitResult.Error -> Result.failure(
-                IllegalStateException(result.message),
+                IllegalStateException(messageFormatter.format(result.message)),
             )
         }
     }
@@ -906,6 +932,19 @@ class ChatTaskActionHandler(
             )
         }
         return Result.success("已保存预设「$trimmed」")
+    }
+
+    private fun Throwable.toUserMessage(fallback: NekoMessageKey): String {
+        val typed = toNekoMessage(NekoMessageKey.GENERIC_ERROR)
+        val message = if (typed.key != NekoMessageKey.GENERIC_ERROR) {
+            typed
+        } else {
+            NekoMessage(
+                fallback,
+                listOf(message ?: javaClass.simpleName),
+            )
+        }
+        return messageFormatter.format(message)
     }
 
     private suspend fun prepareSubmission(

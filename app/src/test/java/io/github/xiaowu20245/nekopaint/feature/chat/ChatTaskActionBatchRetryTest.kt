@@ -1,5 +1,8 @@
 package io.github.xiaowu20245.nekopaint.feature.chat
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageFormatter
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
@@ -33,10 +36,13 @@ class ChatTaskActionBatchRetryTest {
             result = WorkflowSubmitResult.Success(
                 promptId = "new-id",
                 queueNumber = 1,
-                localRecordWarning = "本地存在一条旧请求记录",
+                localRecordWarning = NekoMessage(NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED),
             ),
         )
-        val handler = ChatTaskActionHandler(dataSource)
+        val handler = ChatTaskActionHandler(
+            dataSource = dataSource,
+            messageFormatter = NekoMessageFormatter { "本地存在一条旧请求记录" },
+        )
         val proposal = ChatActionProposal(
             id = "proposal",
             action = ChatTaskAction.BATCH_RETRY,

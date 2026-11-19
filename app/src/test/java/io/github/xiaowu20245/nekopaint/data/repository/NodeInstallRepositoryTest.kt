@@ -1,5 +1,7 @@
 ﻿package io.github.xiaowu20245.nekopaint.data.repository
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoException
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPackage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
@@ -91,7 +93,10 @@ class NodeInstallRepositoryTest {
         val result = repository.install(legacy, restartAfterInstall = false)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("绑定"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_PLAN_NO_BINDING_NEW,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
         assertEquals(0, server.requestCount)
     }
 
@@ -248,7 +253,10 @@ class NodeInstallRepositoryTest {
         val result = repository.preparePlan("template-1", reanalyze = false)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("服务器已切换"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_SERVER_CHANGED,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
     }
 
     private fun workflowTemplate() = io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate(
@@ -268,7 +276,10 @@ class NodeInstallRepositoryTest {
         val result = repository.recheck("template-1", binding = null)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("绑定"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_PLAN_NO_BINDING_RETRY,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
         assertEquals(0, server.requestCount)
     }
 
@@ -280,7 +291,10 @@ class NodeInstallRepositoryTest {
         val result = repository.recheck("template-1", binding)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("服务器已切换"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_SERVER_CHANGED,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
         assertEquals(0, reanalyzed)
     }
 
@@ -305,7 +319,10 @@ class NodeInstallRepositoryTest {
         val result = repository.recheck("template-1", binding)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("服务器已切换"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_SERVER_CHANGED,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
     }
 
     @Test
@@ -329,7 +346,10 @@ class NodeInstallRepositoryTest {
         val result = repository.recheck("template-1", binding)
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("服务器已切换"))
+        assertEquals(
+            NekoMessageKey.NODE_INSTALL_SERVER_CHANGED,
+            (result.exceptionOrNull() as NekoException).nekoMessage.key,
+        )
     }
 
     @Test

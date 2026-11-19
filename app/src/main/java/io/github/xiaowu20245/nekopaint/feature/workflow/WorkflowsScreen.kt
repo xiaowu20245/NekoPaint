@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
@@ -106,7 +107,7 @@ fun WorkflowsScreen(
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    val errorMessage = state.errorRes?.let { stringResource(it) } ?: state.errorDetail
+    val errorMessage = state.errorRes?.let { stringResource(it) } ?: state.errorDetail?.asString()
     val actionMessage = when (val notice = state.actionNotice) {
         is WorkflowActionNotice.Renamed -> stringResource(R.string.workflow_renamed, notice.name)
         is WorkflowActionNotice.Copied -> stringResource(R.string.workflow_copied, notice.name)

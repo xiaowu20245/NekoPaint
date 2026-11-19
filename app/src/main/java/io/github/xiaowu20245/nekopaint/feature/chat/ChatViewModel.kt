@@ -2058,6 +2058,8 @@ class ChatViewModel(
                         queueRepository = container.queueRepository,
                     ),
                     nodeInstaller = container.nodeInstallRepository,
+                    messageFormatter = io.github.xiaowu20245.nekopaint.feature.common
+                        .AndroidNekoMessageFormatter(container.appContext),
                 )
                 val visionAnalyzer = ChatVisionAnalyzer(
                     client = container.aiAssistantClient,

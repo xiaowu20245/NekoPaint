@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
@@ -49,7 +51,7 @@ import java.util.UUID
 sealed interface WorkflowImportResult {
     data class Success(val template: WorkflowTemplate) : WorkflowImportResult
     data object UiFormat : WorkflowImportResult
-    data class Error(val message: String) : WorkflowImportResult
+    data class Error(val message: NekoMessage) : WorkflowImportResult
 }
 
 data class NodeErrorInfo(
@@ -63,11 +65,11 @@ sealed interface WorkflowSubmitResult {
     data class Success(
         val promptId: String,
         val queueNumber: Int?,
-        val localRecordWarning: String? = null,
+        val localRecordWarning: NekoMessage? = null,
     ) : WorkflowSubmitResult
 
     data class Validation(
-        val summary: String,
+        val summary: NekoMessage,
         val nodeErrors: List<NodeErrorInfo>,
     ) : WorkflowSubmitResult
 
@@ -75,10 +77,10 @@ sealed interface WorkflowSubmitResult {
 
     data class Unknown(
         val promptId: String,
-        val message: String,
+        val message: NekoMessage,
     ) : WorkflowSubmitResult
 
-    data class Error(val message: String) : WorkflowSubmitResult
+    data class Error(val message: NekoMessage) : WorkflowSubmitResult
 }
 
 internal data class WorkflowRepositoryDependencies(
@@ -272,17 +274,28 @@ class WorkflowRepository private constructor(
         try {
             val (displayName, size) = queryFileMeta(uri)
             if (size != null && size > MAX_FILE_BYTES) {
-                return@withContext WorkflowImportResult.Error("文件超过 10 MB 限制")
+                return@withContext WorkflowImportResult.Error(
+                    NekoMessage(NekoMessageKey.WORKFLOW_IMPORT_FILE_TOO_LARGE),
+                )
             }
             val resolver = appContext?.contentResolver
-                ?: return@withContext WorkflowImportResult.Error("当前环境不支持文件导入")
+                ?: return@withContext WorkflowImportResult.Error(
+                    NekoMessage(NekoMessageKey.WORKFLOW_IMPORT_ENV_UNSUPPORTED),
+                )
             val raw = resolver.openInputStream(uri)?.use {
                 readLimited(it, MAX_FILE_BYTES)
-            } ?: return@withContext WorkflowImportResult.Error("无法读取文件")
+            } ?: return@withContext WorkflowImportResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_IMPORT_READ_FAILED),
+            )
 
             when (val parsed = WorkflowParser.parse(raw)) {
                 WorkflowParseResult.UiFormat -> WorkflowImportResult.UiFormat
-                is WorkflowParseResult.Invalid -> WorkflowImportResult.Error(parsed.reason)
+                is WorkflowParseResult.Invalid -> WorkflowImportResult.Error(
+                    NekoMessage(
+                        NekoMessageKey.WORKFLOW_IMPORT_FAILED,
+                        listOf(parsed.reason),
+                    ),
+                )
                 is WorkflowParseResult.Success -> {
                     val catalog = loadCatalog()
                     val detection = ParameterDetector.detect(parsed.graph, catalog)
@@ -310,7 +323,12 @@ class WorkflowRepository private constructor(
                 }
             }
         } catch (throwable: Throwable) {
-            WorkflowImportResult.Error(throwable.message ?: "导入失败")
+            WorkflowImportResult.Error(
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_IMPORT_FAILED,
+                    listOf(throwable.message ?: throwable.javaClass.simpleName),
+                ),
+            )
         }
     }
 
@@ -419,16 +437,22 @@ class WorkflowRepository private constructor(
      */
     suspend fun resubmit(task: TaskRecord): WorkflowSubmitResult = withContext(Dispatchers.IO) {
         if (task.values.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("这条记录没有保存参数快照")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_RECORD_NO_VALUES),
+            )
         }
         val template = getTemplate(task.templateId)
-            ?: return@withContext WorkflowSubmitResult.Error("找不到原工作流模板")
+            ?: return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_TEMPLATE_NOT_FOUND),
+            )
         val selected = template.candidates.mapNotNull { candidate ->
             val value = task.values[candidate.id] ?: return@mapNotNull null
             if (candidate.readOnly) null else candidate.copy(value = value, selected = true)
         }
         if (selected.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("原模板参数已变化，无法再次生成")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_PARAMS_CHANGED),
+            )
         }
         submitSelected(template, selected)
     }
@@ -443,19 +467,29 @@ class WorkflowRepository private constructor(
             runCatching { deps.activeServerIdProvider() }.getOrNull().orEmpty()
         }
         if (serverId.isBlank()) {
-            return@withContext WorkflowSubmitResult.Error("找不到当前服务器")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.SERVER_NOT_CONFIGURED),
+            )
         }
         // 队列/历史可能已把该记录升级；必须用磁盘当前状态而不是调用方持有的旧对象。
         val current = taskRecordRepository.get(serverId, task.promptId)
-            ?: return@withContext WorkflowSubmitResult.Error("本地任务记录已不存在，请刷新队列")
+            ?: return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_TASK_RECORD_MISSING),
+            )
         if (current.supersededBy != null) {
             return@withContext WorkflowSubmitResult.Error(
-                "该请求已由任务 ${current.supersededBy.take(8)} 接管，请勿重复提交",
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_TASK_SUPERSEDED,
+                    listOf(current.supersededBy.take(8)),
+                ),
             )
         }
         if (current.status != TaskStatus.UNKNOWN && current.status != TaskStatus.SUBMITTING) {
             return@withContext WorkflowSubmitResult.Error(
-                "任务状态已更新为 ${current.status}，请刷新队列后再试",
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_TASK_NOT_RETRYABLE,
+                    listOf(current.status),
+                ),
             )
         }
         val requestedPromptId = current.requestedPromptId?.takeIf { it.isNotBlank() }
@@ -469,21 +503,30 @@ class WorkflowRepository private constructor(
             }
             if (migrated != null) {
                 return@withContext WorkflowSubmitResult.Error(
-                    "该请求已由任务 ${migrated.promptId.take(8)} 接管，请勿重复提交",
+                    NekoMessage(
+                        NekoMessageKey.WORKFLOW_TASK_SUPERSEDED,
+                        listOf(migrated.promptId.take(8)),
+                    ),
                 )
             }
         }
         if (current.values.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("这条记录没有保存参数快照")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_RECORD_NO_VALUES),
+            )
         }
         val template = getTemplate(current.templateId)
-            ?: return@withContext WorkflowSubmitResult.Error("找不到原工作流模板")
+            ?: return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_TEMPLATE_NOT_FOUND),
+            )
         val selected = template.candidates.mapNotNull { candidate ->
             val value = current.values[candidate.id] ?: return@mapNotNull null
             if (candidate.readOnly) null else candidate.copy(value = value, selected = true)
         }
         if (selected.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("原模板参数已变化，无法重试")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_PARAMS_CHANGED),
+            )
         }
         submitSelected(
             template = template,
@@ -505,14 +548,20 @@ class WorkflowRepository private constructor(
     ): WorkflowSubmitResult = withContext(Dispatchers.IO) {
         val stored = templateStore.getTemplate(template.id)
         if (WorkflowRepairFlag.blocksSubmit(template, stored)) {
-            return@withContext WorkflowSubmitResult.Error("请先修复工作流模板并保存")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_REPAIR_REQUIRED),
+            )
         }
         val config = runCatching { deps.configProvider() }.getOrNull()
             ?: return@withContext WorkflowSubmitResult.NoServer
         val serverId = runCatching { deps.activeServerIdProvider() }.getOrNull()
-            ?: return@withContext WorkflowSubmitResult.Error("找不到当前服务器配置")
+            ?: return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.SERVER_NOT_CONFIGURED),
+            )
         val raw = readApiJson(template.id)
-            ?: return@withContext WorkflowSubmitResult.Error("找不到工作流 JSON")
+            ?: return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_JSON_NOT_FOUND),
+            )
 
         // 旧 profile、快捷运行和历史重试都可能携带结构化候选；最终提交前统一过滤。
         val safeCandidates = WorkflowJsonApplier.safeCandidates(raw, template.candidates)
@@ -523,11 +572,16 @@ class WorkflowRepository private constructor(
         }.exceptionOrNull()
         if (safetyError != null) {
             return@withContext WorkflowSubmitResult.Error(
-                safetyError.message ?: "候选参数视图无效",
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_CANDIDATES_INVALID,
+                    listOf(safetyError.message ?: safetyError.javaClass.simpleName),
+                ),
             )
         }
         if (safeSelected.isEmpty()) {
-            return@withContext WorkflowSubmitResult.Error("没有可提交的标量参数")
+            return@withContext WorkflowSubmitResult.Error(
+                NekoMessage(NekoMessageKey.WORKFLOW_NO_SCALAR_PARAMS),
+            )
         }
 
         // 提示词里的 #标签组 在提交前展开，历史记录也保存展开后的值。
@@ -548,13 +602,19 @@ class WorkflowRepository private constructor(
             WorkflowJsonApplier.apply(raw, expandedSelected)
         }.getOrElse { throwable ->
             return@withContext WorkflowSubmitResult.Error(
-                throwable.message ?: "应用参数失败",
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_APPLY_PARAMS_FAILED,
+                    listOf(throwable.message ?: throwable.javaClass.simpleName),
+                ),
             )
         }
 
         val clientId = runCatching { deps.clientIdProvider() }.getOrElse { throwable ->
             return@withContext WorkflowSubmitResult.Error(
-                "无法读取客户端标识：${throwable.message ?: "本地存储异常"}",
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_CLIENT_ID_FAILED,
+                    listOf(throwable.message ?: throwable.javaClass.simpleName),
+                ),
             )
         }
         val requestedPromptId = existingPromptId ?: UUID.randomUUID().toString()
@@ -581,18 +641,24 @@ class WorkflowRepository private constructor(
             taskRecordRepository.upsert(serverId, prepared)
         }
         if (preparedResult.isFailure) {
+            val cause = preparedResult.exceptionOrNull()
             return@withContext WorkflowSubmitResult.Error(
-                "无法保存本地任务记录，未提交：" +
-                    (preparedResult.exceptionOrNull()?.message ?: "本地存储异常"),
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_LOCAL_RECORD_FAILED,
+                    listOf(cause?.message ?: cause?.javaClass?.simpleName ?: "unknown"),
+                ),
             )
         }
         val api = runCatching { apiFactory.create(config) }.getOrElse { throwable ->
-            val message = "无法创建网络请求：${throwable.message ?: "未知错误"}"
+            val message = NekoMessage(
+                NekoMessageKey.WORKFLOW_NETWORK_REQUEST_FAILED,
+                listOf(throwable.message ?: throwable.javaClass.simpleName),
+            )
             taskRecordRepository.upsert(
                 serverId,
                 prepared.copy(
                     status = TaskStatus.FAILED,
-                    errorMessage = message,
+                    errorMessage = throwable.message ?: throwable.javaClass.simpleName,
                     statusUpdatedAt = System.currentTimeMillis(),
                     statusSource = TaskStatusSource.LOCAL.name,
                 ),
@@ -612,7 +678,10 @@ class WorkflowRepository private constructor(
             markSubmissionUnknown(serverId, prepared)
             return@withContext WorkflowSubmitResult.Unknown(
                 promptId = requestedPromptId,
-                message = throwable.message ?: "提交结果未知",
+                message = NekoMessage(
+                    NekoMessageKey.WORKFLOW_SUBMIT_UNKNOWN,
+                    listOf(throwable.message ?: throwable.javaClass.simpleName),
+                ),
             )
         }
         var httpAttempt = 1
@@ -627,7 +696,10 @@ class WorkflowRepository private constructor(
                 markSubmissionUnknown(serverId, prepared)
                 return@withContext WorkflowSubmitResult.Unknown(
                     promptId = requestedPromptId,
-                    message = throwable.message ?: "提交结果未知",
+                    message = NekoMessage(
+                        NekoMessageKey.WORKFLOW_SUBMIT_UNKNOWN,
+                        listOf(throwable.message ?: throwable.javaClass.simpleName),
+                    ),
                 )
             }
         }
@@ -637,9 +709,18 @@ class WorkflowRepository private constructor(
             val parsed = runCatching {
                 json.decodeFromString<PromptErrorResponseDto>(body)
             }.getOrNull()
-            val summary = parsed?.error?.message
-                ?: parsed?.error?.details
-                ?: "服务器拒绝了任务（HTTP ${response.code()}）"
+            val serverSummary = parsed?.error?.message ?: parsed?.error?.details
+            val summary = if (serverSummary != null) {
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_VALIDATION_FAILED,
+                    listOf(serverSummary),
+                )
+            } else {
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_SERVER_REJECTED,
+                    listOf(response.code().toString()),
+                )
+            }
 
             val nodeErrors = parsed?.nodeErrors.orEmpty().flatMap { (nodeId, nodeError) ->
                 nodeError.errors.ifEmpty {
@@ -664,7 +745,12 @@ class WorkflowRepository private constructor(
                 serverId,
                 prepared.copy(
                     status = if (unknownResult) TaskStatus.UNKNOWN else TaskStatus.FAILED,
-                    errorMessage = if (unknownResult) null else summary,
+                    errorMessage = if (unknownResult) {
+                        null
+                    } else {
+                        serverSummary?.takeIf { it.isNotBlank() }
+                            ?: "HTTP ${response.code()}"
+                    },
                     statusUpdatedAt = System.currentTimeMillis(),
                     statusSource = TaskStatusSource.LOCAL.name,
                 ),
@@ -686,7 +772,7 @@ class WorkflowRepository private constructor(
                 markSubmissionUnknown(serverId, prepared)
                 return@withContext WorkflowSubmitResult.Unknown(
                     promptId = requestedPromptId,
-                    message = "服务器返回为空，提交结果未知",
+                    message = NekoMessage(NekoMessageKey.WORKFLOW_SUBMIT_EMPTY_RESPONSE),
                 )
             }
         val promptId = body.promptId ?: requestedPromptId
@@ -715,8 +801,14 @@ class WorkflowRepository private constructor(
                         ),
                     )
                 }
-                "任务已提交，但本地任务记录保存失败：" +
-                    (saved.exceptionOrNull()?.message ?: "本地存储异常")
+                NekoMessage(
+                    NekoMessageKey.WORKFLOW_LOCAL_RECORD_FAILED,
+                    listOf(
+                        saved.exceptionOrNull()?.message
+                            ?: saved.exceptionOrNull()?.javaClass?.simpleName
+                            ?: "unknown",
+                    ),
+                )
             }
 
             promptId != requestedPromptId -> {
@@ -737,8 +829,10 @@ class WorkflowRepository private constructor(
                     )
                 }
                 deleteFailure?.let { throwable ->
-                    "任务已提交，但本地存在一条旧请求记录：" +
-                        (throwable.message ?: requestedPromptId)
+                    NekoMessage(
+                        NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED,
+                        listOf(throwable.message ?: requestedPromptId),
+                    )
                 }
             }
 

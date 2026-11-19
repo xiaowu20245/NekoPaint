@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantSettingsStore
 import io.github.xiaowu20245.nekopaint.core.datastore.NekoSettingsPreferences
 import io.github.xiaowu20245.nekopaint.di.AppContainer
@@ -21,7 +23,7 @@ data class NekoSettingsUiState(
     val loading: Boolean = true,
     val saving: Boolean = false,
     val saved: Boolean = false,
-    val error: String? = null,
+    val error: NekoMessage? = null,
 )
 
 class NekoSettingsViewModel(
@@ -80,7 +82,12 @@ class NekoSettingsViewModel(
                 it.copy(
                     saving = false,
                     saved = result.isSuccess,
-                    error = result.exceptionOrNull()?.message,
+                    error = result.exceptionOrNull()?.let { throwable ->
+                        NekoMessage(
+                            NekoMessageKey.SETTINGS_NEKO_SAVE_FAILED,
+                            listOf(throwable.message ?: throwable.javaClass.simpleName),
+                        )
+                    },
                 )
             }
         }

@@ -9,6 +9,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
@@ -56,10 +59,20 @@ sealed interface FieldError {
     data class Server(val message: String) : FieldError
 }
 
+data class BatchSubmitStats(
+    val success: Int,
+    val failed: Int,
+    val unknown: Int,
+    val skipped: Int,
+    val unknownOutcome: Boolean = false,
+)
+
 data class SubmitErrorUi(
     @param:StringRes val messageRes: Int? = null,
-    val message: String? = null,
+    val message: NekoMessage? = null,
+    val extraMessages: List<NekoMessage> = emptyList(),
     val nodeErrors: List<NodeErrorInfo> = emptyList(),
+    val batchStats: BatchSubmitStats? = null,
 )
 
 sealed interface PresetNotice {
@@ -87,12 +100,12 @@ data class WorkflowDetailUiState(
     val submission: WorkflowSubmitResult.Success? = null,
     val uploadingCandidateId: String? = null,
     val uploadedImageName: String? = null,
-    val imageUploadError: String? = null,
+    val imageUploadError: NekoMessage? = null,
     val rawJsonVisible: Boolean = false,
     val rawJson: String? = null,
     val checkingNodes: Boolean = false,
     val repairing: Boolean = false,
-    val repairError: String? = null,
+    val repairError: NekoMessage? = null,
     @param:StringRes val errorRes: Int? = null,
 ) {
     val visibleCandidates: List<ParameterCandidate>
@@ -108,7 +121,7 @@ data class WorkflowDetailUiState(
 data class MaskExportState(
     val rendering: Boolean = false,
     val uploading: Boolean = false,
-    val error: String? = null,
+    val error: NekoMessage? = null,
     val success: Boolean = false,
 ) {
     val busy: Boolean
@@ -120,7 +133,7 @@ data class NodeInstallUiState(
     val loading: Boolean = false,
     val plan: NodeInstallPlan? = null,
     val binding: ServerBinding? = null,
-    val error: String? = null,
+    val error: NekoMessage? = null,
     val installing: Boolean = false,
     val progress: String? = null,
     val restartAfterInstall: Boolean = true,
@@ -445,7 +458,12 @@ class WorkflowDetailViewModel(
     ) {
         if (_maskExportState.value.busy) return
         if (strokes.isEmpty() || sourceWidth <= 0 || sourceHeight <= 0) {
-            _maskExportState.value = MaskExportState(error = "蒙版尺寸或笔迹无效")
+            _maskExportState.value = MaskExportState(
+                error = NekoMessage(
+                    NekoMessageKey.MASK_EXPORT_FAILED,
+                    listOf("invalid mask bounds"),
+                ),
+            )
             return
         }
         _maskExportState.value = MaskExportState(rendering = true)
@@ -485,16 +503,21 @@ class WorkflowDetailViewModel(
                     }
                     .onFailure { throwable ->
                         _maskExportState.value = MaskExportState(
-                            error = throwable.message ?: "蒙版上传失败",
+                            error = throwable.toWorkflowMessage(NekoMessageKey.MASK_UPLOAD_FAILED),
                         )
                     }
             } catch (oom: OutOfMemoryError) {
-                _maskExportState.value = MaskExportState(error = "图片过大，内存不足")
+                _maskExportState.value = MaskExportState(
+                    error = NekoMessage(
+                        NekoMessageKey.MASK_EXPORT_FAILED,
+                        listOf("OutOfMemoryError"),
+                    ),
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
                 _maskExportState.value = MaskExportState(
-                    error = throwable.message ?: "蒙版导出失败",
+                    error = throwable.toWorkflowMessage(NekoMessageKey.MASK_EXPORT_FAILED),
                 )
             } finally {
                 bitmap?.recycle()
@@ -550,7 +573,9 @@ class WorkflowDetailViewModel(
                     _uiState.update {
                         it.copy(
                             uploadingCandidateId = null,
-                            imageUploadError = throwable.message ?: "上传失败",
+                            imageUploadError = throwable.toWorkflowMessage(
+                                NekoMessageKey.IMAGE_UPLOAD_FAILED,
+                            ),
                         )
                     }
                 }
@@ -820,13 +845,14 @@ class WorkflowDetailViewModel(
                     }
                 },
                 onFailure = { error ->
-                    if (error.message == "节点已经齐全，无需安装") {
+                    val message = error.toWorkflowMessage(NekoMessageKey.NODE_INSTALL_CHECK_FAILED)
+                    if (message.key == NekoMessageKey.NODE_INSTALL_ALREADY_COMPLETE) {
                         repository.getTemplate(templateId)?.let(::applyCompatibilityUpdate)
                     }
                     _nodeInstallState.update {
                         it.copy(
                             loading = false,
-                            error = error.message ?: "检查缺失节点失败",
+                            error = message,
                         )
                     }
                 },
@@ -880,7 +906,7 @@ class WorkflowDetailViewModel(
                         it.copy(
                             installing = false,
                             progress = null,
-                            error = error.message ?: "安装失败",
+                            error = error.toWorkflowMessage(NekoMessageKey.NODE_INSTALL_FAILED),
                         )
                     }
                 },
@@ -917,7 +943,9 @@ class WorkflowDetailViewModel(
                     _nodeInstallState.update {
                         it.copy(
                             loading = false,
-                            error = error.message ?: "重新检查失败",
+                            error = error.toWorkflowMessage(
+                                NekoMessageKey.NODE_INSTALL_RECHECK_FAILED,
+                            ),
                         )
                     }
                 },
@@ -960,7 +988,9 @@ class WorkflowDetailViewModel(
                     _uiState.update {
                         it.copy(
                             repairing = false,
-                            repairError = error.message ?: "修复工作流失败",
+                            repairError = error.toWorkflowMessage(
+                                NekoMessageKey.WORKFLOW_REPAIR_FAILED,
+                            ),
                         )
                     }
                 }
@@ -1041,7 +1071,7 @@ class WorkflowDetailViewModel(
             _uiState.update {
                 it.copy(
                     submitError = SubmitErrorUi(
-                        message = error.message ?: "无法启动提交任务",
+                        message = error.toWorkflowMessage(NekoMessageKey.OPERATION_START_FAILED),
                     ),
                 )
             }
@@ -1170,5 +1200,14 @@ class WorkflowDetailViewModel(
                 )
             }
         }
+    }
+}
+
+private fun Throwable.toWorkflowMessage(fallback: NekoMessageKey): NekoMessage {
+    val typed = toNekoMessage(NekoMessageKey.GENERIC_ERROR)
+    return if (typed.key != NekoMessageKey.GENERIC_ERROR) {
+        typed
+    } else {
+        NekoMessage(fallback, listOf(message ?: javaClass.simpleName))
     }
 }

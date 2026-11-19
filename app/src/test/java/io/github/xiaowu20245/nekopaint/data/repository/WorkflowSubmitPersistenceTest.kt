@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
@@ -79,7 +81,10 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.submit(template())
 
         assertTrue(result is WorkflowSubmitResult.Error)
-        assertTrue((result as WorkflowSubmitResult.Error).message.contains("未提交"))
+        assertEquals(
+            NekoMessageKey.WORKFLOW_LOCAL_RECORD_FAILED,
+            (result as WorkflowSubmitResult.Error).message.key,
+        )
         assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
     }
 
@@ -192,7 +197,11 @@ class WorkflowSubmitPersistenceTest {
 
         assertTrue(result is WorkflowSubmitResult.Validation)
         val validation = result as WorkflowSubmitResult.Validation
-        assertEquals("bad params", validation.summary)
+        assertEquals(
+            NekoMessageKey.WORKFLOW_VALIDATION_FAILED,
+            validation.summary.key,
+        )
+        assertEquals(listOf("bad params"), validation.summary.args)
         assertEquals(1, validation.nodeErrors.size)
         assertEquals("seed", validation.nodeErrors.single().inputName)
         assertEquals("range", validation.nodeErrors.single().details)
@@ -200,6 +209,37 @@ class WorkflowSubmitPersistenceTest {
         val stored = taskRecords().single()
         assertEquals(TaskStatus.FAILED, stored.status)
         assertEquals("bad params", stored.errorMessage)
+    }
+
+    @Test
+    fun rejectedWithoutServerMessageStoresReadableHttpSummary() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(400)
+                .setBody("""{"error":{}}"""),
+        )
+
+        val result = repository.submit(template())
+
+        assertTrue(result is WorkflowSubmitResult.Validation)
+        val stored = taskRecords().single()
+        assertEquals("HTTP 400", stored.errorMessage)
+        assertTrue(NekoMessageKey.entries.none { it.name == stored.errorMessage })
+    }
+
+    @Test
+    fun rejectedWithBlankServerMessageStoresReadableHttpSummary() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(400)
+                .setBody("""{"error":{"message":"   "}}"""),
+        )
+
+        val result = repository.submit(template())
+
+        assertTrue(result is WorkflowSubmitResult.Validation)
+        val stored = taskRecords().single()
+        assertEquals("HTTP 400", stored.errorMessage)
     }
 
     @Test
@@ -254,8 +294,8 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.retryUnknown(old)
 
         assertTrue(result is WorkflowSubmitResult.Success)
-        val warning = (result as WorkflowSubmitResult.Success).localRecordWarning.orEmpty()
-        assertTrue(warning.contains("旧请求记录"))
+        val warning = (result as WorkflowSubmitResult.Success).localRecordWarning
+        assertEquals(NekoMessageKey.WORKFLOW_OLD_RECORD_CLEANUP_FAILED, warning?.key)
     }
 
     @Test
@@ -278,11 +318,9 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.retryUnknown(old)
 
         assertTrue(result is WorkflowSubmitResult.Success)
-        assertTrue(
-            (result as WorkflowSubmitResult.Success)
-                .localRecordWarning
-                .orEmpty()
-                .contains("本地任务记录保存失败"),
+        assertEquals(
+            NekoMessageKey.WORKFLOW_LOCAL_RECORD_FAILED,
+            (result as WorkflowSubmitResult.Success).localRecordWarning?.key,
         )
         val storedOld = taskRepository.get(SERVER_ID, "old-id")!!
         assertEquals("new-id", storedOld.supersededBy)
@@ -341,7 +379,10 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.retryUnknown(old)
 
         assertTrue(result is WorkflowSubmitResult.Error)
-        assertTrue((result as WorkflowSubmitResult.Error).message.contains("接管"))
+        assertEquals(
+            NekoMessageKey.WORKFLOW_TASK_SUPERSEDED,
+            (result as WorkflowSubmitResult.Error).message.key,
+        )
         assertEquals(0, server.requestCount)
     }
 
@@ -353,7 +394,10 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.retryUnknown(old)
 
         assertTrue(result is WorkflowSubmitResult.Error)
-        assertTrue((result as WorkflowSubmitResult.Error).message.contains("接管"))
+        assertEquals(
+            NekoMessageKey.WORKFLOW_TASK_SUPERSEDED,
+            (result as WorkflowSubmitResult.Error).message.key,
+        )
         assertEquals(0, server.requestCount)
     }
 
@@ -377,7 +421,10 @@ class WorkflowSubmitPersistenceTest {
         val result = repository.retryUnknown(old)
 
         assertTrue(result is WorkflowSubmitResult.Error)
-        assertTrue((result as WorkflowSubmitResult.Error).message.contains("接管"))
+        assertEquals(
+            NekoMessageKey.WORKFLOW_TASK_SUPERSEDED,
+            (result as WorkflowSubmitResult.Error).message.key,
+        )
         assertEquals(0, server.requestCount)
     }
 

@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.settings
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import io.github.xiaowu20245.nekopaint.core.network.AiCredentialPolicy
 import io.github.xiaowu20245.nekopaint.core.network.AiCredentialState
@@ -9,7 +11,7 @@ import io.github.xiaowu20245.nekopaint.core.network.AiEndpointPolicyResult
 import io.github.xiaowu20245.nekopaint.core.network.AiEndpointValidator
 
 data class AiSettingsDerivedState(
-    val baseUrlError: String?,
+    val baseUrlError: NekoMessage?,
     val credentialMessage: String?,
     val policyMessage: String?,
     val policyBlocked: Boolean,
@@ -26,7 +28,7 @@ object AiAssistantSettingsPolicy {
         val baseUrlError = if (state.baseUrl.isBlank() || endpoint != null) {
             null
         } else {
-            "Base URL 格式无效，请检查地址"
+            NekoMessage(NekoMessageKey.SETTINGS_AI_BASE_URL_INVALID)
         }
         val credentialMessage = when (val credential = AiCredentialPolicy.evaluate(
             apiKey = state.apiKey,
