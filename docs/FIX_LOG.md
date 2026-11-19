@@ -974,4 +974,5 @@ git diff --check
   - R5-07：`NodeInstallRepository.recheck` 在 `reanalyzeAndSave` 返回 null 时先复核 binding，变化返回 ServerChanged，否则才报“服务器尚未恢复”；新增 `recheckNullResultAfterServerChangeReportsServerChanged`。
   - R5-08（低残余）：`waitForServer` 仍可能在 reboot 后 2s 看到旧进程；记录为低优先级，不影响写模板。
   - 验证：126 suites / 711 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- 第二轮第 5 批 commit 已提交为 `fix: 绑定安装服务器与队列归属`（`3193e34`）。
 - **待复审**：第 5 批尚未提交，等待独立复审（建议 `docs/FIX_REVIEW.md` 第 81 节）。
