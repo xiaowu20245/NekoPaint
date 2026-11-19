@@ -1018,3 +1018,4 @@ git diff --check
   - 新增 `HistoryVisibilityPolicyTest` 6、`ChatToolPolicyTest` 4、`ChatToolExecutionGuardTest` 3、`ChatTaskActionHandlerTest` +8（含 queue-only INTERRUPT/DELETE 与批量来源）、`ChatViewModelSessionTest` +2、`PromptTagExpanderTest` +2、`ChatTaskActionSerializationTest` 1（旧 JSON 缺 source 默认 UNKNOWN）；`ChatScreenBackInstrumentedTest` fake 适配 mode 参数。
   - 验证：**132 suites / 754 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 93 节 R9-01～R9-04、第 94 节 R9-05/R9-06 均已修复；第 95 节复审 **APPROVED**。
+- **提交**：3A-2 已提交为 `fix: 收紧 Chat 工具与历史筛选`（`9059b28`）。
