@@ -121,6 +121,7 @@ import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarMenuItem
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import java.text.SimpleDateFormat
@@ -166,7 +167,7 @@ fun HistoryScreen(
         HistoryEditNotice.Cleared -> stringResource(R.string.history_cleared)
         is HistoryEditNotice.Error -> stringResource(
             R.string.history_edit_failed,
-            notice.message,
+            notice.message.asString(),
         )
         null -> null
     }
@@ -537,7 +538,7 @@ fun HistoryScreen(
                 onShowTempChange = viewModel::setShowTempPreviews,
             )
 
-            val errorMessage = state.error
+            val errorMessage = state.error?.asString()
             val statusNotice = when {
                 state.connection == ComfyConnectionState.InvalidConfig ->
                     stringResource(R.string.history_config_invalid)

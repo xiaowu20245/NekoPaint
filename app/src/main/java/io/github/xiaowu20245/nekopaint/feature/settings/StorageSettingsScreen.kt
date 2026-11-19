@@ -45,6 +45,7 @@ import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.ui.format.formatFileSize
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import kotlinx.coroutines.launch
 
 @Composable
@@ -63,7 +64,7 @@ fun StorageSettingsScreen() {
     val cacheClearedMessage = stringResource(R.string.settings_cache_cleared)
     val chatImagesClearedMessage = stringResource(R.string.settings_chat_images_cleared)
     val errorMessage = state.error?.let { message ->
-        stringResource(R.string.settings_cache_clear_failed, message)
+        stringResource(R.string.settings_cache_clear_failed, message.asString())
     }
     val permissionDeniedMessage = stringResource(R.string.image_save_permission_denied)
     val openSettingsLabel = stringResource(R.string.image_save_open_settings)

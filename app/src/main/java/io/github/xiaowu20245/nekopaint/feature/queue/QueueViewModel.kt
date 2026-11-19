@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
@@ -27,11 +28,11 @@ data class QueueUiState(
     val connection: ComfyConnectionState = ComfyConnectionState.Disconnected,
     val queueRemaining: Int = 0,
     val localClientId: String? = null,
-    val error: String? = null,
-    val actionError: String? = null,
+    val error: NekoMessage? = null,
+    val actionError: NekoMessage? = null,
     val refreshing: Boolean = false,
     val retryingPromptId: String? = null,
-    val localNotice: String? = null,
+    val localNotice: QueueNotice? = null,
     val recordWriteError: String? = null,
     val configured: Boolean = false,
     val loadState: QueueLoadState = QueueLoadState.Loading,

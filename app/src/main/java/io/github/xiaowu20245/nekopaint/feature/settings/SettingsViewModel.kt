@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.xiaowu20245.nekopaint.BuildConfig
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.datastore.AiAssistantStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
@@ -35,7 +36,7 @@ data class SettingsUiState(
     val loading: Boolean = true,
     val clearing: Boolean = false,
     val cacheCleared: Boolean = false,
-    val error: String? = null,
+    val error: NekoMessage? = null,
     val showTempPreviews: Boolean = false,
     val autoSaveHistoryImages: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -218,8 +219,8 @@ class SettingsViewModel(
                 }",
             )
             appendLine()
-            appendLine("队列错误：${sanitize(taskManager.queueError.value)}")
-            appendLine("历史错误：${sanitize(taskManager.historyError.value)}")
+            appendLine("队列错误：${taskManager.queueError.value?.key?.name ?: "无"}")
+            appendLine("历史错误：${taskManager.historyError.value?.key?.name ?: "无"}")
             appendLine()
             appendLine("说明：本报告不包含提示词、图片内容、服务器 IP 或文件名。")
         }
@@ -256,7 +257,7 @@ class SettingsViewModel(
                     it.copy(
                         clearing = false,
                         loading = false,
-                        error = throwable.message ?: "清理失败",
+                        error = SettingsErrorPolicy.cacheClearFailed(throwable),
                     )
                 }
             }
@@ -288,7 +289,7 @@ class SettingsViewModel(
                     chatImageCount = stats?.count ?: 0,
                     chatImageBytes = stats?.bytes ?: 0L,
                     chatImagesCleared = result.isSuccess,
-                    error = result.exceptionOrNull()?.message,
+                    error = SettingsErrorPolicy.cacheClearFailed(result.exceptionOrNull()),
                 )
             }
         }

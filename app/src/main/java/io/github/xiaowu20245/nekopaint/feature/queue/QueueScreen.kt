@@ -70,6 +70,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueItem
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskProgress
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
@@ -77,6 +78,7 @@ import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStatus
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryMetadataExtractor
 import io.github.xiaowu20245.nekopaint.feature.history.durationText
 import kotlinx.coroutines.delay
@@ -99,9 +101,11 @@ fun QueueScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var interruptTarget by remember { mutableStateOf<QueueItem?>(null) }
     var deleteTarget by remember { mutableStateOf<QueueItem?>(null) }
-    val actionError = state.actionError?.let {
+    val actionErrorText = state.actionError?.asString()
+    val actionError = actionErrorText?.let {
         stringResource(R.string.queue_action_error, it)
     }
+    val queueErrorMessage = state.error?.asString()
 
     LaunchedEffect(actionError) {
         if (actionError != null) {
@@ -110,9 +114,14 @@ fun QueueScreen(
         }
     }
 
-    LaunchedEffect(state.localNotice) {
-        state.localNotice?.let { notice ->
-            snackbarHostState.showSnackbar(notice)
+    val localNoticeText = when (val notice = state.localNotice) {
+        is QueueNotice.Text -> notice.value
+        is QueueNotice.Message -> notice.value.asString()
+        null -> null
+    }
+    LaunchedEffect(localNoticeText) {
+        if (localNoticeText != null) {
+            snackbarHostState.showSnackbar(localNoticeText)
             viewModel.clearLocalNotice()
         }
     }
@@ -225,7 +234,7 @@ fun QueueScreen(
                             NekoEmptyState(
                                 icon = Icons.Outlined.Warning,
                                 title = stringResource(R.string.queue_load_failed_title),
-                                subtitle = state.error
+                                subtitle = queueErrorMessage
                                     ?: stringResource(R.string.queue_load_failed_desc),
                                 actionLabel = stringResource(R.string.queue_refresh),
                                 onAction = viewModel::refresh,
@@ -350,11 +359,12 @@ fun QueueScreen(
 private fun QueueStatusHeader(
     connection: ComfyConnectionState,
     queueRemaining: Int,
-    error: String?,
+    error: NekoMessage?,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     onOpenHistory: () -> Unit,
 ) {
+    val errorText = error?.asString()
     val (statusLabel, dotColor) = when (connection) {
         ComfyConnectionState.Connected -> stringResource(R.string.queue_status_connected) to MaterialTheme.colorScheme.primary
         ComfyConnectionState.Connecting -> stringResource(R.string.queue_connection_connecting) to MaterialTheme.colorScheme.tertiary
@@ -489,7 +499,7 @@ private fun QueueStatusHeader(
             }
 
             if (connection != ComfyConnectionState.InvalidConfig) {
-                error?.let { message ->
+                errorText?.let { message ->
                     Text(
                         text = stringResource(R.string.queue_error, message),
                         style = MaterialTheme.typography.bodySmall,

@@ -1,6 +1,8 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.common.AppLog
+import io.github.xiaowu20245.nekopaint.core.common.NekoException
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.datastore.ClientIdStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
@@ -63,11 +65,11 @@ class TaskManager(
     private val _localClientId = MutableStateFlow<String?>(null)
     val localClientId: StateFlow<String?> = _localClientId.asStateFlow()
 
-    private val _queueError = MutableStateFlow<String?>(null)
-    val queueError: StateFlow<String?> = _queueError.asStateFlow()
+    private val _queueError = MutableStateFlow<NekoMessage?>(null)
+    val queueError: StateFlow<NekoMessage?> = _queueError.asStateFlow()
 
-    private val _historyError = MutableStateFlow<String?>(null)
-    val historyError: StateFlow<String?> = _historyError.asStateFlow()
+    private val _historyError = MutableStateFlow<NekoMessage?>(null)
+    val historyError: StateFlow<NekoMessage?> = _historyError.asStateFlow()
 
     private val _hasMoreHistory = MutableStateFlow(false)
     val hasMoreHistory: StateFlow<Boolean> = _hasMoreHistory.asStateFlow()
@@ -78,8 +80,8 @@ class TaskManager(
     private val _refreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
 
-    private val _actionError = MutableStateFlow<String?>(null)
-    val actionError: StateFlow<String?> = _actionError.asStateFlow()
+    private val _actionError = MutableStateFlow<NekoMessage?>(null)
+    val actionError: StateFlow<NekoMessage?> = _actionError.asStateFlow()
 
     val connection: StateFlow<ComfyConnectionState> = webSocketManager.connection
 
@@ -150,10 +152,9 @@ class TaskManager(
                                 val cached = cache[identity.serverId]
                                 if (cached == null || cached != identity.endpointKey) {
                                     blockedIdentities += identity.cacheKey()
-                                    _queueError.value =
-                                        "服务器缓存身份未知，请重新添加服务器"
-                                    _historyError.value =
-                                        "服务器缓存身份未知，请重新添加服务器"
+                                    val message = TaskErrorPolicy.serverBlock(cacheUnknown = true)
+                                    _queueError.value = message
+                                    _historyError.value = message
                                 }
                             }
                         }
@@ -161,7 +162,7 @@ class TaskManager(
                     }
                     val previous = currentSnapshot?.identity
                     taskPersistenceQueue.flush()
-                    var blockReason: String? = null
+                    var blockReason: NekoMessage? = null
                     val generation = stateMutex.withLock {
                         identityGeneration += 1
                         currentSnapshot = snapshot
@@ -179,11 +180,7 @@ class TaskManager(
                             if (endpointChangedWithSameId ||
                                 blockedIdentities.contains(identity.cacheKey())
                             ) {
-                                blockReason = if (cacheUnknown) {
-                                    "服务器缓存身份未知，请重新添加服务器"
-                                } else {
-                                    "服务器地址已变化，请重新添加服务器"
-                                }
+                                blockReason = TaskErrorPolicy.serverBlock(cacheUnknown)
                                 _queueError.value = blockReason
                                 _historyError.value = blockReason
                             }
@@ -306,10 +303,12 @@ class TaskManager(
      */
     suspend fun recheckPending(promptId: String): Result<Boolean> {
         val snapshot = currentSnapshot
-            ?: return Result.failure(IllegalStateException("没有活动服务器"))
+            ?: return Result.failure(NekoException(TaskErrorPolicy.serverNotConfigured()))
         val identity = snapshot.identity
         if (isBlocked(identity)) {
-            return Result.failure(IllegalStateException("服务器缓存身份未知，请重新添加服务器"))
+            return Result.failure(
+                NekoException(TaskErrorPolicy.serverBlock(cacheUnknown = false)),
+            )
         }
         val generation = identityGeneration
         val serverId = identity.serverId
@@ -371,8 +370,9 @@ class TaskManager(
                 if (!isCurrent(identity, generation)) return@launch
                 reloadTasks(serverId, identity, generation)
                 withCurrentState(identity, generation) {
-                    _queueError.value = "服务器配置无效，已暂停远程刷新"
-                    _historyError.value = "服务器配置无效，已暂停远程刷新"
+                    val message = TaskErrorPolicy.serverConfigInvalid()
+                    _queueError.value = message
+                    _historyError.value = message
                     _refreshing.value = false
                 }
                 return@launch
@@ -395,7 +395,7 @@ class TaskManager(
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
                         // 失败时保留上次队列，界面据此标记为过期。
-                        _queueError.value = throwable.message ?: "无法刷新队列"
+                        _queueError.value = TaskErrorPolicy.queueRefreshFailed()
                     }
                 }
             queueRepository.history(historyLimit + 1, config)
@@ -421,7 +421,7 @@ class TaskManager(
                 }
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
-                        _historyError.value = throwable.message ?: "无法刷新历史"
+                        _historyError.value = TaskErrorPolicy.historyRefreshFailed()
                     }
                 }
             withCurrentState(identity, generation) {
@@ -440,7 +440,7 @@ class TaskManager(
             queueRepository.interrupt(promptId, snapshot.config)
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
-                        _actionError.value = throwable.message ?: "服务器拒绝了中断请求"
+                        _actionError.value = TaskErrorPolicy.queueInterruptFailed()
                     }
                 }
             if (isCurrent(identity, generation)) {
@@ -459,7 +459,7 @@ class TaskManager(
             queueRepository.deletePending(promptId, snapshot.config)
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
-                        _actionError.value = throwable.message ?: "服务器拒绝了删除请求"
+                        _actionError.value = TaskErrorPolicy.queueDeleteFailed()
                     }
                 }
             if (isCurrent(identity, generation)) {
@@ -506,7 +506,7 @@ class TaskManager(
                 }
                 .onFailure { throwable ->
                     withCurrentState(identity, generation) {
-                        _historyError.value = throwable.message ?: "无法加载更多历史"
+                        _historyError.value = TaskErrorPolicy.historyLoadMoreFailed()
                     }
                 }
             withCurrentState(identity, generation) {
@@ -518,14 +518,16 @@ class TaskManager(
     suspend fun deleteHistory(promptIds: Collection<String>): Result<Unit> {
         if (promptIds.isEmpty()) return Result.success(Unit)
         val snapshot = currentSnapshot
-            ?: return Result.failure(IllegalStateException("未配置服务器"))
+            ?: return Result.failure(NekoException(TaskErrorPolicy.serverNotConfigured()))
         val identity = snapshot.identity
         if (isBlocked(identity)) {
-            return Result.failure(IllegalStateException("服务器地址已变化，请重新添加服务器"))
+            return Result.failure(
+                NekoException(TaskErrorPolicy.serverBlock(cacheUnknown = false)),
+            )
         }
         val generation = identityGeneration
         if (!isCurrent(identity, generation)) {
-            return Result.failure(IllegalStateException("服务器已切换"))
+            return Result.failure(NekoException(TaskErrorPolicy.serverSwitched()))
         }
         val result = queueRepository.deleteHistory(promptIds.toList(), snapshot.config)
         result.onSuccess {
@@ -551,7 +553,7 @@ class TaskManager(
             }
         }.onFailure { throwable ->
             withCurrentState(identity, generation) {
-                _historyError.value = throwable.message ?: "删除历史失败"
+                _historyError.value = TaskErrorPolicy.historyDeleteFailed(throwable)
             }
         }
         return result
@@ -559,14 +561,16 @@ class TaskManager(
 
     suspend fun clearHistory(): Result<Unit> {
         val snapshot = currentSnapshot
-            ?: return Result.failure(IllegalStateException("未配置服务器"))
+            ?: return Result.failure(NekoException(TaskErrorPolicy.serverNotConfigured()))
         val identity = snapshot.identity
         if (isBlocked(identity)) {
-            return Result.failure(IllegalStateException("服务器地址已变化，请重新添加服务器"))
+            return Result.failure(
+                NekoException(TaskErrorPolicy.serverBlock(cacheUnknown = false)),
+            )
         }
         val generation = identityGeneration
         if (!isCurrent(identity, generation)) {
-            return Result.failure(IllegalStateException("服务器已切换"))
+            return Result.failure(NekoException(TaskErrorPolicy.serverSwitched()))
         }
         val result = queueRepository.clearHistory(snapshot.config)
         result.onSuccess {
@@ -586,7 +590,7 @@ class TaskManager(
             }
         }.onFailure { throwable ->
             withCurrentState(identity, generation) {
-                _historyError.value = throwable.message ?: "清空历史失败"
+                _historyError.value = TaskErrorPolicy.historyClearFailed(throwable)
             }
         }
         return result

@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.queue
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 
 /**
@@ -21,7 +22,7 @@ object QueueUiStatePolicy {
     fun loadState(
         queue: QueueSnapshot?,
         refreshing: Boolean,
-        error: String?,
+        error: NekoMessage?,
         configured: Boolean,
     ): QueueLoadState {
         if (!configured) return QueueLoadState.Unconfigured

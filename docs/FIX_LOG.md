@@ -1019,3 +1019,21 @@ git diff --check
   - 验证：**132 suites / 754 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 93 节 R9-01～R9-04、第 94 节 R9-05/R9-06 均已修复；第 95 节复审 **APPROVED**。
 - **提交**：3A-2 已提交为 `fix: 收紧 Chat 工具与历史筛选`（`9059b28`）。
+
+### 46. 第三轮 3B-1：用户文案错误模型（CR-035 上半）
+
+- **核心模型**
+  - 新增 `core/common/NekoMessage.kt`：`NekoMessageKey`、`NekoMessage(key, args)`、`NekoException(nekoMessage, cause)`、`Throwable.toNekoMessage(fallback)`。
+  - 新增 `feature/common/NekoMessageMapper.kt`：key → `@StringRes` 的唯一映射；`NekoMessage.asString()` 统一在 Compose 层取资源。
+  - data/network 层不再拼接中文 UI 文案；技术异常与 `NekoException` 的边界保持分离。
+- **队列/历史/缓存**
+  - `TaskManager` 的 `queueError/historyError/actionError` 改为 `StateFlow<NekoMessage?>`；队列刷新、历史刷新/加载更多/删除/清空、中断/删除动作、服务器缓存身份/端点变化/配置无效均映射到稳定 key。
+  - `recheckPending/deleteHistory/clearHistory` 的早期失败改为 `NekoException`（`SERVER_NOT_CONFIGURED`/`SERVER_ENDPOINT_CHANGED`/`SERVER_SWITCHED`）；`QueuePendingRetryController` 的 recheck/retry 失败改为 `QueueNotice.Message`，不再直接显示 data 层 `throwable.message`。
+  - `QueueUiState.error/actionError`、`HistoryUiState.error`、`HistoryEditNotice.Error`、`SettingsUiState.error` 改为 `NekoMessage`；Queue/History/Storage 页面统一通过 `asString()` 显示。
+  - 服务器域原本已使用 `ServerError` 枚举 + `@StringRes` 映射，未重复改造；仍保留现有类型化错误。
+- **测试**
+  - 新增 `NekoMessageMapperTest` 5 项：核心 key 映射、全 key 非零资源、缓存清理专用资源、`NekoException` 保留具体文案、普通异常 fallback。
+  - 新增 `TaskErrorPolicyTest` 4 项与 `SettingsErrorPolicyTest` 1 项：生产映射策略覆盖队列/历史刷新、加载更多、服务器 block/config、删除/清空、队列动作、缓存清理；不依赖 UI 文案。
+  - `QueueUiStatePolicyTest` 适配 `NekoMessage` 错误类型，8 项保持通过。
+  - 验证：**135 suites / 764 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **复审**：第 96 节 R10-01、第 97 节 R10-02 均已修复；第 98 节复审 **APPROVED**。

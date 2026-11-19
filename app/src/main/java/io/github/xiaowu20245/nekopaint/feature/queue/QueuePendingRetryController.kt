@@ -1,5 +1,8 @@
 package io.github.xiaowu20245.nekopaint.feature.queue
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import kotlinx.coroutines.CancellationException
@@ -10,32 +13,37 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+sealed interface QueueNotice {
+    data class Text(val value: String) : QueueNotice
+    data class Message(val value: NekoMessage) : QueueNotice
+}
+
 internal data class QueuePendingRetryState(
     val retryingPromptId: String? = null,
-    val notice: String? = null,
+    val notice: QueueNotice? = null,
 )
 
 /**
  * 检查接线：同时处理 suspend 调用抛异常和内层 Result.failure，
  * 保证 QueueViewModel 不会把失败误当成“未找到”。
  */
-internal suspend fun recheckNotice(recheck: suspend () -> Result<Boolean>): String {
+internal suspend fun recheckNotice(recheck: suspend () -> Result<Boolean>): QueueNotice {
     val result = runCatching { recheck() }
         .getOrElse { throwable -> Result.failure(throwable) }
     return describeRecheckResult(result)
 }
 
 /** 检查结果必须区分“确认未找到”和“检查失败”，失败时不得提示可重试。 */
-internal fun describeRecheckResult(result: Result<Boolean>): String = result.fold(
+internal fun describeRecheckResult(result: Result<Boolean>): QueueNotice = result.fold(
     onSuccess = { found ->
-        if (found) {
-            "已在服务器队列/历史找到该任务"
-        } else {
-            "队列/历史仍未找到，可复用原 ID 重试"
-        }
+        QueueNotice.Message(
+            NekoMessage(
+                if (found) NekoMessageKey.RECHECK_FOUND else NekoMessageKey.RECHECK_NOT_FOUND,
+            ),
+        )
     },
     onFailure = { throwable ->
-        "检查失败：${throwable.message ?: "未知错误"}，请勿据此重试"
+        QueueNotice.Message(throwable.toNekoMessage(NekoMessageKey.GENERIC_ERROR))
     },
 )
 
@@ -60,13 +68,15 @@ internal class QueuePendingRetryController(
             it.copy(retryingPromptId = task.promptId, notice = null)
         }
         scope.launch {
-            var notice: String? = null
+            var notice: QueueNotice? = null
             try {
                 notice = describe(retrySubmission(task))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (throwable: Throwable) {
-                notice = "重试失败：${throwable.message ?: "未知错误"}"
+                notice = QueueNotice.Message(
+                    throwable.toNekoMessage(NekoMessageKey.GENERIC_ERROR),
+                )
             } finally {
                 _state.update {
                     it.copy(
@@ -79,26 +89,30 @@ internal class QueuePendingRetryController(
         }
     }
 
-    fun showNotice(text: String) {
-        _state.update { it.copy(notice = text) }
+    fun showNotice(text: String) = showNotice(QueueNotice.Text(text))
+
+    fun showNotice(notice: QueueNotice) {
+        _state.update { it.copy(notice = notice) }
     }
 
     fun clearNotice() {
         _state.update { it.copy(notice = null) }
     }
 
-    private fun describe(result: WorkflowSubmitResult): String = when (result) {
-        is WorkflowSubmitResult.Success -> buildString {
-            append("已重新提交，任务 ID：")
-            append(result.promptId.take(8))
-            result.localRecordWarning?.let { warning ->
-                append("；").append(warning)
+    private fun describe(result: WorkflowSubmitResult): QueueNotice = QueueNotice.Text(
+        when (result) {
+            is WorkflowSubmitResult.Success -> buildString {
+                append("已重新提交，任务 ID：")
+                append(result.promptId.take(8))
+                result.localRecordWarning?.let { warning ->
+                    append("；").append(warning)
+                }
             }
-        }
 
-        is WorkflowSubmitResult.Unknown -> "结果仍未知：${result.message}"
-        WorkflowSubmitResult.NoServer -> "尚未连接服务器"
-        is WorkflowSubmitResult.Validation -> result.summary
-        is WorkflowSubmitResult.Error -> result.message
-    }
+            is WorkflowSubmitResult.Unknown -> "结果仍未知：${result.message}"
+            WorkflowSubmitResult.NoServer -> "尚未连接服务器"
+            is WorkflowSubmitResult.Validation -> result.summary
+            is WorkflowSubmitResult.Error -> result.message
+        },
+    )
 }

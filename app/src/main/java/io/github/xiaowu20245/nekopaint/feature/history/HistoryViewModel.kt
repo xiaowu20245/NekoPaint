@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
+import io.github.xiaowu20245.nekopaint.core.common.toNekoMessage
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
 import io.github.xiaowu20245.nekopaint.core.model.ArchivedServer
 import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
@@ -60,7 +63,7 @@ sealed interface ShareNotice {
 sealed interface HistoryEditNotice {
     data object Deleted : HistoryEditNotice
     data object Cleared : HistoryEditNotice
-    data class Error(val message: String) : HistoryEditNotice
+    data class Error(val message: NekoMessage) : HistoryEditNotice
 }
 
 enum class HistoryViewMode {
@@ -91,7 +94,7 @@ data class HistoryUiState(
     val activeServerId: String = ServerConfigStore.DEFAULT_SERVER_ID,
     val selectedHostId: String? = null,
     val connection: ComfyConnectionState = ComfyConnectionState.Disconnected,
-    val error: String? = null,
+    val error: NekoMessage? = null,
     val refreshing: Boolean = false,
     val resubmitting: Boolean = false,
     val notice: HistoryNotice? = null,
@@ -403,7 +406,9 @@ class HistoryViewModel(
             val deletable = promptIds intersect targetPromptIds
             if (deletable.isEmpty()) {
                 editState.value = editState.value.copy(
-                    notice = HistoryEditNotice.Error("只能删除当前主机的历史"),
+                    notice = HistoryEditNotice.Error(
+                        NekoMessage(NekoMessageKey.HISTORY_DELETE_CURRENT_HOST),
+                    ),
                 )
                 return@launch
             }
@@ -434,7 +439,9 @@ class HistoryViewModel(
                         HistoryEditNotice.Deleted
                     },
                     onFailure = {
-                        HistoryEditNotice.Error(it.message ?: "删除历史失败")
+                        HistoryEditNotice.Error(
+                            it.toNekoMessage(NekoMessageKey.HISTORY_DELETE_FAILED),
+                        )
                     },
                 ),
             )
@@ -465,7 +472,9 @@ class HistoryViewModel(
                         HistoryEditNotice.Cleared
                     },
                     onFailure = {
-                        HistoryEditNotice.Error(it.message ?: "清空历史失败")
+                        HistoryEditNotice.Error(
+                            it.toNekoMessage(NekoMessageKey.HISTORY_CLEAR_FAILED),
+                        )
                     },
                 ),
             )
@@ -579,7 +588,7 @@ class HistoryViewModel(
     )
 
     private data class RuntimeState(
-        val error: String? = null,
+        val error: NekoMessage? = null,
         val refreshing: Boolean = false,
         val hasMore: Boolean = false,
         val loadingMore: Boolean = false,

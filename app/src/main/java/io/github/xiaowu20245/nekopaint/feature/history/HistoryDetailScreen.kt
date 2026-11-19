@@ -74,6 +74,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryEntry
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
+import io.github.xiaowu20245.nekopaint.feature.common.asString
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -259,7 +260,7 @@ fun HistoryDetailScreen(
     }
 
     val editErrorMessage = (state.editNotice as? HistoryEditNotice.Error)?.let { notice ->
-        stringResource(R.string.history_edit_failed, notice.message)
+        stringResource(R.string.history_edit_failed, notice.message.asString())
     }
     LaunchedEffect(state.editNotice) {
         when (val notice = state.editNotice) {

@@ -1,5 +1,7 @@
 package io.github.xiaowu20245.nekopaint.feature.queue
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueItem
 import io.github.xiaowu20245.nekopaint.core.model.workflow.QueueSnapshot
 import org.junit.Assert.assertEquals
@@ -61,7 +63,7 @@ class QueueUiStatePolicyTest {
             QueueUiStatePolicy.loadState(
                 queue = null,
                 refreshing = false,
-                error = "offline",
+                error = NekoMessage(NekoMessageKey.QUEUE_REFRESH_FAILED),
                 configured = true,
             ),
         )
@@ -74,7 +76,7 @@ class QueueUiStatePolicyTest {
             QueueUiStatePolicy.loadState(
                 queue = null,
                 refreshing = true,
-                error = "offline",
+                error = NekoMessage(NekoMessageKey.QUEUE_REFRESH_FAILED),
                 configured = true,
             ),
         )
@@ -100,7 +102,7 @@ class QueueUiStatePolicyTest {
             QueueUiStatePolicy.loadState(
                 queue = snapshot(running = listOf(runningItem)),
                 refreshing = false,
-                error = "offline",
+                error = NekoMessage(NekoMessageKey.QUEUE_REFRESH_FAILED),
                 configured = true,
             ),
         )

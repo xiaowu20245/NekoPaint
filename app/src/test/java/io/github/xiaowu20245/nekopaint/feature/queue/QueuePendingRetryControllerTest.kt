@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.queue
 
+import io.github.xiaowu20245.nekopaint.core.common.NekoMessageKey
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStatus
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStatusSource
@@ -11,7 +12,6 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,9 +35,9 @@ class QueuePendingRetryControllerTest {
 
         controller.retry(task())
 
-        val notice = controller.state.value.notice.orEmpty()
-        assertTrue(notice.contains("new-task"))
-        assertTrue(notice.contains("旧请求记录"))
+        val notice = controller.state.value.notice as QueueNotice.Text
+        assertTrue(notice.value.contains("new-task"))
+        assertTrue(notice.value.contains("旧请求记录"))
         assertNull(controller.state.value.retryingPromptId)
     }
 
@@ -53,7 +53,8 @@ class QueuePendingRetryControllerTest {
 
         controller.retry(task())
 
-        assertTrue(controller.state.value.notice.orEmpty().contains("结果仍未知"))
+        val notice = controller.state.value.notice as QueueNotice.Text
+        assertTrue(notice.value.contains("结果仍未知"))
         assertNull(controller.state.value.retryingPromptId)
     }
 
@@ -68,8 +69,8 @@ class QueuePendingRetryControllerTest {
 
         controller.retry(task())
 
-        assertTrue(controller.state.value.notice.orEmpty().contains("重试失败"))
-        assertTrue(controller.state.value.notice.orEmpty().contains("磁盘异常"))
+        val notice = controller.state.value.notice as QueueNotice.Message
+        assertEquals(NekoMessageKey.GENERIC_ERROR, notice.value.key)
         assertNull(controller.state.value.retryingPromptId)
         assertEquals(1, refreshed)
     }
@@ -101,42 +102,34 @@ class QueuePendingRetryControllerTest {
     fun recheckFailureDoesNotSuggestReusingTheId() {
         val notice = describeRecheckResult(
             Result.failure(IllegalStateException("网络断开")),
-        )
+        ) as QueueNotice.Message
 
-        assertTrue(notice.contains("检查失败"))
-        assertTrue(notice.contains("网络断开"))
-        assertFalse(notice.contains("可复用"))
+        assertEquals(NekoMessageKey.GENERIC_ERROR, notice.value.key)
     }
 
     @Test
     fun recheckNoticeUnwrapsInnerFailureInsteadOfReportingNotFound() = runTest {
         val notice = recheckNotice {
             Result.failure(IllegalStateException("history 500"))
-        }
+        } as QueueNotice.Message
 
-        assertTrue(notice.contains("检查失败"))
-        assertTrue(notice.contains("history 500"))
-        assertFalse(notice.contains("可复用"))
+        assertEquals(NekoMessageKey.GENERIC_ERROR, notice.value.key)
     }
 
     @Test
     fun recheckNoticeCatchesOuterExceptionTheSameWay() = runTest {
-        val notice = recheckNotice { error("network down") }
+        val notice = recheckNotice { error("network down") } as QueueNotice.Message
 
-        assertTrue(notice.contains("检查失败"))
-        assertTrue(notice.contains("network down"))
-        assertFalse(notice.contains("可复用"))
+        assertEquals(NekoMessageKey.GENERIC_ERROR, notice.value.key)
     }
 
     @Test
     fun recheckFoundAndNotFoundHaveDistinctNotices() {
-        val found = describeRecheckResult(Result.success(true))
-        val notFound = describeRecheckResult(Result.success(false))
+        val found = describeRecheckResult(Result.success(true)) as QueueNotice.Message
+        val notFound = describeRecheckResult(Result.success(false)) as QueueNotice.Message
 
-        assertTrue(found.contains("找到"))
-        assertFalse(found.contains("可复用"))
-        assertTrue(notFound.contains("未找到"))
-        assertTrue(notFound.contains("可复用"))
+        assertEquals(NekoMessageKey.RECHECK_FOUND, found.value.key)
+        assertEquals(NekoMessageKey.RECHECK_NOT_FOUND, notFound.value.key)
     }
 
     private fun task() = TaskRecord(

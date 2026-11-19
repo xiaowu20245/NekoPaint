@@ -610,6 +610,21 @@
     <string name="error_invalid_response">这个地址不是 ComfyUI，或者返回了无法识别的数据。</string>
     <string name="error_parse">服务器返回的数据解析失败。</string>
     <string name="error_unknown">连接失败，请稍后重试。</string>
+    <string name="error_generic">操作失败，请重试。</string>
+    <string name="error_server_not_configured">未配置服务器</string>
+    <string name="error_server_endpoint_changed">服务器地址已变化，请重新添加服务器</string>
+    <string name="error_queue_refresh">无法刷新队列</string>
+    <string name="error_history_refresh">无法刷新历史</string>
+    <string name="error_history_load_more">无法加载更多历史</string>
+    <string name="error_history_delete">删除历史失败</string>
+    <string name="error_history_clear">清空历史失败</string>
+    <string name="error_history_delete_current_host">只能删除当前主机的历史</string>
+    <string name="error_queue_interrupt">服务器拒绝了中断请求</string>
+    <string name="error_queue_delete">服务器拒绝了删除请求</string>
+    <string name="error_cache_clear">清理缓存失败</string>
+    <string name="error_server_switched">服务器已切换</string>
+    <string name="queue_recheck_found">已在服务器队列/历史找到该任务</string>
+    <string name="queue_recheck_not_found">队列/历史仍未找到，可复用原 ID 重试</string>
 
 
     <string name="placeholder_badge">V0.0 脚手架</string>
