@@ -1037,3 +1037,4 @@ git diff --check
   - `QueueUiStatePolicyTest` 适配 `NekoMessage` 错误类型，8 项保持通过。
   - 验证：**135 suites / 764 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 96 节 R10-01、第 97 节 R10-02 均已修复；第 98 节复审 **APPROVED**。
+- **提交**：3B-1 已提交为 `refactor: 建立用户文案错误模型`（`bbe1300`）。
