@@ -994,4 +994,5 @@ git diff --check
 - **测试**
   - 新增 `WorkflowCompatibilityAnalyzerTest` +4、`QueueUiStatePolicyTest` 8、`HistorySelectionPolicyTest` 2、`WorkflowDetailOperationPolicyTest` +2、`WorkflowRepairFlowTest` +1；`WorkflowSubmitPersistenceTest` 增加 `input_name/details` 断言。
   - 验证：**128 suites / 728 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 connected 仍为 11/11 基线，本轮未新增 instrumentation。
-- **复审**：R8-01 已在 `docs/FIX_REVIEW.md` 第 91 节复审闭环；R8-02 的 FIX_LOG 复审引用已更新，提交前以第 92 节复审结论为准。
+- **复审**：R8-01 已在 `docs/FIX_REVIEW.md` 第 91 节复审闭环；R8-02 已在第 92 节确认，3A-1 获 **APPROVED**。
+- **提交**：3A-1 已提交为 `fix: 修正节点槽位、队列状态与历史选择`（`e65ee21`）。
