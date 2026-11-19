@@ -1069,3 +1069,4 @@ git diff --check
   - 适配 `OperationCenterTest`、`WorkflowSubmitPersistenceTest`、`NodeInstallRepositoryTest`、`ChatTaskActionBatchRetryTest`、`QueuePendingRetryControllerTest`、`AiAssistantSettingsViewModelTest`、`WorkflowDetailOperationPolicyTest` 的 typed 断言；未删除既有测试。
   - 验证：**137 suites / 801 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 99 节 R11-01～R11-03 均已修复；第 100 节复审 **APPROVED**。
+- **提交**：3B-2 已提交为 `refactor: 迁移工作流与 Chat 用户文案`（`a3728c2`）。
