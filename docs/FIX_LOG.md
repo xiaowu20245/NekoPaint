@@ -944,3 +944,34 @@ git diff --check
   - R4I-13：新增生产 ChatViewModel 集成测试：`mutationOnOneSessionDoesNotBlockSendOnAnotherAtViewModelLevel`、`sameSessionMutationBlocksSendAtViewModelLevel`、`disjointMutationsCanRunConcurrentlyAtViewModelLevel`；`ChatViewModelSessionTest` 24 项。
   - 验证：120 suites / 673 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - 第二轮第 4 批 commit 已提交为 `fix: 会话与参数保存`（`8b66bda`）。
+
+### 43. 第二轮第 5 批：节点安装绑定与队列归属（工作区，待复审）
+
+- **CR-018 服务器绑定**
+  - 新增 `ServerBindingPolicy`：`fromProfile/matches/toConfig`；只接受 serverId + endpointKey + scheme/host/port 完全一致的当前 active profile。
+  - `NodeInstallPlan` 增加 `binding: ServerBinding? = null`；`preparePlan` 捕获当前 profile 并写入计划；旧计划 binding=null 拒绝安装，要求重新检查。
+  - `ChatActionProposal` 增加 `binding`；`proposeNodeInstall` 从 plan 写入，`installNodes` 从 proposal 回填 plan；旧建议 binding=null 时安装失败并提示重新生成。
+  - `recheck(templateId, binding)` 校验绑定；工作流详情复检传递当前 plan.binding；绑定变化返回 ServerChanged，不写模板。
+- **CR-018 队列归属**
+  - 新增 `NodeInstallQueuePolicy`：baseline READY/BUSY/UNAVAILABLE；active/idle；`activeCoversQueued`（total>=queued）。
+  - `install` 在第一个 install 之前检查 baseline：busy -> QueueBusy（零 install、不重启）；status null -> StatusUnavailable（零 install）。
+  - startQueue 后要求新鲜 active 且 total>=queued；active total<queued -> Unconfirmed；超时 -> Unconfirmed；均不自动重启。
+  - active 回到 idle 才视为 Done；只有 Done 才 reboot；reboot 前/后、复检前后均校验绑定。
+  - reboot 后 `reanalyzeAndSave` 失败时新增 `recheckFailed`，不再误报“已补齐”。
+- **UI**
+  - 工作流安装确认框与 Chat 安装卡片显示目标服务器 `host:port`。
+- **测试**
+  - `NodeInstallQueuePolicyTest` 5、`ServerBindingPolicyTest` 4、`NodeInstallPlanSerializationTest` 3、`NodeInstallRepositoryTest` 9（MockWebServer：busy 零 install、status 不可用、旧计划拒绝、active->idle、never active 不重启、server change、重启+复检、preparePlan 绑定/切换）、`NodeInstallOutcomeTest` 10；`ChatTaskActionHandlerTest` 增加 binding 传递。
+  - 验证：124 suites / 698 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R5 修复（第 81 节 CONDITIONAL 后）**：
+  - R5-01：`NodeInstallUiState` 新增 `binding`，install 成功清空 plan 时保留 binding；`recheckBinding()` 统一取 binding ?: plan.binding；`NodeInstallRepository.recheck` 对 null 直接失败，不再回退当前服务器。
+  - R5-02：`WorkflowRepository.analyzeCompatibility/saveCompatibility/reanalyzeAndSave` 增加可选 `ServerBinding` 并在分析前、写盘前复核 active binding；`NodeInstallRepository` 的 deps lambda 传递 binding，install reboot 后 recheck 也带 binding。
+  - R5-03：`reboot()` 异常或空响应标记 `restartRejected=true`，不进入 reconnect；`waitForServer` 只在 `systemStats()` 成功解析（非 2xx 会抛异常）时视为恢复。
+  - R5-04：`NodeInstallRepositoryTest` 扩展到 16 项：recheck 无 binding/切服务器/分析期间切换、active total<queued、reboot 非 2xx、recheckFailed、system_stats 非 2xx 不恢复；新增 `NodeInstallRecheckBindingTest` 3 项。
+  - 验证：125 suites / 708 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **R5-06/R5-07 修复（第 82 节 CONDITIONAL 后）**：
+  - R5-06：`WorkflowTemplateStore.saveCompatibility/reanalyzeAndSave` 增加 `bindingGuard`，在 store mutex 内、写盘前执行；`WorkflowRepository` 传入 active binding guard，使“检查 + 写盘”在同一锁内完成。新增 `WorkflowBindingGuardTest` 2 项（guard=false 不写 compatibility/缺失节点）。
+  - R5-07：`NodeInstallRepository.recheck` 在 `reanalyzeAndSave` 返回 null 时先复核 binding，变化返回 ServerChanged，否则才报“服务器尚未恢复”；新增 `recheckNullResultAfterServerChangeReportsServerChanged`。
+  - R5-08（低残余）：`waitForServer` 仍可能在 reboot 后 2s 看到旧进程；记录为低优先级，不影响写模板。
+  - 验证：126 suites / 711 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
+- **待复审**：第 5 批尚未提交，等待独立复审（建议 `docs/FIX_REVIEW.md` 第 81 节）。

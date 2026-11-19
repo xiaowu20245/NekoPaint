@@ -2263,6 +2263,16 @@ private fun NodeInstallDialog(
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    plan.binding?.let { binding ->
+                        Text(
+                            text = stringResource(
+                                R.string.workflow_install_target_server,
+                                "${binding.host}:${binding.port}",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Surface(
                         shape = RoundedCornerShape(9.dp),
                         color = MaterialTheme.colorScheme.errorContainer,

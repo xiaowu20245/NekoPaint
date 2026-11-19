@@ -25,6 +25,7 @@
     <string name="workflow_install_loading">正在检查主机上的 ComfyUI-Manager，远程主机可能需要几十秒…</string>
     <string name="workflow_install_prerequisites">需要主机已安装并启用 ComfyUI-Manager，且安全等级允许安装；主机还需要能访问 GitHub 和 pip 源。</string>
     <string name="workflow_install_missing_summary">缺少 %1$d 个节点类型，计划安装 %2$d 个节点包</string>
+    <string name="workflow_install_target_server">目标服务器：%1$s</string>
     <string name="workflow_install_package_source">来源：%1$s</string>
     <string name="workflow_install_unresolved">以下节点在 Manager 映射中找不到安装包：%1$s</string>
     <string name="workflow_install_warning">自定义节点会在主机上执行第三方代码，并可能修改 Python 依赖。请确认来源可信；部分 Git 来源还需要主机允许 Git URL 安装。安装失败时可能需要手动修复主机环境。</string>
@@ -696,6 +697,7 @@
     <string name="chat_action_batch_count">%1$d 个任务</string>
     <string name="chat_action_install_nodes">安装缺失节点</string>
     <string name="chat_action_install_summary">缺少 %1$d 个节点 · %2$d 个节点包</string>
+    <string name="chat_action_install_target_server">目标服务器：%1$s</string>
     <string name="chat_action_install_source">来源：%1$s</string>
     <string name="chat_action_install_unresolved">找不到安装包：%1$s</string>
     <string name="chat_action_install_warning">安装会执行第三方代码；部分 Git 来源还需要主机允许 Git URL 安装。</string>

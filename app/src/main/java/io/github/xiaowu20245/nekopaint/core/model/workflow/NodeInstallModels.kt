@@ -41,6 +41,8 @@ data class NodeInstallPlan(
     val packages: List<NodeInstallPackage> = emptyList(),
     val unresolvedNodeTypes: List<String> = emptyList(),
     val managerVersion: String = "",
+    /** 生成计划时绑定的服务器；旧计划为 null，必须重新生成后才能安装。 */
+    val binding: ServerBinding? = null,
 ) {
     val packageCount: Int
         get() = packages.size

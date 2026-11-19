@@ -391,6 +391,14 @@ class ChatTaskActionHandlerTest {
         source.templates = listOf(template().copy(missingNodeTypes = listOf("NodeA")))
         val installer = FakeInstaller()
         val handler = ChatTaskActionHandler(source, installer)
+        val binding = io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding(
+            serverId = "s",
+            endpointKey = "http:localhost:8188",
+            scheme = "http",
+            host = "localhost",
+            port = 8188,
+        )
+        installer.plan = installer.plan.copy(binding = binding)
         val proposal = handler.proposeNodeInstall(null)
             .getOrThrow()
             .copy(restartAfterInstall = false)
@@ -399,6 +407,7 @@ class ChatTaskActionHandlerTest {
 
         assertEquals(1, installer.installCalls)
         assertEquals(false, installer.restartAfterInstall)
+        assertEquals(binding, installer.lastPlan?.binding)
         assertTrue(message.contains("1 个节点包"))
     }
 
@@ -501,6 +510,7 @@ class ChatTaskActionHandlerTest {
     private class FakeInstaller : NodeInstaller {
         var installCalls = 0
         var restartAfterInstall: Boolean? = null
+        var lastPlan: NodeInstallPlan? = null
         var prepareResult: Result<NodeInstallPlan>? = null
         var plan = NodeInstallPlan(
             templateId = "workflow-1",
@@ -527,6 +537,7 @@ class ChatTaskActionHandlerTest {
         ): Result<NodeInstallOutcome> {
             installCalls++
             this.restartAfterInstall = restartAfterInstall
+            lastPlan = plan
             return Result.success(
                 NodeInstallOutcome(
                     queuedCount = plan.packages.size,
@@ -536,7 +547,10 @@ class ChatTaskActionHandlerTest {
             )
         }
 
-        override suspend fun recheck(templateId: String): Result<WorkflowTemplate> =
+        override suspend fun recheck(
+            templateId: String,
+            binding: io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding?,
+        ): Result<WorkflowTemplate> =
             Result.success(
                 WorkflowTemplate(
                     id = templateId,

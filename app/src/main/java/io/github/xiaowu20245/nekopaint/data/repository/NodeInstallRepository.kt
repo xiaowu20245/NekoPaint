@@ -1,13 +1,16 @@
 package io.github.xiaowu20245.nekopaint.data.repository
 
 import io.github.xiaowu20245.nekopaint.core.datastore.ServerConfigStore
-import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
+import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyManagerApi
 import io.github.xiaowu20245.nekopaint.core.network.ManagerQueueStatusDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeInstallPlanner
+import io.github.xiaowu20245.nekopaint.core.workflow.NodeInstallQueuePolicy
+import io.github.xiaowu20245.nekopaint.core.workflow.ServerBindingPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -17,12 +20,16 @@ import kotlinx.serialization.json.JsonObject
 data class NodeInstallOutcome(
     val queuedCount: Int = 0,
     val failedPackages: List<String> = emptyList(),
+    val queueBusy: Boolean = false,
     val queueStartFailed: Boolean = false,
     val queueStatusUnavailable: Boolean = false,
+    val queueUnconfirmed: Boolean = false,
     val queueTimedOut: Boolean = false,
     val restartRequested: Boolean = false,
     val restartRejected: Boolean = false,
     val serverReconnected: Boolean = false,
+    val recheckFailed: Boolean = false,
+    val serverChanged: Boolean = false,
     val updatedTemplate: WorkflowTemplate? = null,
     val remainingMissingNodeTypes: List<String> = emptyList(),
 ) {
@@ -37,9 +44,21 @@ data class NodeInstallOutcome(
             append(failedPackages.take(3).joinToString("；"))
         }
         when {
+            serverChanged -> {
+                append("。安装期间服务器已切换，已停止后续步骤；请切回原服务器重新检查后再操作。")
+            }
+
+            queueBusy -> {
+                append("。主机安装队列正在忙，未提交任何安装请求；请等队列空闲后重试。")
+            }
+
             queueStartFailed -> append("。安装队列启动失败，请到主机的 ComfyUI-Manager 页面手动执行安装。")
             queueStatusUnavailable -> {
                 append("。无法读取安装队列状态，请等主机完成安装后手动重启 ComfyUI。")
+            }
+
+            queueUnconfirmed -> {
+                append("。无法确认本次安装队列已启动，未自动重启 ComfyUI；请到主机 Manager 页面检查。")
             }
 
             queueTimedOut -> {
@@ -52,6 +71,10 @@ data class NodeInstallOutcome(
 
             restartRequested && !serverReconnected -> {
                 append("。已请求重启 ComfyUI，但主机尚未恢复连接，请稍后重新检查。")
+            }
+
+            restartRequested && recheckFailed -> {
+                append("。重启后无法确认节点是否补齐，请重新检查。")
             }
 
             restartRequested && remainingMissingNodeTypes.isEmpty() -> {
@@ -85,7 +108,10 @@ interface NodeInstaller {
         onProgress: (String) -> Unit = {},
     ): Result<NodeInstallOutcome>
 
-    suspend fun recheck(templateId: String): Result<WorkflowTemplate>
+    suspend fun recheck(
+        templateId: String,
+        binding: ServerBinding? = null,
+    ): Result<WorkflowTemplate>
 }
 
 /**
@@ -94,25 +120,58 @@ interface NodeInstaller {
  * 只负责“检查 + 排队 + 等待 + 重启 + 复检”，不提供静默安装：
  * 调用方必须先展示 [NodeInstallPlan] 并由用户确认。
  */
-class NodeInstallRepository(
-    private val apiFactory: ComfyApiFactory,
-    private val serverConfigStore: ServerConfigStore,
-    private val workflowRepository: WorkflowRepository,
+internal data class NodeInstallRepositoryDependencies(
+    val apiFactory: ComfyApiFactory,
+    val activeProfile: suspend () -> ServerProfile?,
+    val templateProvider: suspend (String) -> WorkflowTemplate?,
+    val analyzeCompatibility: suspend (WorkflowTemplate, ServerBinding?) -> WorkflowTemplate?,
+    val saveCompatibility: suspend (String, WorkflowTemplate, ServerBinding?) -> WorkflowTemplate?,
+    val reanalyzeAndSave: suspend (String, ServerBinding?) -> WorkflowTemplate?,
+    val pollDelay: suspend (Long) -> Unit = { delay(it) },
+)
+
+class NodeInstallRepository internal constructor(
+    private val deps: NodeInstallRepositoryDependencies,
 ) : NodeInstaller {
+
+    constructor(
+        apiFactory: ComfyApiFactory,
+        serverConfigStore: ServerConfigStore,
+        workflowRepository: WorkflowRepository,
+    ) : this(
+        NodeInstallRepositoryDependencies(
+            apiFactory = apiFactory,
+            activeProfile = {
+                runCatching { serverConfigStore.activeServer.first() }.getOrNull()
+            },
+            templateProvider = { workflowRepository.getTemplate(it) },
+            analyzeCompatibility = { template, binding ->
+                workflowRepository.analyzeCompatibility(template, binding)
+            },
+            saveCompatibility = { id, template, binding ->
+                workflowRepository.saveCompatibility(id, template, binding)
+            },
+            reanalyzeAndSave = { id, binding ->
+                workflowRepository.reanalyzeAndSave(id, binding)
+            },
+        ),
+    )
 
     override suspend fun preparePlan(
         templateId: String,
         reanalyze: Boolean,
     ): Result<NodeInstallPlan> =
         withContext(Dispatchers.IO) {
-            val config = currentConfig()
+            val profile = activeProfile()
                 ?: return@withContext Result.failure(IllegalStateException("请先配置服务器"))
-            val template = workflowRepository.getTemplate(templateId)
+            val binding = ServerBindingPolicy.fromProfile(profile)
+            val config = ServerBindingPolicy.toConfig(binding)
+            val template = deps.templateProvider(templateId)
                 ?: return@withContext Result.failure(IllegalStateException("找不到工作流模板"))
 
             // 刚在详情页完成过 compat 复检时可跳过 object_info 的第二次请求。
             val analyzed = if (reanalyze) {
-                workflowRepository.analyzeCompatibility(template)
+                deps.analyzeCompatibility(template, binding)
             } else {
                 null
             }
@@ -122,7 +181,10 @@ class NodeInstallRepository(
                 template.missingNodeTypes
             }
             if (reanalyze && analyzed?.catalogChecked == true && missing.isEmpty()) {
-                workflowRepository.saveCompatibility(templateId, analyzed)
+                if (!bindingStillActive(binding)) {
+                    return@withContext Result.failure(serverChangedError())
+                }
+                deps.saveCompatibility(templateId, analyzed, binding)
                 return@withContext Result.failure(
                     IllegalStateException("节点已经齐全，无需安装"),
                 )
@@ -133,7 +195,7 @@ class NodeInstallRepository(
                 )
             }
 
-            val manager = runCatching { apiFactory.createManager(config) }.getOrElse { error ->
+            val manager = runCatching { deps.apiFactory.createManager(config) }.getOrElse { error ->
                 return@withContext Result.failure(
                     IllegalStateException(
                         "服务器配置无效：${error.message ?: "请检查地址"}",
@@ -190,7 +252,10 @@ class NodeInstallRepository(
                     ),
                 )
             }
-            Result.success(plan)
+            if (!bindingStillActive(binding)) {
+                return@withContext Result.failure(serverChangedError())
+            }
+            Result.success(plan.copy(binding = binding))
         }
 
     /**
@@ -207,9 +272,15 @@ class NodeInstallRepository(
         if (plan.packages.isEmpty()) {
             return@withContext Result.failure(IllegalStateException("安装计划为空"))
         }
-        val config = currentConfig()
-            ?: return@withContext Result.failure(IllegalStateException("请先配置服务器"))
-        val manager = runCatching { apiFactory.createManager(config) }.getOrElse { error ->
+        val binding = plan.binding
+            ?: return@withContext Result.failure(
+                IllegalStateException("安装计划缺少服务器绑定，请重新检查后生成新计划"),
+            )
+        if (!bindingStillActive(binding)) {
+            return@withContext Result.failure(serverChangedError())
+        }
+        val config = ServerBindingPolicy.toConfig(binding)
+        val manager = runCatching { deps.apiFactory.createManager(config) }.getOrElse { error ->
             return@withContext Result.failure(
                 IllegalStateException(
                     "服务器配置无效：${error.message ?: "请检查地址"}",
@@ -217,7 +288,7 @@ class NodeInstallRepository(
                 ),
             )
         }
-        val comfyApi = runCatching { apiFactory.create(config) }.getOrElse { error ->
+        val comfyApi = runCatching { deps.apiFactory.create(config) }.getOrElse { error ->
             return@withContext Result.failure(
                 IllegalStateException(
                     "服务器配置无效：${error.message ?: "请检查地址"}",
@@ -226,9 +297,36 @@ class NodeInstallRepository(
             )
         }
 
+        // 第一个 install 之前必须确认队列空闲；忙碌时零 install、不重启。
+        val baseline = NodeInstallQueuePolicy.baseline(fetchQueueStatus(manager))
+        when (baseline) {
+            NodeInstallQueuePolicy.Baseline.UNAVAILABLE -> {
+                return@withContext Result.success(
+                    NodeInstallOutcome(queueStatusUnavailable = true),
+                )
+            }
+
+            NodeInstallQueuePolicy.Baseline.BUSY -> {
+                return@withContext Result.success(
+                    NodeInstallOutcome(queueBusy = true),
+                )
+            }
+
+            NodeInstallQueuePolicy.Baseline.READY -> Unit
+        }
+
         val queued = mutableListOf<String>()
         val failures = mutableListOf<String>()
         plan.packages.forEachIndexed { index, pkg ->
+            if (!bindingStillActive(binding)) {
+                return@withContext Result.success(
+                    NodeInstallOutcome(
+                        queuedCount = queued.size,
+                        failedPackages = failures,
+                        serverChanged = true,
+                    ),
+                )
+            }
             onProgress("正在排队 ${index + 1}/${plan.packages.size}：${pkg.title}")
             val request = NodeInstallPlanner.buildInstallRequest(pkg)
             val result = runCatching { manager.install(request) }
@@ -250,9 +348,17 @@ class NodeInstallRepository(
             )
         }
 
+        if (!bindingStillActive(binding)) {
+            return@withContext Result.success(
+                NodeInstallOutcome(
+                    queuedCount = queued.size,
+                    failedPackages = failures,
+                    serverChanged = true,
+                ),
+            )
+        }
         val startResponse = runCatching { manager.startQueue() }.getOrNull()
-        val queueStartFailed = startResponse == null ||
-            (!startResponse.isSuccessful && startResponse.code() != 201)
+        val queueStartFailed = startResponse == null || !startResponse.isSuccessful
         if (queueStartFailed) {
             return@withContext Result.success(
                 NodeInstallOutcome(
@@ -263,17 +369,30 @@ class NodeInstallRepository(
             )
         }
 
-        if (fetchQueueStatus(manager) == null) {
-            return@withContext Result.success(
-                NodeInstallOutcome(
-                    queuedCount = queued.size,
-                    failedPackages = failures,
-                    queueStatusUnavailable = true,
-                ),
-            )
+        when (waitForQueueActive(manager, queued.size, onProgress)) {
+            ActiveWaitResult.ACTIVE -> Unit
+            ActiveWaitResult.UNAVAILABLE -> {
+                return@withContext Result.success(
+                    NodeInstallOutcome(
+                        queuedCount = queued.size,
+                        failedPackages = failures,
+                        queueStatusUnavailable = true,
+                    ),
+                )
+            }
+
+            ActiveWaitResult.UNCONFIRMED -> {
+                return@withContext Result.success(
+                    NodeInstallOutcome(
+                        queuedCount = queued.size,
+                        failedPackages = failures,
+                        queueUnconfirmed = true,
+                    ),
+                )
+            }
         }
 
-        val waitResult = waitForQueue(
+        val waitResult = waitForQueueIdle(
             manager = manager,
             queuedCount = queued.size,
             onProgress = onProgress,
@@ -297,23 +416,61 @@ class NodeInstallRepository(
                 ),
             )
         }
+        if (!bindingStillActive(binding)) {
+            return@withContext Result.success(
+                NodeInstallOutcome(
+                    queuedCount = queued.size,
+                    failedPackages = failures,
+                    serverChanged = true,
+                ),
+            )
+        }
 
         onProgress("正在重启 ComfyUI…")
         val rebootResult = runCatching { manager.reboot() }
         val rebootResponse = rebootResult.getOrNull()
-        val rebootRejected = rebootResponse != null &&
-            !rebootResponse.isSuccessful &&
-            rebootResponse.code() != 200
+        val rebootRejected = rebootResult.isFailure ||
+            rebootResponse == null ||
+            !rebootResponse.isSuccessful
         val reconnected = if (rebootRejected) {
             false
         } else {
             waitForServer(comfyApi)
         }
-        val updated = if (reconnected) {
-            onProgress("正在重新检查节点…")
-            workflowRepository.reanalyzeAndSave(plan.templateId)
-        } else {
-            null
+        if (!reconnected) {
+            return@withContext Result.success(
+                NodeInstallOutcome(
+                    queuedCount = queued.size,
+                    failedPackages = failures,
+                    restartRequested = true,
+                    restartRejected = rebootRejected,
+                    serverReconnected = false,
+                ),
+            )
+        }
+        if (!bindingStillActive(binding)) {
+            return@withContext Result.success(
+                NodeInstallOutcome(
+                    queuedCount = queued.size,
+                    failedPackages = failures,
+                    restartRequested = true,
+                    serverReconnected = true,
+                    serverChanged = true,
+                ),
+            )
+        }
+        onProgress("正在重新检查节点…")
+        val updated = deps.reanalyzeAndSave(plan.templateId, binding)
+        if (!bindingStillActive(binding)) {
+            return@withContext Result.success(
+                NodeInstallOutcome(
+                    queuedCount = queued.size,
+                    failedPackages = failures,
+                    restartRequested = true,
+                    serverReconnected = true,
+                    serverChanged = true,
+                ),
+            )
         }
         Result.success(
             NodeInstallOutcome(
@@ -321,19 +478,39 @@ class NodeInstallRepository(
                 failedPackages = failures,
                 restartRequested = true,
                 restartRejected = rebootRejected,
-                serverReconnected = reconnected,
+                serverReconnected = true,
+                recheckFailed = updated == null,
                 updatedTemplate = updated,
                 remainingMissingNodeTypes = updated?.missingNodeTypes.orEmpty(),
             ),
         )
     }
 
-    override suspend fun recheck(templateId: String): Result<WorkflowTemplate> =
+    override suspend fun recheck(
+        templateId: String,
+        binding: ServerBinding?,
+    ): Result<WorkflowTemplate> =
         withContext(Dispatchers.IO) {
-            val updated = workflowRepository.reanalyzeAndSave(templateId)
+            val target = binding
                 ?: return@withContext Result.failure(
+                    IllegalStateException("安装计划缺少服务器绑定，请重新检查后重试"),
+                )
+            if (!bindingStillActive(target)) {
+                return@withContext Result.failure(serverChangedError())
+            }
+            val updated = deps.reanalyzeAndSave(templateId, target)
+            if (updated == null) {
+                // 真实 reanalyze 在绑定变化时返回 null；先区分 ServerChanged，再报离线。
+                if (!bindingStillActive(target)) {
+                    return@withContext Result.failure(serverChangedError())
+                }
+                return@withContext Result.failure(
                     IllegalStateException("服务器尚未恢复连接，无法重新检查节点"),
                 )
+            }
+            if (!bindingStillActive(target)) {
+                return@withContext Result.failure(serverChangedError())
+            }
             Result.success(updated)
         }
 
@@ -372,22 +549,44 @@ class NodeInstallRepository(
         }
     }
 
-    private suspend fun waitForQueue(
+    private suspend fun waitForQueueActive(
+        manager: ComfyManagerApi,
+        queuedCount: Int,
+        onProgress: (String) -> Unit,
+    ): ActiveWaitResult {
+        var sawStatus = false
+        onProgress("等待主机安装队列启动…")
+        repeat(QUEUE_ACTIVE_ATTEMPTS) {
+            val status = fetchQueueStatus(manager)
+            if (status != null) {
+                sawStatus = true
+                if (NodeInstallQueuePolicy.activeCoversQueued(status, queuedCount)) {
+                    return ActiveWaitResult.ACTIVE
+                }
+                if (NodeInstallQueuePolicy.isActive(status)) {
+                    // 队列有活动但没有覆盖本次提交数量，无法确认归属。
+                    return ActiveWaitResult.UNCONFIRMED
+                }
+            }
+            deps.pollDelay(QUEUE_POLL_INTERVAL_MS)
+        }
+        return if (sawStatus) {
+            ActiveWaitResult.UNCONFIRMED
+        } else {
+            ActiveWaitResult.UNAVAILABLE
+        }
+    }
+
+    private suspend fun waitForQueueIdle(
         manager: ComfyManagerApi,
         queuedCount: Int,
         onProgress: (String) -> Unit,
     ): QueueWaitResult {
         var lastReported = -1
-        // 给 Manager 的 task_worker 一点启动时间，避免把“尚未开始”误判成“已经完成”。
-        delay(QUEUE_START_GRACE_MS)
         repeat(QUEUE_POLL_ATTEMPTS) {
             val status = fetchQueueStatus(manager)
             if (status != null) {
-                val active = status.isProcessing ||
-                    status.inProgressCount > 0 ||
-                    status.totalCount > 0
-                if (!active) {
-                    // done_count / total_count 在队列清空后会归零，因此以“空闲”作为完成信号。
+                if (NodeInstallQueuePolicy.isIdle(status)) {
                     return QueueWaitResult()
                 }
                 val done = status.doneCount.coerceIn(0, queuedCount)
@@ -396,7 +595,7 @@ class NodeInstallRepository(
                     onProgress("主机正在安装… 已完成 $done/$queuedCount")
                 }
             }
-            delay(QUEUE_POLL_INTERVAL_MS)
+            deps.pollDelay(QUEUE_POLL_INTERVAL_MS)
         }
         return QueueWaitResult(timedOut = true)
     }
@@ -409,14 +608,21 @@ class NodeInstallRepository(
 
     private suspend fun waitForServer(api: io.github.xiaowu20245.nekopaint.core.network.ComfyApi): Boolean {
         repeat(RECONNECT_ATTEMPTS) {
-            delay(RECONNECT_INTERVAL_MS)
-            if (runCatching { api.systemStats() }.isSuccess) return true
+            deps.pollDelay(RECONNECT_INTERVAL_MS)
+            val stats = runCatching { api.systemStats() }.getOrNull()
+            // Retrofit 对非 2xx 抛异常，成功解析才会返回非空。
+            if (stats != null) return true
         }
         return false
     }
 
-    private suspend fun currentConfig(): ServerConfig? =
-        runCatching { serverConfigStore.config.first() }.getOrNull()
+    private suspend fun activeProfile(): ServerProfile? = deps.activeProfile()
+
+    private suspend fun bindingStillActive(binding: ServerBinding): Boolean =
+        ServerBindingPolicy.matches(activeProfile(), binding)
+
+    private fun serverChangedError(): IllegalStateException =
+        IllegalStateException("服务器已切换，请切回原服务器重新检查后再操作")
 
     private fun managerUnavailableMessage(code: Int): String = when (code) {
         401, 403 -> "ComfyUI-Manager 拒绝了访问，请检查主机安全策略或反向代理权限"
@@ -434,10 +640,16 @@ class NodeInstallRepository(
         val timedOut: Boolean = false,
     )
 
+    private enum class ActiveWaitResult {
+        ACTIVE,
+        UNCONFIRMED,
+        UNAVAILABLE,
+    }
+
     private companion object {
-        const val QUEUE_START_GRACE_MS = 1_000L
         const val QUEUE_POLL_INTERVAL_MS = 2_000L
         const val QUEUE_POLL_ATTEMPTS = 150
+        const val QUEUE_ACTIVE_ATTEMPTS = 15
         const val RECONNECT_INTERVAL_MS = 2_000L
         const val RECONNECT_ATTEMPTS = 45
     }

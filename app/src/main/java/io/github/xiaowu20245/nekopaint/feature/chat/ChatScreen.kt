@@ -2003,6 +2003,16 @@ private fun ChatActionProposalCard(
 
             if (isInstall && proposal.installPackages.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    proposal.binding?.let { binding ->
+                        Text(
+                            text = stringResource(
+                                R.string.chat_action_install_target_server,
+                                "${binding.host}:${binding.port}",
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     proposal.installPackages.take(5).forEach { pkg ->
                         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(

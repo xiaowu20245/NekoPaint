@@ -354,32 +354,43 @@ internal class WorkflowTemplateStore(
     suspend fun saveCompatibility(
         templateId: String,
         analyzed: WorkflowTemplate,
+        bindingGuard: (suspend () -> Boolean)? = null,
     ): WorkflowTemplate? = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        mutex.lock()
+        try {
+            if (bindingGuard != null && !bindingGuard()) return@withContext null
             val dir = File(rootDir, templateId)
-            val stored = readProfile(dir) ?: return@withLock null
-            if (stored.repairRequired) return@withLock stored
+            val stored = readProfile(dir) ?: return@withContext null
+            if (stored.repairRequired) return@withContext stored
             val updated = stored.copy(
                 missingNodeTypes = analyzed.missingNodeTypes,
                 catalogChecked = analyzed.catalogChecked,
                 compatibility = analyzed.compatibility,
             )
-            if (updated != stored) writeProfile(dir, updated)
+            if (updated != stored) {
+                if (bindingGuard != null && !bindingGuard()) return@withContext null
+                writeProfile(dir, updated)
+            }
             updated
+        } finally {
+            mutex.unlock()
         }
     }
 
     suspend fun reanalyzeAndSave(
         templateId: String,
         catalog: NodeCatalog,
+        bindingGuard: (suspend () -> Boolean)? = null,
     ): WorkflowTemplate? = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        mutex.lock()
+        try {
+            if (bindingGuard != null && !bindingGuard()) return@withContext null
             val dir = File(rootDir, templateId)
-            val template = readProfile(dir) ?: return@withLock null
-            if (template.repairRequired) return@withLock template
-            val raw = readApiJsonUnlocked(templateId) ?: return@withLock null
+            val template = readProfile(dir) ?: return@withContext null
+            if (template.repairRequired) return@withContext template
+            val raw = readApiJsonUnlocked(templateId) ?: return@withContext null
             val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
-                ?: return@withLock null
+                ?: return@withContext null
             val detection = ParameterDetector.detect(parsed.graph, catalog)
             val compatibility = WorkflowCompatibilityAnalyzer.analyze(
                 graph = parsed.graph,
@@ -391,8 +402,11 @@ internal class WorkflowTemplateStore(
                 catalogChecked = detection.catalogChecked,
                 compatibility = compatibility,
             )
+            if (bindingGuard != null && !bindingGuard()) return@withContext null
             writeProfile(dir, updated)
             updated
+        } finally {
+            mutex.unlock()
         }
     }
 

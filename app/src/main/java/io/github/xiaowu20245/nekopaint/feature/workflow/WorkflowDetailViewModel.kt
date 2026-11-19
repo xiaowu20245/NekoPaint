@@ -16,6 +16,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.SeedStrategy
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
@@ -118,6 +119,7 @@ data class NodeInstallUiState(
     val visible: Boolean = false,
     val loading: Boolean = false,
     val plan: NodeInstallPlan? = null,
+    val binding: ServerBinding? = null,
     val error: String? = null,
     val installing: Boolean = false,
     val progress: String? = null,
@@ -125,6 +127,9 @@ data class NodeInstallUiState(
     val result: String? = null,
     val remainingMissing: List<String> = emptyList(),
 )
+
+/** install 后 plan 会被清空，recheck 必须使用安装时保存的 binding。 */
+internal fun NodeInstallUiState.recheckBinding(): ServerBinding? = binding ?: plan?.binding
 
 class WorkflowDetailViewModel(
     private val templateId: String,
@@ -806,7 +811,12 @@ class WorkflowDetailViewModel(
             ).fold(
                 onSuccess = { plan ->
                     _nodeInstallState.update {
-                        it.copy(loading = false, plan = plan, error = null)
+                        it.copy(
+                            loading = false,
+                            plan = plan,
+                            binding = plan.binding,
+                            error = null,
+                        )
                     }
                 },
                 onFailure = { error ->
@@ -858,6 +868,7 @@ class WorkflowDetailViewModel(
                         it.copy(
                             installing = false,
                             plan = null,
+                            binding = current.plan?.binding ?: current.binding,
                             progress = null,
                             result = outcome.summary(),
                             remainingMissing = outcome.remainingMissingNodeTypes,
@@ -884,7 +895,7 @@ class WorkflowDetailViewModel(
             it.copy(loading = true, error = null, result = null)
         }
         viewModelScope.launch {
-            nodeInstallRepository.recheck(templateId).fold(
+            nodeInstallRepository.recheck(templateId, current.recheckBinding()).fold(
                 onSuccess = { updated ->
                     applyCompatibilityUpdate(updated)
                     val remaining = updated.missingNodeTypes

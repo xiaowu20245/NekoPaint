@@ -6,6 +6,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.NodeInstallPlan
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
@@ -100,6 +101,8 @@ data class ChatActionProposal(
     val unresolvedNodeTypes: List<String> = emptyList(),
     val missingNodeTypeCount: Int = 0,
     val restartAfterInstall: Boolean = true,
+    /** 生成安装建议时绑定的服务器；旧建议为 null，必须重新生成。 */
+    val binding: ServerBinding? = null,
 ) {
     val shortId: String
         get() = if (promptId.length <= 8) promptId else promptId.take(8)
@@ -506,6 +509,7 @@ class ChatTaskActionHandler(
                 installPackages = plan.packages,
                 unresolvedNodeTypes = plan.unresolvedNodeTypes,
                 missingNodeTypeCount = plan.missingNodeTypes.size,
+                binding = plan.binding,
             ),
         )
     }
@@ -565,6 +569,7 @@ class ChatTaskActionHandler(
             templateName = proposal.title,
             packages = proposal.installPackages,
             unresolvedNodeTypes = proposal.unresolvedNodeTypes,
+            binding = proposal.binding,
         )
         return installer.install(
             plan = plan,

@@ -11,6 +11,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
@@ -22,6 +23,7 @@ import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagExpander
+import io.github.xiaowu20245.nekopaint.core.workflow.ServerBindingPolicy
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
@@ -83,6 +85,7 @@ internal data class WorkflowRepositoryDependencies(
     val templateStore: WorkflowTemplateStore,
     val configProvider: suspend () -> ServerConfig?,
     val activeServerIdProvider: suspend () -> String?,
+    val activeBindingProvider: suspend () -> ServerBinding? = { null },
     val clientIdProvider: suspend () -> String,
     val apiFactory: ComfyApiFactory,
     val taskRecordRepository: TaskRecordRepository,
@@ -110,6 +113,9 @@ class WorkflowRepository private constructor(
             ),
             configProvider = { serverConfigStore.config.first() },
             activeServerIdProvider = { serverConfigStore.activeServerId.first() },
+            activeBindingProvider = {
+                serverConfigStore.activeServer.first()?.let(ServerBindingPolicy::fromProfile)
+            },
             clientIdProvider = { clientIdStore.getOrCreate() },
             apiFactory = apiFactory,
             taskRecordRepository = taskRecordRepository,
@@ -309,8 +315,12 @@ class WorkflowRepository private constructor(
     /**
      * 对旧模板或未连接服务器时导入的模板补做兼容性分析。
      */
-    suspend fun analyzeCompatibility(template: WorkflowTemplate): WorkflowTemplate? =
+    suspend fun analyzeCompatibility(
+        template: WorkflowTemplate,
+        binding: ServerBinding? = null,
+    ): WorkflowTemplate? =
         withContext(Dispatchers.IO) {
+            if (binding != null && !bindingMatches(binding)) return@withContext null
             val raw = readApiJson(template.id) ?: return@withContext null
             val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
                 ?: return@withContext null
@@ -321,6 +331,7 @@ class WorkflowRepository private constructor(
                 catalog = catalog,
                 missingNodeTypes = detection.missingNodeTypes,
             )
+            if (binding != null && !bindingMatches(binding)) return@withContext null
             // 不在这里回写整个模板，避免覆盖用户刚修改的参数值；
             // 新导入的模板已在 import() 时保存兼容性。
             template.copy(
@@ -336,18 +347,38 @@ class WorkflowRepository private constructor(
     suspend fun saveCompatibility(
         templateId: String,
         analyzed: WorkflowTemplate,
-    ): WorkflowTemplate? = templateStore.saveCompatibility(templateId, analyzed)
+        binding: ServerBinding? = null,
+    ): WorkflowTemplate? {
+        val guard: (suspend () -> Boolean)? = binding?.let { expected ->
+            { bindingMatches(expected) }
+        }
+        return templateStore.saveCompatibility(templateId, analyzed, guard)
+    }
 
     /**
      * 节点安装/重启后重新拉取 object_info 并保存缺失节点结果。
      *
      * 服务器尚未恢复或工作流文件不可读时返回 null，避免把“无法检查”误存成“没有缺失”。
      */
-    suspend fun reanalyzeAndSave(templateId: String): WorkflowTemplate? {
+    suspend fun reanalyzeAndSave(
+        templateId: String,
+        binding: ServerBinding? = null,
+    ): WorkflowTemplate? {
+        if (binding != null && !bindingMatches(binding)) return null
         val template = templateStore.getTemplate(templateId) ?: return null
         if (template.repairRequired) return template
         val catalog = loadCatalog() ?: return null
-        return templateStore.reanalyzeAndSave(templateId, catalog)
+        if (binding != null && !bindingMatches(binding)) return null
+        val guard: (suspend () -> Boolean)? = binding?.let { expected ->
+            { bindingMatches(expected) }
+        }
+        return templateStore.reanalyzeAndSave(templateId, catalog, guard)
+    }
+
+    private suspend fun bindingMatches(binding: ServerBinding): Boolean {
+        val active = runCatching { deps.activeBindingProvider() }.getOrNull() ?: return false
+        return active.serverId == binding.serverId &&
+            active.endpointKey == binding.endpointKey
     }
 
     /**

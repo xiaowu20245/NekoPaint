@@ -70,4 +70,45 @@ class NodeInstallOutcomeTest {
 
         assertTrue(summary.contains("重启 ComfyUI 后生效"))
     }
+
+    @Test
+    fun `busy baseline says zero requests submitted`() {
+        val summary = NodeInstallOutcome(queueBusy = true).summary()
+
+        assertTrue(summary.contains("队列正在忙"))
+        assertTrue(summary.contains("未提交任何安装请求"))
+    }
+
+    @Test
+    fun `unconfirmed queue does not claim restart`() {
+        val summary = NodeInstallOutcome(
+            queuedCount = 1,
+            queueUnconfirmed = true,
+        ).summary()
+
+        assertTrue(summary.contains("无法确认"))
+        assertTrue(summary.contains("未自动重启"))
+    }
+
+    @Test
+    fun `recheck failure after restart does not claim complete`() {
+        val summary = NodeInstallOutcome(
+            queuedCount = 1,
+            restartRequested = true,
+            serverReconnected = true,
+            recheckFailed = true,
+        ).summary()
+
+        assertTrue(summary.contains("无法确认节点是否补齐"))
+    }
+
+    @Test
+    fun `server change stops subsequent steps`() {
+        val summary = NodeInstallOutcome(
+            queuedCount = 1,
+            serverChanged = true,
+        ).summary()
+
+        assertTrue(summary.contains("服务器已切换"))
+    }
 }
