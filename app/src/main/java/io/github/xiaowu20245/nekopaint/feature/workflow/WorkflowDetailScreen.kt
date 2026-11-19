@@ -2114,11 +2114,20 @@ private fun SubmitErrorCard(
             )
             error.nodeErrors.forEach { nodeError ->
                 Text(
-                    text = stringResource(
-                        R.string.workflow_node_error_item,
-                        nodeError.nodeId,
-                        nodeError.message,
-                    ),
+                    text = if (nodeError.inputName != null) {
+                        stringResource(
+                            R.string.workflow_node_input_error_item,
+                            nodeError.nodeId,
+                            nodeError.inputName,
+                            nodeError.message,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.workflow_node_error_item,
+                            nodeError.nodeId,
+                            nodeError.message,
+                        )
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                 )

@@ -241,17 +241,6 @@ fun HistoryScreen(
         }
     }
 
-    LaunchedEffect(state.entries, state.activeServerId) {
-        val selectable = state.entries
-            .filter { isOperable(it.serverId) }
-            .map { it.promptId }
-            .toSet()
-        selectedIds = selectedIds.intersect(selectable)
-        if (selectionMode && selectable.isEmpty()) {
-            selectionMode = false
-        }
-    }
-
     LaunchedEffect(state.activeServerId, state.selectedHostId) {
         selectionMode = false
         selectedIds = emptySet()
@@ -295,9 +284,20 @@ fun HistoryScreen(
     val activeHostEntries = remember(state.entries, activeServerIds) {
         state.entries.filter { isOperable(it.serverId) }
     }
-    val selectableEntries = remember(hostFilteredEntries, activeServerIds) {
-        hostFilteredEntries.filter { isOperable(it.serverId) }
+    val selectableEntries = remember(filteredEntries, activeServerIds) {
+        filteredEntries.filter { isOperable(it.serverId) }
     }
+    val selectableIds = remember(selectableEntries) {
+        selectableEntries.map { it.promptId }.toSet()
+    }
+
+    LaunchedEffect(selectableIds) {
+        selectedIds = HistorySelectionPolicy.prune(selectedIds, selectableIds)
+        if (selectionMode && selectableIds.isEmpty()) {
+            selectionMode = false
+        }
+    }
+
     val tasksById = remember(state.tasks) {
         state.tasks.associateBy { it.promptId }
     }
@@ -318,11 +318,11 @@ fun HistoryScreen(
         if (!isOperable(entry.serverId)) {
             notifyReadOnly(entry.serverId)
         } else {
-            selectedIds = if (entry.promptId in selectedIds) {
-                selectedIds - entry.promptId
-            } else {
-                selectedIds + entry.promptId
-            }
+            selectedIds = HistorySelectionPolicy.toggle(
+                selected = selectedIds,
+                promptId = entry.promptId,
+                selectable = selectableIds,
+            )
         }
     }
     val openDetail: (HistoryEntry) -> Unit = { entry ->
@@ -371,8 +371,7 @@ fun HistoryScreen(
     val deleteDescription = stringResource(R.string.history_delete_selected)
     val doneLabel = stringResource(R.string.history_select_done)
     val doneDescription = stringResource(R.string.history_select_done_desc)
-    val allSelected = selectableEntries.isNotEmpty() &&
-        selectableEntries.all { it.promptId in selectedIds }
+    val allSelected = HistorySelectionPolicy.allSelected(selectedIds, selectableIds)
     val selectAllDescription = stringResource(
         if (allSelected) R.string.history_deselect_all else R.string.history_select_all,
     )
@@ -419,11 +418,10 @@ fun HistoryScreen(
                         icon = if (allSelected) NekoIcons.Deselect else NekoIcons.SelectAll,
                         contentDescription = selectAllDescription,
                         onClick = {
-                            selectedIds = if (allSelected) {
-                                emptySet()
-                            } else {
-                                selectableEntries.map { it.promptId }.toSet()
-                            }
+                            selectedIds = HistorySelectionPolicy.toggleAll(
+                                selected = selectedIds,
+                                selectable = selectableIds,
+                            )
                         },
                     ),
                 )

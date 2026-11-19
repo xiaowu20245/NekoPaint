@@ -13,6 +13,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -32,12 +33,15 @@ data class QueueUiState(
     val retryingPromptId: String? = null,
     val localNotice: String? = null,
     val recordWriteError: String? = null,
+    val configured: Boolean = false,
+    val loadState: QueueLoadState = QueueLoadState.Loading,
 )
 
 class QueueViewModel(
     private val taskManager: TaskManager,
     private val workflowRepository: WorkflowRepository,
     private val operationScope: CoroutineScope,
+    private val activeServerId: Flow<String?>,
 ) : ViewModel() {
 
     private val retryController = QueuePendingRetryController(
@@ -58,13 +62,15 @@ class QueueViewModel(
         taskData,
         taskManager.connection,
         taskManager.queueRemaining,
-    ) { (queue, tasks, progress), connection, remaining ->
+        activeServerId,
+    ) { (queue, tasks, progress), connection, remaining, serverId ->
         QueueUiState(
             queue = queue,
             progress = progress,
             tasks = tasks,
             connection = connection,
             queueRemaining = queue?.pending?.size ?: remaining,
+            configured = !serverId.isNullOrBlank(),
         )
     }
 
@@ -87,7 +93,7 @@ class QueueViewModel(
         taskManager.refreshing,
         actions,
     ) { state, localClientId, error, refreshing, action ->
-        state.copy(
+        val updated = state.copy(
             localClientId = localClientId,
             error = error,
             refreshing = refreshing,
@@ -95,6 +101,14 @@ class QueueViewModel(
             retryingPromptId = action.second.retryingPromptId,
             localNotice = action.second.notice,
             recordWriteError = action.third,
+        )
+        updated.copy(
+            loadState = QueueUiStatePolicy.loadState(
+                queue = updated.queue,
+                refreshing = updated.refreshing,
+                error = updated.error,
+                configured = updated.configured,
+            ),
         )
     }.stateIn(
         scope = viewModelScope,
@@ -135,6 +149,7 @@ class QueueViewModel(
                     taskManager = container.taskManager,
                     workflowRepository = container.workflowRepository,
                     operationScope = container.operationScope,
+                    activeServerId = container.serverConfigStore.activeServerId,
                 )
             }
         }

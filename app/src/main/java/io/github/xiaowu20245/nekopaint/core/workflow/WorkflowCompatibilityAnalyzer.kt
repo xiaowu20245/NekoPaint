@@ -18,7 +18,7 @@ import kotlinx.serialization.json.contentOrNull
  */
 object WorkflowCompatibilityAnalyzer {
 
-    const val CURRENT_VERSION = 3
+    const val CURRENT_VERSION = 4
 
     private val detailerClassNames = setOf(
         "DetailerForEach",
@@ -66,8 +66,9 @@ object WorkflowCompatibilityAnalyzer {
 
         for (node in graph.nodes.values) {
             val isLoadImage = isImageLoader(node.classType)
+            val isLoadMask = isMaskLoader(node.classType)
             if (node.id !in reachable) {
-                if (isLoadImage) {
+                if (isLoadImage || isLoadMask) {
                     issues += WorkflowIssue(
                         severity = WorkflowIssueSeverity.WARNING,
                         nodeId = node.id,
@@ -77,11 +78,27 @@ object WorkflowCompatibilityAnalyzer {
                 continue
             }
 
-            if (isLoadImage) {
+            if (isLoadMask) {
+                val current = (node.inputs["image"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                maskSlots += WorkflowInputSlot(
+                    nodeId = node.id,
+                    inputName = "image",
+                    title = node.title,
+                    kind = WorkflowSlotKind.MASK,
+                    currentValue = current,
+                )
+                if (consumers[node.id].isNullOrEmpty()) {
+                    issues += WorkflowIssue(
+                        severity = WorkflowIssueSeverity.WARNING,
+                        nodeId = node.id,
+                        message = "LoadImageMask 节点 ${node.id} 没有下游消费者",
+                    )
+                }
+            } else if (isLoadImage) {
                 val usedSlots = consumers[node.id].orEmpty().map { it.slot }.toSet()
                 val current = (node.inputs["image"] as? JsonPrimitive)?.contentOrNull.orEmpty()
                 val usesImage = 0 in usedSlots
-                val usesMask = 1 in usedSlots || node.classType == "LoadImageMask"
+                val usesMask = 1 in usedSlots
                 if (usesImage) {
                     imageSlots += WorkflowInputSlot(
                         nodeId = node.id,
@@ -237,9 +254,13 @@ object WorkflowCompatibilityAnalyzer {
         )
     }
 
+    private fun isMaskLoader(classType: String): Boolean =
+        classType.contains("LoadImageMask", ignoreCase = true)
+
     private fun isImageLoader(classType: String): Boolean =
-        classType.contains("LoadImage", ignoreCase = true) ||
-            classType.contains("ImageLoader", ignoreCase = true)
+        !isMaskLoader(classType) &&
+            (classType.contains("LoadImage", ignoreCase = true) ||
+                classType.contains("ImageLoader", ignoreCase = true))
 
     private fun isDetailer(classType: String): Boolean =
         classType in detailerClassNames ||

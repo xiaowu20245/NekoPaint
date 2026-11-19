@@ -11,6 +11,7 @@ import io.github.xiaowu20245.nekopaint.data.repository.WorkflowSubmitResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -34,6 +35,17 @@ class WorkflowDetailOperationPolicyTest {
                 group = ParameterGroup.SAMPLING,
                 defaultValue = "1",
                 value = "42",
+                selected = true,
+            ),
+            ParameterCandidate(
+                id = "1:steps",
+                nodeId = "1",
+                inputName = "steps",
+                label = "Steps",
+                type = ParameterType.INT,
+                group = ParameterGroup.SAMPLING,
+                defaultValue = "20",
+                value = "20",
                 selected = true,
             ),
         ),
@@ -110,6 +122,54 @@ class WorkflowDetailOperationPolicyTest {
         assertTrue(result.state.submitError?.message.orEmpty().contains("成功 1"))
         assertTrue(result.state.submitError?.message.orEmpty().contains("失败 1"))
         assertTrue(result.state.submitError?.message.orEmpty().contains("跳过 1"))
+    }
+
+    @Test
+    fun inputLevelValidationMarksOnlyMatchingInput() {
+        val operation = state(
+            status = OperationStatus.PARTIAL,
+            success = 0,
+            failed = 1,
+            processed = 1,
+            lastValidation = WorkflowSubmitResult.Validation(
+                summary = "bad seed",
+                nodeErrors = listOf(
+                    NodeErrorInfo("1", "seed invalid", inputName = "seed"),
+                ),
+            ),
+        )
+
+        val result = WorkflowDetailOperationPolicy.apply(
+            WorkflowDetailUiState(template = template),
+            operation,
+        )
+
+        assertEquals(FieldError.Server("seed invalid"), result.state.fieldErrors["1:seed"])
+        assertNull(result.state.fieldErrors["1:steps"])
+    }
+
+    @Test
+    fun nodeLevelValidationFallsBackToAllInputs() {
+        val operation = state(
+            status = OperationStatus.PARTIAL,
+            success = 0,
+            failed = 1,
+            processed = 1,
+            lastValidation = WorkflowSubmitResult.Validation(
+                summary = "node invalid",
+                nodeErrors = listOf(
+                    NodeErrorInfo("1", "node invalid", inputName = null),
+                ),
+            ),
+        )
+
+        val result = WorkflowDetailOperationPolicy.apply(
+            WorkflowDetailUiState(template = template),
+            operation,
+        )
+
+        assertEquals(FieldError.Server("node invalid"), result.state.fieldErrors["1:seed"])
+        assertEquals(FieldError.Server("node invalid"), result.state.fieldErrors["1:steps"])
     }
 
     @Test

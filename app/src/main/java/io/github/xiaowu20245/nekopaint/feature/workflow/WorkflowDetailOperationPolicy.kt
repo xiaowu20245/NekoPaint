@@ -137,7 +137,11 @@ internal object WorkflowDetailOperationPolicy {
         .toFieldErrors(state: WorkflowDetailUiState): Map<String, FieldError> {
         if (this == null) return emptyMap()
         return state.template?.selectedCandidates.orEmpty().mapNotNull { candidate ->
-            val nodeError = nodeErrors.firstOrNull { it.nodeId == candidate.nodeId }
+            val nodeError = nodeErrors.firstOrNull {
+                it.nodeId == candidate.nodeId && it.inputName == candidate.inputName
+            } ?: nodeErrors.firstOrNull {
+                it.nodeId == candidate.nodeId && it.inputName == null
+            }
             nodeError?.let { candidate.id to FieldError.Server(it.message) }
         }.toMap()
     }

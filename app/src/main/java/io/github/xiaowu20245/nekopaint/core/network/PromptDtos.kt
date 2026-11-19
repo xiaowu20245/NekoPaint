@@ -42,4 +42,5 @@ data class NodeErrorDetailDto(
     val type: String? = null,
     val message: String? = null,
     val details: String? = null,
+    @SerialName("input_name") val inputName: String? = null,
 )

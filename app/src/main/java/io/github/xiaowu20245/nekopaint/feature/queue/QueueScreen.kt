@@ -191,16 +191,22 @@ fun QueueScreen(
                 }
             }
 
-            if (state.queue == null) {
-                if (localPending.isEmpty()) {
-                    item {
-                        if (state.connection == ComfyConnectionState.InvalidConfig) {
+            when (state.loadState) {
+                QueueLoadState.Unconfigured -> {
+                    if (localPending.isEmpty()) {
+                        item {
                             NekoEmptyState(
                                 icon = Icons.Outlined.Warning,
                                 title = stringResource(R.string.queue_config_invalid_title),
                                 subtitle = stringResource(R.string.queue_config_invalid_desc),
                             )
-                        } else {
+                        }
+                    }
+                }
+
+                QueueLoadState.Loading -> {
+                    if (localPending.isEmpty()) {
+                        item {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -212,59 +218,80 @@ fun QueueScreen(
                         }
                     }
                 }
-            } else {
-                val running = state.queue?.running.orEmpty()
-                val pending = state.queue?.pending.orEmpty()
 
-                if (running.isEmpty() && pending.isEmpty() && localPending.isEmpty()) {
-                    item {
-                        QueueEmptyState(
-                            onOpenHistory = onOpenHistory,
-                        )
+                QueueLoadState.Error -> {
+                    if (localPending.isEmpty()) {
+                        item {
+                            NekoEmptyState(
+                                icon = Icons.Outlined.Warning,
+                                title = stringResource(R.string.queue_load_failed_title),
+                                subtitle = state.error
+                                    ?: stringResource(R.string.queue_load_failed_desc),
+                                actionLabel = stringResource(R.string.queue_refresh),
+                                onAction = viewModel::refresh,
+                            )
+                        }
                     }
                 }
 
-                if (running.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = stringResource(R.string.queue_running),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
-                        )
-                    }
-                    itemsIndexed(running, key = { _, item -> item.promptId }) { _, item ->
-                        val task = state.tasks.firstOrNull { it.promptId == item.promptId }
-                        val progress = state.progress[item.promptId]
-                        RunningCard(
-                            item = item,
-                            task = task,
-                            progress = progress,
-                            connection = state.connection,
-                            isOwn = item.clientId != null && item.clientId == state.localClientId,
-                            onInterrupt = { interruptTarget = item },
-                        )
-                    }
-                }
+                QueueLoadState.Refreshing,
+                QueueLoadState.LoadedWithError,
+                QueueLoadState.Empty,
+                QueueLoadState.Loaded,
+                -> {
+                    val running = state.queue?.running.orEmpty()
+                    val pending = state.queue?.pending.orEmpty()
 
-                if (pending.isNotEmpty()) {
-                    item {
-                        Text(
-                            text = "${stringResource(R.string.queue_pending)} (${pending.size})",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-                        )
+                    if (running.isEmpty() && pending.isEmpty() && localPending.isEmpty()) {
+                        item {
+                            QueueEmptyState(
+                                onOpenHistory = onOpenHistory,
+                            )
+                        }
                     }
-                    itemsIndexed(pending, key = { _, item -> item.promptId }) { index, item ->
-                        val task = state.tasks.firstOrNull { it.promptId == item.promptId }
-                        PendingCard(
-                            index = index + 1,
-                            item = item,
-                            task = task,
-                            isOwn = item.clientId != null && item.clientId == state.localClientId,
-                            onDelete = { deleteTarget = item },
-                        )
+
+                    if (running.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = stringResource(R.string.queue_running),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                            )
+                        }
+                        itemsIndexed(running, key = { _, item -> item.promptId }) { _, item ->
+                            val task = state.tasks.firstOrNull { it.promptId == item.promptId }
+                            val progress = state.progress[item.promptId]
+                            RunningCard(
+                                item = item,
+                                task = task,
+                                progress = progress,
+                                connection = state.connection,
+                                isOwn = item.clientId != null && item.clientId == state.localClientId,
+                                onInterrupt = { interruptTarget = item },
+                            )
+                        }
+                    }
+
+                    if (pending.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "${stringResource(R.string.queue_pending)} (${pending.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                        itemsIndexed(pending, key = { _, item -> item.promptId }) { index, item ->
+                            val task = state.tasks.firstOrNull { it.promptId == item.promptId }
+                            PendingCard(
+                                index = index + 1,
+                                item = item,
+                                task = task,
+                                isOwn = item.clientId != null && item.clientId == state.localClientId,
+                                onDelete = { deleteTarget = item },
+                            )
+                        }
                     }
                 }
             }

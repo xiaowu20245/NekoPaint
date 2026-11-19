@@ -55,6 +55,8 @@ sealed interface WorkflowImportResult {
 data class NodeErrorInfo(
     val nodeId: String,
     val message: String,
+    val inputName: String? = null,
+    val details: String? = null,
 )
 
 sealed interface WorkflowSubmitResult {
@@ -651,6 +653,8 @@ class WorkflowRepository private constructor(
                             ?: detail.details
                             ?: detail.type
                             ?: "节点 $nodeId 校验失败",
+                        inputName = detail.inputName,
+                        details = detail.details,
                     )
                 }
             }

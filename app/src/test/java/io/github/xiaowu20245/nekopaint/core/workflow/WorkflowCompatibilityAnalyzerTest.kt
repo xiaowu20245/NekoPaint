@@ -262,6 +262,86 @@ class WorkflowCompatibilityAnalyzerTest {
     }
 
     @Test
+    fun loadImageMaskOnlyCreatesMaskSlot() {
+        val graph = graphOf(
+            """
+            {
+              "1": {"class_type": "LoadImageMask", "inputs": {"image": "mask.png", "channel": "red"}},
+              "2": {"class_type": "MaskConsumer", "inputs": {"mask": ["1", 0]}},
+              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}
+            }
+            """.trimIndent(),
+        )
+
+        val result = WorkflowCompatibilityAnalyzer.analyze(graph, catalog = null)
+
+        assertEquals(WorkflowMode.MASK_INPAINT, result.mode)
+        assertTrue(result.imageSlots.isEmpty())
+        assertEquals("1", result.maskSlots.single().nodeId)
+        assertEquals("mask.png", result.maskSlots.single().currentValue)
+    }
+
+    @Test
+    fun loadImageMaskNeverCreatesImageSlotEvenWhenSlotZeroIsConsumedAsImage() {
+        val graph = graphOf(
+            """
+            {
+              "1": {"class_type": "LoadImageMask", "inputs": {"image": "mask.png", "channel": "red"}},
+              "2": {"class_type": "ImageConsumer", "inputs": {"image": ["1", 0]}},
+              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}
+            }
+            """.trimIndent(),
+        )
+
+        val result = WorkflowCompatibilityAnalyzer.analyze(graph, catalog = null)
+
+        assertTrue(result.imageSlots.isEmpty())
+        assertEquals("1", result.maskSlots.single().nodeId)
+    }
+
+    @Test
+    fun loadImageMaskUnreachableStillWarns() {
+        val graph = graphOf(
+            """
+            {
+              "1": {"class_type": "LoadImageMask", "inputs": {"image": "orphan-mask.png", "channel": "red"}},
+              "2": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512}},
+              "3": {"class_type": "KSampler", "inputs": {"latent_image": ["2", 0]}},
+              "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}}
+            }
+            """.trimIndent(),
+        )
+
+        val result = WorkflowCompatibilityAnalyzer.analyze(graph, catalog = null)
+
+        assertTrue(
+            result.issues.any {
+                it.nodeId == "1" && it.message.contains("没有接入输出链路")
+            },
+        )
+        assertTrue(result.maskSlots.isEmpty())
+    }
+
+    @Test
+    fun loadImageWithOnlyMaskConsumerCreatesMaskSlotOnly() {
+        val graph = graphOf(
+            """
+            {
+              "1": {"class_type": "LoadImage", "inputs": {"image": "input.png"}},
+              "2": {"class_type": "MaskConsumer", "inputs": {"mask": ["1", 1]}},
+              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}
+            }
+            """.trimIndent(),
+        )
+
+        val result = WorkflowCompatibilityAnalyzer.analyze(graph, catalog = null)
+
+        assertEquals(WorkflowMode.MASK_INPAINT, result.mode)
+        assertTrue(result.imageSlots.isEmpty())
+        assertEquals("1", result.maskSlots.single().nodeId)
+    }
+
+    @Test
     fun detectsControlNetAndUpscaleCapabilities() {
         val graph = graphOf(
             """

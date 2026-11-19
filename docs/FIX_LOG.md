@@ -975,4 +975,23 @@ git diff --check
   - R5-08（低残余）：`waitForServer` 仍可能在 reboot 后 2s 看到旧进程；记录为低优先级，不影响写模板。
   - 验证：126 suites / 711 tests / 0 failures / 0 errors / 0 skipped；lint 0/10/3；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - 第二轮第 5 批 commit 已提交为 `fix: 绑定安装服务器与队列归属`（`3193e34`）。
-- **待复审**：第 5 批尚未提交，等待独立复审（建议 `docs/FIX_REVIEW.md` 第 81 节）。
+- 第二轮第 5 批已复审 **APPROVED**（`docs/FIX_REVIEW.md` 第 83 节），文档提交 `0676d69`。
+
+### 44. 第三轮 3A-1：正确性基线（CR-021/023/026/027）
+
+- **CR-021 LoadImageMask 槽位**
+  - `WorkflowCompatibilityAnalyzer` 新增 `isMaskLoader`，`isImageLoader` 排除 `LoadImageMask`；`LoadImageMask` 只生成 `maskSlots`，普通 `LoadImage` 仅按下游 slot 0/1 生成 image/mask。
+  - `CURRENT_VERSION` 升至 4，旧模板会自动重算；未接入输出链的 mask loader 仍产生 warning。
+  - 新增测试：LoadImageMask 仅 mask slot、slot0 被当 image 消费也不生成 image slot、孤立 mask loader 警告；`WorkflowRepairFlowTest` 增加旧 `analyzerVersion=3` 模板读取后重算为 4 的 store 级回归。
+- **CR-023 队列首屏状态**
+  - 新增 `QueueLoadState`（7 态）与 `QueueUiStatePolicy`；`QueueViewModel` 注入 `activeServerId`，按配置/加载/刷新/错误/旧数据/空/正常计算状态。
+  - `QueueScreen` 不再对 `queue == null` 无限 spinner：未配置显示设置空状态，首次失败显示错误空状态 + 重试，刷新中保留旧内容。
+- **CR-026 节点错误精确到输入**
+  - `NodeErrorDetailDto` 增加 `input_name`；`NodeErrorInfo` 增加 `inputName/details`；解析保留字段。
+  - `WorkflowDetailOperationPolicy` 优先按 `nodeId + inputName` 匹配，节点级错误（inputName=null）才回退到该节点所有输入；提交错误卡片显示输入名。
+- **CR-027 历史选择与可见筛选联动**
+  - 新增 `HistorySelectionPolicy`；`HistoryScreen` 的 `selectableEntries` 改为基于 `filteredEntries`，切换筛选/主机/数据刷新时 prune 不可见选择；全选只覆盖当前可见可操作条目。
+- **测试**
+  - 新增 `WorkflowCompatibilityAnalyzerTest` +4、`QueueUiStatePolicyTest` 8、`HistorySelectionPolicyTest` 2、`WorkflowDetailOperationPolicyTest` +2、`WorkflowRepairFlowTest` +1；`WorkflowSubmitPersistenceTest` 增加 `input_name/details` 断言。
+  - 验证：**128 suites / 728 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 connected 仍为 11/11 基线，本轮未新增 instrumentation。
+- **复审**：R8-01 已在 `docs/FIX_REVIEW.md` 第 91 节复审闭环；R8-02 的 FIX_LOG 复审引用已更新，提交前以第 92 节复审结论为准。

@@ -4,9 +4,14 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PresetValueEntry
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCompatibility
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowInputSlot
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowMode
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
+import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowSlotKind
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import java.io.File
@@ -354,6 +359,42 @@ class WorkflowRepairFlowTest {
     }
 
     @Test
+    fun oldAnalyzerVersionReloadsLoadImageMaskSlots() = runTest {
+        val store = WorkflowTemplateStore(root, json)
+        store.saveTemplate(template(id = "t1", raw = MASK_API), MASK_API)
+
+        val stale = readStored("t1").copy(
+            compatibility = WorkflowCompatibility(
+                mode = WorkflowMode.UNKNOWN,
+                imageSlots = listOf(
+                    WorkflowInputSlot(
+                        nodeId = "1",
+                        inputName = "image",
+                        title = "mask",
+                        kind = WorkflowSlotKind.IMAGE,
+                        currentValue = "mask.png",
+                    ),
+                ),
+                maskSlots = emptyList(),
+                analyzerVersion = 3,
+            ),
+        )
+        File(root, "t1/profile.json").writeText(
+            json.encodeToString(WorkflowTemplate.serializer(), stale),
+        )
+
+        val view = store.getTemplate("t1")!!
+
+        val compatibility = view.compatibility!!
+        assertEquals(WorkflowCompatibilityAnalyzer.CURRENT_VERSION, compatibility.analyzerVersion)
+        assertEquals(WorkflowMode.MASK_INPAINT, compatibility.mode)
+        assertTrue(compatibility.imageSlots.none { it.nodeId == "1" })
+        assertEquals("1", compatibility.maskSlots.single().nodeId)
+        // 读取阶段只刷新内存视图，不自动改写 profile.json。
+        assertEquals(3, readStored("t1").compatibility?.analyzerVersion)
+    }
+
+    @Test
     fun missingApiJsonFailsClosedWithoutCandidates() = runTest {
         val store = WorkflowTemplateStore(root, json)
         store.saveTemplate(
@@ -418,6 +459,14 @@ class WorkflowRepairFlowTest {
               "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "bad", "clip": ["2", 1]}},
               "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
               "6": {"class_type": "SaveImage", "inputs": {"filename_prefix": "test", "images": ["1", 0]}}
+            }
+        """.trimIndent()
+
+        val MASK_API = """
+            {
+              "1": {"class_type": "LoadImageMask", "inputs": {"image": "mask.png", "channel": "red"}},
+              "2": {"class_type": "MaskConsumer", "inputs": {"mask": ["1", 0]}},
+              "3": {"class_type": "SaveImage", "inputs": {"filename_prefix": "test", "images": ["2", 0]}}
             }
         """.trimIndent()
 

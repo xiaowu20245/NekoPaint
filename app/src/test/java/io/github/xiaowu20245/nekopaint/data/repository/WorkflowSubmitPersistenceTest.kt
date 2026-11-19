@@ -184,7 +184,7 @@ class WorkflowSubmitPersistenceTest {
                 .setResponseCode(400)
                 .setBody(
                     """{"error":{"message":"bad params"},"node_errors":""" +
-                        """{"1":{"errors":[{"message":"seed invalid"}]}}}""",
+                        """{"1":{"errors":[{"message":"seed invalid","input_name":"seed","details":"range"}]}}}""",
                 ),
         )
 
@@ -194,6 +194,8 @@ class WorkflowSubmitPersistenceTest {
         val validation = result as WorkflowSubmitResult.Validation
         assertEquals("bad params", validation.summary)
         assertEquals(1, validation.nodeErrors.size)
+        assertEquals("seed", validation.nodeErrors.single().inputName)
+        assertEquals("range", validation.nodeErrors.single().details)
         assertEquals(1, server.requestCount)
         val stored = taskRecords().single()
         assertEquals(TaskStatus.FAILED, stored.status)
