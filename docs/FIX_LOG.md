@@ -1227,3 +1227,4 @@ git diff --check
   - 手工限制：本机无工作流/历史模板，蒙版双指缩放、反选、重做和退出确认未做 API37 真机点击；由 `MaskEditorPolicyTest`、编译和现有蒙版 instrumentation 覆盖，建议后续补一次真实 4K 蒙版手工验收。
 - **第 113 节复审修复**：`ModelsRepository.load` 在 API 创建失败时返回全 ERROR 快照；UNSUPPORTED/ERROR 且有旧 options 时强制可编辑文本输入；D-063 复审条件恢复，D-064 移到完整 D-063 之后并补蒙版复审条件。新增 API 创建失败用例。
 - **复审**：第 113 节 CONDITIONAL（模型异常/文本兜底/D-064 位置）已修复；第 114 节复审 **APPROVED**。
+- **提交**：3F-2 已提交为 `feat: 补模型提示与蒙版编辑`（`a163bb7`）。
