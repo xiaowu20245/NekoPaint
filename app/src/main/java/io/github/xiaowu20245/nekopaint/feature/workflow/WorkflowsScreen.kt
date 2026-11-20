@@ -88,6 +88,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowSlotKind
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
@@ -478,17 +479,12 @@ private fun WorkflowCard(
                     )
                 } else {
                     Box {
-                        IconButton(
+                        NekoIconButton(
+                            icon = Icons.Outlined.MoreVert,
+                            contentDescription = stringResource(R.string.workflow_more_actions),
                             onClick = { menuExpanded = true },
-                            modifier = Modifier.size(32.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.MoreVert,
-                                contentDescription = stringResource(R.string.workflow_more_actions),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         DropdownMenu(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },

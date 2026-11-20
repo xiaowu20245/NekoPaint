@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -77,7 +78,15 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.data.repository.TaskStatus
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusBadge
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusMapper
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusTone
+import io.github.xiaowu20245.nekopaint.core.ui.component.icon
+import io.github.xiaowu20245.nekopaint.core.ui.component.label
+import io.github.xiaowu20245.nekopaint.core.ui.component.tone
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryMetadataExtractor
 import io.github.xiaowu20245.nekopaint.feature.history.durationText
@@ -144,18 +153,23 @@ fun QueueScreen(
 
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (state.connection == ComfyConnectionState.InvalidConfig) {
+            if (state.connection == ComfyConnectionState.Unconfigured) {
                 return@repeatOnLifecycle
             }
             delay(250)
             while (isActive) {
                 viewModel.refresh()
-                delay(if (state.connection == ComfyConnectionState.Connected) 5_000L else 2_000L)
+                delay(if (state.connection == ComfyConnectionState.Online) 5_000L else 2_000L)
             }
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = viewModel::refresh,
+            modifier = Modifier.fillMaxSize(),
+        ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
@@ -321,6 +335,7 @@ fun QueueScreen(
                 }
             }
         }
+        }
 
         SnackbarHost(
             hostState = snackbarHostState,
@@ -332,7 +347,7 @@ fun QueueScreen(
 
     interruptTarget?.let { item ->
         val isOwn = item.clientId != null && item.clientId == state.localClientId
-        ConfirmDialog(
+        NekoConfirmDialog(
             title = stringResource(R.string.queue_interrupt),
             message = stringResource(
                 if (isOwn) {
@@ -352,7 +367,7 @@ fun QueueScreen(
 
     deleteTarget?.let { item ->
         val isOwn = item.clientId != null && item.clientId == state.localClientId
-        ConfirmDialog(
+        NekoConfirmDialog(
             title = stringResource(R.string.queue_delete),
             message = stringResource(
                 if (isOwn) {
@@ -381,13 +396,7 @@ private fun QueueStatusHeader(
     onOpenHistory: () -> Unit,
 ) {
     val errorText = error?.asString()
-    val (statusLabel, dotColor) = when (connection) {
-        ComfyConnectionState.Connected -> stringResource(R.string.queue_status_connected) to MaterialTheme.colorScheme.primary
-        ComfyConnectionState.Connecting -> stringResource(R.string.queue_connection_connecting) to MaterialTheme.colorScheme.tertiary
-        ComfyConnectionState.Reconnecting -> stringResource(R.string.queue_connection_reconnecting) to MaterialTheme.colorScheme.tertiary
-        ComfyConnectionState.Disconnected -> stringResource(R.string.queue_connection_disconnected) to MaterialTheme.colorScheme.error
-        ComfyConnectionState.InvalidConfig -> stringResource(R.string.queue_connection_invalid_config) to MaterialTheme.colorScheme.error
-    }
+    val status = NekoStatusMapper.connection(connection, hasError = error != null)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -409,31 +418,11 @@ private fun QueueStatusHeader(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = dotColor.copy(alpha = 0.12f),
-                        contentColor = dotColor,
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(dotColor),
-                            )
-                            Text(
-                                text = statusLabel,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
+                    NekoStatusBadge(
+                        text = status.label(),
+                        tone = status.tone(),
+                        icon = status.icon(),
+                    )
                 }
 
                 if (refreshing) {
@@ -444,16 +433,11 @@ private fun QueueStatusHeader(
                     Spacer(Modifier.width(6.dp))
                 }
 
-                IconButton(
+                NekoIconButton(
+                    icon = Icons.Outlined.Refresh,
+                    contentDescription = stringResource(R.string.queue_refresh),
                     onClick = onRefresh,
-                    modifier = Modifier.size(36.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Refresh,
-                        contentDescription = stringResource(R.string.queue_refresh),
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                )
 
                 FilledTonalButton(
                     onClick = onOpenHistory,
@@ -493,8 +477,8 @@ private fun QueueStatusHeader(
                 )
             }
 
-            if (connection != ComfyConnectionState.Connected &&
-                connection != ComfyConnectionState.InvalidConfig
+            if (connection != ComfyConnectionState.Online &&
+                connection != ComfyConnectionState.Unconfigured
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -514,7 +498,7 @@ private fun QueueStatusHeader(
                 }
             }
 
-            if (connection != ComfyConnectionState.InvalidConfig) {
+            if (connection != ComfyConnectionState.Unconfigured) {
                 errorText?.let { message ->
                     Text(
                         text = stringResource(R.string.queue_error, message),
@@ -536,7 +520,7 @@ private fun RunningCard(
     isOwn: Boolean,
     onInterrupt: () -> Unit,
 ) {
-    val isLive = connection == ComfyConnectionState.Connected
+    val isLive = connection == ComfyConnectionState.Online
     val promptSubtitle = HistoryMetadataExtractor.extractPrompt(task, item)
     // 用本地秒表心跳驱动耗时，避免长时间模型加载时界面像冻结。
     val currentTick by produceState(
@@ -551,6 +535,7 @@ private fun RunningCard(
             }
         }
     }
+    val metrics = QueueMetricsPolicy.forTask(task, progress, currentTick)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -606,11 +591,11 @@ private fun RunningCard(
 
                 Spacer(Modifier.width(8.dp))
 
-                SourceBadge(
-                    text = stringResource(
-                        if (isOwn) R.string.queue_task_own else R.string.queue_task_other,
-                    ),
-                    highlighted = isOwn,
+                val source = NekoStatusMapper.source(isOwn)
+                NekoStatusBadge(
+                    text = source.label(),
+                    tone = source.tone(),
+                    icon = null,
                 )
             }
 
@@ -634,7 +619,7 @@ private fun RunningCard(
                     } else {
                         null
                     }
-                    if (totalNodes > 0 || overallPercent != null) {
+                    if (metrics.showOverall) {
                         val pct = ((overallPercent ?: 0f) * 100).roundToInt()
                         val overallDescription = stringResource(
                             R.string.queue_overall_nodes_with_pct,
@@ -703,7 +688,7 @@ private fun RunningCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (value != null && max != null && max > 0) {
+                        if (metrics.showNodeProgress && value != null && max != null) {
                             val percent = ((value / max) * 100).roundToInt()
                             Text(
                                 text = stringResource(
@@ -718,8 +703,7 @@ private fun RunningCard(
                             )
                         } else {
                             Text(
-                                text = progress?.status
-                                    ?: stringResource(R.string.queue_status_computing),
+                                text = metrics.status.label(),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.secondary,
                             )
@@ -727,7 +711,7 @@ private fun RunningCard(
                     }
 
                     // 当前节点细进度条（次级色）
-                    if (value != null && max != null && max > 0) {
+                    if (metrics.showNodeProgress && value != null && max != null) {
                         LinearProgressIndicator(
                             progress = { (value / max).toFloat().coerceIn(0f, 1f) },
                             modifier = Modifier
@@ -752,19 +736,15 @@ private fun RunningCard(
 
                     // Performance Metrics / ETA / Rate
                     val startedAt = task?.startedAt
-                    var itPerSec: Double? = null
                     val speedText = if (startedAt != null && value != null && value > 0) {
                         val elapsedSeconds = ((currentTick - startedAt) / 1000.0).coerceAtLeast(0.1)
-                        val rate = value / elapsedSeconds
-                        itPerSec = rate
-                        stringResource(R.string.queue_rate_label, rate)
+                        stringResource(R.string.queue_rate_label, value / elapsedSeconds)
                     } else null
-                    val etaText = if (itPerSec != null && value != null && max != null && max > value) {
-                        val etaSeconds = ((max - value) / itPerSec).roundToLong().coerceAtLeast(0L)
-                        durationText(0L, etaSeconds * 1000L)?.let {
+                    val etaText = metrics.etaMillis?.let { etaMillis ->
+                        durationText(0L, etaMillis)?.let {
                             stringResource(R.string.queue_eta_label, it)
                         }
-                    } else null
+                    }
                     val elapsedText = startedAt?.let { start ->
                         durationText(start, currentTick)?.let {
                             stringResource(R.string.queue_elapsed, it)
@@ -822,15 +802,21 @@ private fun RunningCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                ) {
-                    Text(
-                        text = stringResource(R.string.queue_batch_info, 1, 1),
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    )
+                if (metrics.showBatch) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.queue_batch_info,
+                                (metrics.batchIndex ?: 0) + 1,
+                                metrics.batchCount ?: 1,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
                 }
 
                 Spacer(Modifier.weight(1f))
@@ -903,15 +889,15 @@ private fun LocalPendingCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                SourceBadge(
-                    text = stringResource(
-                        when {
-                            migratedTo != null -> R.string.queue_local_migrated
-                            unknown -> R.string.queue_local_unknown
-                            else -> R.string.queue_local_submitting
-                        },
-                    ),
-                    highlighted = migratedTo != null || unknown,
+                val (labelRes, tone) = when {
+                    migratedTo != null -> R.string.queue_local_migrated to NekoStatusTone.INFO
+                    unknown -> R.string.queue_local_unknown to NekoStatusTone.WARNING
+                    else -> R.string.queue_local_submitting to NekoStatusTone.NEUTRAL
+                }
+                NekoStatusBadge(
+                    text = stringResource(labelRes),
+                    tone = tone,
+                    icon = null,
                 )
             }
             if (migratedTo != null) {
@@ -1052,11 +1038,11 @@ private fun PendingCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SourceBadge(
-                        text = stringResource(
-                            if (isOwn) R.string.queue_task_own else R.string.queue_task_other,
-                        ),
-                        highlighted = isOwn,
+                    val source = NekoStatusMapper.source(isOwn)
+                    NekoStatusBadge(
+                        text = source.label(),
+                        tone = source.tone(),
+                        icon = null,
                     )
                     Text(
                         text = "ID: ${shortId(item.promptId)}",
@@ -1066,17 +1052,12 @@ private fun PendingCard(
                 }
             }
 
-            IconButton(
+            NekoIconButton(
+                icon = Icons.Outlined.Close,
+                contentDescription = stringResource(R.string.queue_delete),
                 onClick = onDelete,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = stringResource(R.string.queue_delete),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1085,111 +1066,17 @@ private fun PendingCard(
 private fun QueueEmptyState(
     onOpenHistory: () -> Unit,
 ) {
-    Card(
+    NekoEmptyState(
+        icon = NekoIcons.PlayFilled,
+        title = stringResource(R.string.queue_empty_title),
+        subtitle = stringResource(R.string.queue_empty_desc),
+        actionLabel = stringResource(R.string.queue_open_history),
+        onAction = onOpenHistory,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = NekoIcons.PlayFilled,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-            Text(
-                text = stringResource(R.string.queue_empty_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = stringResource(R.string.queue_empty_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(4.dp))
-            FilledTonalButton(
-                onClick = onOpenHistory,
-                shape = RoundedCornerShape(50),
-            ) {
-                Icon(
-                    imageVector = NekoIcons.Timeline,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.queue_open_history))
-            }
-        }
-    }
-}
-
-@Composable
-private fun SourceBadge(
-    text: String,
-    highlighted: Boolean = false,
-) {
-    val color = if (highlighted) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = if (highlighted) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-        else MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = color,
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = if (highlighted) FontWeight.Medium else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
-}
-
-@Composable
-private fun ConfirmDialog(
-    title: String,
-    message: String,
-    confirmLabel: String,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(message) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(confirmLabel)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
-            }
-        },
     )
 }
+
+
 
 private fun shortId(promptId: String): String =
     if (promptId.length <= 8) promptId else promptId.take(8)

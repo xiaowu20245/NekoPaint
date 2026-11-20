@@ -248,7 +248,7 @@ class TaskManager(
         scope.launch {
             // 重连成功后主动校准一次，避免断线期间的状态丢失。
             webSocketManager.connection.collect { state ->
-                if (state == ComfyConnectionState.Connected) refresh()
+                if (state == ComfyConnectionState.Online) refresh()
             }
         }
         webSocketManager.start()
@@ -661,6 +661,7 @@ class TaskManager(
                             currentNodeLabel = label,
                             value = old?.value,
                             max = old?.max,
+                            nodeStartedAt = nodeStartedAt(old, nodeId),
                         )
                         )
                 }
@@ -669,6 +670,7 @@ class TaskManager(
             is ComfyEvent.Progress -> {
                 val label = nodeLabel(event.promptId, event.nodeId)
                 _progress.update { current ->
+                    val old = current[event.promptId]
                     current + (
                         event.promptId to buildProgress(
                             promptId = event.promptId,
@@ -677,6 +679,7 @@ class TaskManager(
                             currentNodeLabel = label,
                             value = event.value,
                             max = event.max,
+                            nodeStartedAt = nodeStartedAt(old, event.nodeId),
                         )
                         )
                 }
@@ -689,6 +692,7 @@ class TaskManager(
                 if (running != null) {
                     val label = nodeLabel(event.promptId, running.nodeId)
                     _progress.update { current ->
+                        val old = current[event.promptId]
                         current + (
                             event.promptId to buildProgress(
                                 promptId = event.promptId,
@@ -697,6 +701,7 @@ class TaskManager(
                                 currentNodeLabel = label,
                                 value = running.value,
                                 max = running.max,
+                                nodeStartedAt = nodeStartedAt(old, running.nodeId),
                             )
                             )
                     }
@@ -714,6 +719,7 @@ class TaskManager(
                                     currentNodeLabel = null,
                                     value = old.value,
                                     max = old.max,
+                                    nodeStartedAt = null,
                                 ),
                             )
                             )
@@ -778,6 +784,7 @@ class TaskManager(
         currentNodeLabel: String?,
         value: Double?,
         max: Double?,
+        nodeStartedAt: Long? = null,
     ): TaskProgress {
         val completed = executedNodeIds[promptId]?.size ?: 0
         val total = totalNodeCount(promptId)
@@ -800,7 +807,15 @@ class TaskManager(
                 runningFraction = nodeFraction,
                 total = total,
             ),
+            nodeStartedAt = nodeStartedAt,
         )
+    }
+
+    /** 同一节点重复收到进度事件时保留起点；切换节点才重新计时。 */
+    private fun nodeStartedAt(old: TaskProgress?, nodeId: String?): Long? = when {
+        nodeId == null -> null
+        old?.currentNode == nodeId -> old.nodeStartedAt
+        else -> System.currentTimeMillis()
     }
 
     private fun totalNodeCount(promptId: String): Int {
@@ -823,6 +838,7 @@ class TaskManager(
                     currentNodeLabel = old.currentNodeLabel,
                     value = old.value,
                     max = old.max,
+                    nodeStartedAt = old.nodeStartedAt,
                 )
                 )
         }
@@ -838,6 +854,7 @@ class TaskManager(
                     currentNodeLabel = old.currentNodeLabel,
                     value = old.value,
                     max = old.max,
+                    nodeStartedAt = old.nodeStartedAt,
                 )
             }
         }

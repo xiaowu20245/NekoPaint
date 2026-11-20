@@ -55,6 +55,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -96,7 +97,12 @@ import io.github.xiaowu20245.nekopaint.core.model.ServerProfile
 import io.github.xiaowu20245.nekopaint.core.model.ServerStats
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusBadge
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusMapper
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusTone
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
+import io.github.xiaowu20245.nekopaint.core.ui.component.icon
+import io.github.xiaowu20245.nekopaint.core.ui.component.label
+import io.github.xiaowu20245.nekopaint.core.ui.component.tone
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoIconSize
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
@@ -157,6 +163,11 @@ fun ServerScreen() {
                 CircularProgressIndicator()
             }
         } else {
+            PullToRefreshBox(
+                isRefreshing = state.cards.any { it.isTesting },
+                onRefresh = viewModel::refreshActive,
+                modifier = Modifier.fillMaxSize(),
+            ) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
@@ -190,6 +201,7 @@ fun ServerScreen() {
                         )
                     }
                 }
+            }
             }
 
             if (!state.isFormOpen && state.cards.isNotEmpty()) {
@@ -269,36 +281,15 @@ fun ServerScreen() {
     }
 
     deleteTarget?.let { profile ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text(stringResource(R.string.server_delete_confirm_title)) },
-            text = {
-                Text(
-                    stringResource(
-                        R.string.server_delete_confirm_message,
-                        profile.name,
-                    ),
-                )
+        NekoConfirmDialog(
+            title = stringResource(R.string.server_delete_confirm_title),
+            message = stringResource(R.string.server_delete_confirm_message, profile.name),
+            confirmLabel = stringResource(R.string.server_delete),
+            onConfirm = {
+                viewModel.delete(profile)
+                deleteTarget = null
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.delete(profile)
-                        deleteTarget = null
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError,
-                    ),
-                ) {
-                    Text(stringResource(R.string.server_delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { deleteTarget = null },
         )
     }
 
@@ -705,24 +696,16 @@ private fun CardActions(
 
 @Composable
 private fun ServerStatusBadge(card: ServerCardUi) {
-    val text = when {
-        card.isTesting -> stringResource(R.string.server_checking)
-        card.isOnline -> stringResource(R.string.server_online)
-        card.error == ServerError.InvalidConfig ->
-            stringResource(R.string.server_config_invalid_status)
-        card.error != null -> stringResource(R.string.server_offline)
-        else -> stringResource(R.string.server_not_checked)
-    }
-    val tone = when {
-        card.isTesting -> NekoStatusTone.WARNING
-        card.isOnline -> NekoStatusTone.SUCCESS
-        card.error != null -> NekoStatusTone.DANGER
-        else -> NekoStatusTone.WARNING
-    }
+    val status = NekoStatusMapper.server(
+        isTesting = card.isTesting,
+        isOnline = card.isOnline,
+        hasInvalidConfig = card.error == ServerError.InvalidConfig,
+        hasError = card.error != null,
+    )
     NekoStatusBadge(
-        text = text,
-        tone = tone,
-        icon = if (card.isTesting) Icons.Outlined.Refresh else defaultStatusIcon(tone),
+        text = status.label(),
+        tone = status.tone(),
+        icon = status.icon(),
     )
 }
 
@@ -747,15 +730,6 @@ private fun ServerStatusColumn(card: ServerCardUi) {
             )
         }
     }
-}
-
-private fun defaultStatusIcon(tone: NekoStatusTone) = when (tone) {
-    NekoStatusTone.SUCCESS -> Icons.Outlined.CheckCircle
-    NekoStatusTone.WARNING -> Icons.Outlined.Warning
-    NekoStatusTone.DANGER -> Icons.Outlined.Warning
-    NekoStatusTone.INFO,
-    NekoStatusTone.NEUTRAL,
-    -> Icons.Outlined.Warning
 }
 
 @Composable

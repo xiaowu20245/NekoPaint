@@ -69,6 +69,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagCatalog
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagExpander
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoTheme
@@ -145,27 +146,22 @@ internal fun PromptSummaryCard(
                     }
                 }
                 if (canSetPrimary) {
-                    IconButton(
-                        onClick = onTogglePrimary,
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Star,
-                            contentDescription = stringResource(
-                                if (isPrimary) {
-                                    R.string.workflow_unset_primary_prompt
-                                } else {
-                                    R.string.workflow_set_primary_prompt
-                                },
-                            ),
-                            tint = if (isPrimary) {
-                                MaterialTheme.colorScheme.primary
+                    NekoIconButton(
+                        icon = Icons.Outlined.Star,
+                        contentDescription = stringResource(
+                            if (isPrimary) {
+                                R.string.workflow_unset_primary_prompt
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                                R.string.workflow_set_primary_prompt
                             },
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
+                        ),
+                        onClick = onTogglePrimary,
+                        tint = if (isPrimary) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
                 }
                 Text(
                     text = "#${candidate.nodeId}",

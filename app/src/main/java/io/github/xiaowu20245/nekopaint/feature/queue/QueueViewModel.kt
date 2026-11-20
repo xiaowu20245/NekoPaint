@@ -25,7 +25,7 @@ data class QueueUiState(
     val queue: QueueSnapshot? = null,
     val progress: Map<String, TaskProgress> = emptyMap(),
     val tasks: List<TaskRecord> = emptyList(),
-    val connection: ComfyConnectionState = ComfyConnectionState.Disconnected,
+    val connection: ComfyConnectionState = ComfyConnectionState.Offline,
     val queueRemaining: Int = 0,
     val localClientId: String? = null,
     val error: NekoMessage? = null,

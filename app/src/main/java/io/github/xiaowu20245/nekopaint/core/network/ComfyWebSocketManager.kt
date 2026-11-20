@@ -30,11 +30,11 @@ import okhttp3.WebSocketListener
 import kotlin.random.Random
 
 enum class ComfyConnectionState {
-    Disconnected,
+    Offline,
     Connecting,
-    Connected,
+    Online,
     Reconnecting,
-    InvalidConfig,
+    Unconfigured,
 }
 
 data class NodeProgress(
@@ -91,7 +91,7 @@ class ComfyWebSocketManager(
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val _connection = MutableStateFlow(ComfyConnectionState.Disconnected)
+    private val _connection = MutableStateFlow(ComfyConnectionState.Offline)
     val connection: StateFlow<ComfyConnectionState> = _connection.asStateFlow()
 
     private val _events = MutableSharedFlow<ComfyEventEnvelope>(extraBufferCapacity = 128)
@@ -116,12 +116,12 @@ class ComfyWebSocketManager(
                 socket?.close(1000, null)
                 socket = null
                 if (config == null) {
-                    _connection.value = ComfyConnectionState.Disconnected
+                    _connection.value = ComfyConnectionState.Offline
                     return@collectLatest
                 }
                 val endpoint = ServerEndpointValidator.parse(config).getOrNull()
                 if (endpoint == null) {
-                    _connection.value = ComfyConnectionState.InvalidConfig
+                    _connection.value = ComfyConnectionState.Unconfigured
                     return@collectLatest
                 }
                 connectLoop(endpoint, token)
@@ -139,7 +139,7 @@ class ComfyWebSocketManager(
         job = null
         socket?.close(1000, null)
         socket = null
-        _connection.value = ComfyConnectionState.Disconnected
+        _connection.value = ComfyConnectionState.Offline
     }
 
     private suspend fun connectLoop(endpoint: ServerEndpoint, token: Long) {
@@ -164,7 +164,7 @@ class ComfyWebSocketManager(
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     if (token != connectionToken || attemptToken != socketToken) return
                     backoffMs = 1_000L
-                    _connection.value = ComfyConnectionState.Connected
+                    _connection.value = ComfyConnectionState.Online
                     connected.complete(Unit)
                 }
 
@@ -204,10 +204,10 @@ class ComfyWebSocketManager(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (invalid: InvalidServerConfigException) {
-                _connection.value = ComfyConnectionState.InvalidConfig
+                _connection.value = ComfyConnectionState.Unconfigured
                 return
             } catch (invalid: IllegalArgumentException) {
-                _connection.value = ComfyConnectionState.InvalidConfig
+                _connection.value = ComfyConnectionState.Unconfigured
                 return
             } catch (_: Throwable) {
                 _connection.value = ComfyConnectionState.Reconnecting

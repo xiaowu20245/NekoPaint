@@ -49,4 +49,6 @@ data class TaskProgress(
     val completedNodes: Int = 0,
     val totalNodes: Int = 0,
     val overallPercent: Float? = null,
+    /** 当前节点开始时间；缺失时隐藏 ETA，避免用整任务耗时误算。 */
+    val nodeStartedAt: Long? = null,
 )

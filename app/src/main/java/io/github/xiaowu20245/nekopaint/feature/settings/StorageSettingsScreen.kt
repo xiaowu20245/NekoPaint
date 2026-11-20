@@ -15,14 +15,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.format.formatFileSize
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.common.asString
@@ -223,48 +222,28 @@ fun StorageSettingsScreen() {
     }
 
     if (showClearImageCacheConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearImageCacheConfirm = false },
-            title = { Text(stringResource(R.string.settings_clear_confirm_title)) },
-            text = { Text(stringResource(R.string.settings_clear_confirm_msg)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearImageCacheConfirm = false
-                        viewModel.clearCache()
-                    },
-                ) {
-                    Text(stringResource(R.string.settings_clear_cache))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.settings_clear_confirm_title),
+            message = stringResource(R.string.settings_clear_confirm_msg),
+            confirmLabel = stringResource(R.string.settings_clear_cache),
+            onConfirm = {
+                showClearImageCacheConfirm = false
+                viewModel.clearCache()
             },
-            dismissButton = {
-                TextButton(onClick = { showClearImageCacheConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showClearImageCacheConfirm = false },
         )
     }
 
     if (showClearChatImagesConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearChatImagesConfirm = false },
-            title = { Text(stringResource(R.string.settings_chat_images_clear_title)) },
-            text = { Text(stringResource(R.string.settings_chat_images_clear_msg)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearChatImagesConfirm = false
-                        viewModel.clearChatImages()
-                    },
-                ) {
-                    Text(stringResource(R.string.settings_chat_images_clear))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.settings_chat_images_clear_title),
+            message = stringResource(R.string.settings_chat_images_clear_msg),
+            confirmLabel = stringResource(R.string.settings_chat_images_clear),
+            onConfirm = {
+                showClearChatImagesConfirm = false
+                viewModel.clearChatImages()
             },
-            dismissButton = {
-                TextButton(onClick = { showClearChatImagesConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showClearChatImagesConfirm = false },
         )
     }
 }

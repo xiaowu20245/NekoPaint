@@ -108,7 +108,7 @@ data class HistoryUiState(
     val hosts: List<HistoryHost> = emptyList(),
     val activeServerId: String = ServerConfigStore.DEFAULT_SERVER_ID,
     val selectedHostId: String? = null,
-    val connection: ComfyConnectionState = ComfyConnectionState.Disconnected,
+    val connection: ComfyConnectionState = ComfyConnectionState.Offline,
     val error: NekoMessage? = null,
     val refreshing: Boolean = false,
     val resubmitting: Boolean = false,

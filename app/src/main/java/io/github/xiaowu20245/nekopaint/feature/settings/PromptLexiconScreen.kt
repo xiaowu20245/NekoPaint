@@ -53,6 +53,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -283,25 +285,15 @@ fun PromptLexiconScreen() {
     }
 
     if (showClearConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirm = false },
-            title = { Text(stringResource(R.string.prompt_lexicon_clear_confirm_title)) },
-            text = { Text(stringResource(R.string.prompt_lexicon_clear_confirm_msg)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearConfirm = false
-                        viewModel.clearExternal()
-                    },
-                ) {
-                    Text(stringResource(R.string.prompt_lexicon_clear_external))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.prompt_lexicon_clear_confirm_title),
+            message = stringResource(R.string.prompt_lexicon_clear_confirm_msg),
+            confirmLabel = stringResource(R.string.prompt_lexicon_clear_external),
+            onConfirm = {
+                showClearConfirm = false
+                viewModel.clearExternal()
             },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showClearConfirm = false },
         )
     }
 
@@ -483,19 +475,14 @@ private fun CustomTagChip(
                     strokeWidth = 1.5.dp,
                 )
             } else {
-                IconButton(
+                NekoIconButton(
+                    icon = Icons.Outlined.Close,
+                    contentDescription = stringResource(
+                        R.string.prompt_lexicon_custom_delete,
+                        tag,
+                    ),
                     onClick = onRemove,
-                    modifier = Modifier.size(28.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Close,
-                        contentDescription = stringResource(
-                            R.string.prompt_lexicon_custom_delete,
-                            tag,
-                        ),
-                        modifier = Modifier.size(14.dp),
-                    )
-                }
+                )
             }
         }
     }

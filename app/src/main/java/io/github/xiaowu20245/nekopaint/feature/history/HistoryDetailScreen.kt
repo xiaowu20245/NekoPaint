@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -143,7 +143,7 @@ fun HistoryDetailScreen(
 
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (state.connection == ComfyConnectionState.InvalidConfig) {
+            if (state.connection == ComfyConnectionState.Unconfigured) {
                 return@repeatOnLifecycle
             }
             delay(250)
@@ -383,25 +383,15 @@ fun HistoryDetailScreen(
     }
 
     if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text(stringResource(R.string.history_delete_title)) },
-            text = { Text(stringResource(R.string.history_delete_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteConfirm = false
-                        viewModel.deleteHistory(promptId)
-                    },
-                ) {
-                    Text(stringResource(R.string.history_delete))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.history_delete_title),
+            message = stringResource(R.string.history_delete_message),
+            confirmLabel = stringResource(R.string.history_delete),
+            onConfirm = {
+                showDeleteConfirm = false
+                viewModel.deleteHistory(promptId)
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showDeleteConfirm = false },
         )
     }
 }

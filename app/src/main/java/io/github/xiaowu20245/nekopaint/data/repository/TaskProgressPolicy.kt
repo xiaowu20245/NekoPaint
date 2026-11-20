@@ -26,6 +26,7 @@ object TaskProgressPolicy {
             currentNodeLabel = null,
             value = null,
             max = null,
+            nodeStartedAt = null,
         )
 
     fun overallPercent(

@@ -98,9 +98,11 @@ import coil3.compose.AsyncImage
 import coil3.compose.SubcomposeAsyncImage
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarMenuItem
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.history.ImagePreviewDialog
 import android.widget.Toast
@@ -463,25 +465,15 @@ fun ChatScreen(
     }
 
     deleteTarget?.let { session ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text(stringResource(R.string.chat_session_delete_title)) },
-            text = { Text(stringResource(R.string.chat_session_delete_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        deleteTarget = null
-                        viewModel.deleteSession(session.id)
-                    },
-                ) {
-                    Text(stringResource(R.string.chat_session_delete))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.chat_session_delete_title),
+            message = stringResource(R.string.chat_session_delete_message),
+            confirmLabel = stringResource(R.string.chat_session_delete),
+            onConfirm = {
+                deleteTarget = null
+                viewModel.deleteSession(session.id)
             },
-            dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { deleteTarget = null },
         )
     }
 
@@ -1376,17 +1368,12 @@ private fun ChatTaskContextBanner(
                     }
                 }
             }
-            IconButton(
+            NekoIconButton(
+                icon = Icons.Outlined.Close,
+                contentDescription = stringResource(R.string.chat_context_detach),
                 onClick = onDetach,
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = stringResource(R.string.chat_context_detach),
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

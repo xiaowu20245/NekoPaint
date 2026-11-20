@@ -66,6 +66,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
@@ -120,6 +121,14 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
 import io.github.xiaowu20245.nekopaint.core.network.ComfyConnectionState
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarMenuItem
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConnectionStatus
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoEmptyState
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusBadge
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusMapper
+import io.github.xiaowu20245.nekopaint.core.ui.component.icon
+import io.github.xiaowu20245.nekopaint.core.ui.component.label
+import io.github.xiaowu20245.nekopaint.core.ui.component.tone
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import kotlinx.coroutines.delay
@@ -249,7 +258,7 @@ fun HistoryScreen(
 
     LaunchedEffect(lifecycleOwner, state.connection) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (state.connection == ComfyConnectionState.InvalidConfig) {
+            if (state.connection == ComfyConnectionState.Unconfigured) {
                 return@repeatOnLifecycle
             }
             delay(250)
@@ -539,11 +548,16 @@ fun HistoryScreen(
             )
 
             val errorMessage = state.error?.asString()
+            val connectionStatus = NekoStatusMapper.connection(
+                state = state.connection,
+                hasError = state.error != null,
+            )
             val statusNotice = when {
-                state.connection == ComfyConnectionState.InvalidConfig ->
+                connectionStatus == NekoConnectionStatus.UNCONFIGURED ->
                     stringResource(R.string.history_config_invalid)
-                errorMessage != null -> stringResource(R.string.history_error, errorMessage)
-                state.connection != ComfyConnectionState.Connected ->
+                connectionStatus == NekoConnectionStatus.ERROR ->
+                    stringResource(R.string.history_error, errorMessage.orEmpty())
+                connectionStatus != NekoConnectionStatus.ONLINE ->
                     stringResource(R.string.history_stale)
                 else -> null
             }
@@ -583,16 +597,23 @@ fun HistoryScreen(
                 )
             }
 
+            PullToRefreshBox(
+                isRefreshing = state.refreshing,
+                onRefresh = viewModel::refresh,
+                modifier = Modifier.weight(1f),
+            ) {
             if (filteredEntries.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center,
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    EmptyHistory(
-                        loading = state.refreshing,
-                    )
+                    item {
+                        EmptyHistory(
+                            loading = state.refreshing,
+                        )
+                    }
                 }
             } else {
                 key(state.selectedHostId, state.filter) {
@@ -659,6 +680,7 @@ fun HistoryScreen(
                         }
                     }
                 }
+            }
             }
         }
 
@@ -758,85 +780,49 @@ fun HistoryScreen(
     }
 
     pendingDeletePromptId?.let { promptId ->
-        AlertDialog(
-            onDismissRequest = { pendingDeletePromptId = null },
-            title = { Text(stringResource(R.string.history_delete_title)) },
-            text = { Text(stringResource(R.string.history_delete_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingDeletePromptId = null
-                        viewModel.deleteHistory(promptId)
-                    },
-                ) {
-                    Text(stringResource(R.string.history_delete))
-                }
+        NekoConfirmDialog(
+            title = stringResource(R.string.history_delete_title),
+            message = stringResource(R.string.history_delete_message),
+            confirmLabel = stringResource(R.string.history_delete),
+            onConfirm = {
+                pendingDeletePromptId = null
+                viewModel.deleteHistory(promptId)
             },
-            dismissButton = {
-                TextButton(onClick = { pendingDeletePromptId = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { pendingDeletePromptId = null },
         )
     }
 
     if (showClearConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearConfirm = false },
-            title = { Text(stringResource(R.string.history_clear_title)) },
-            text = {
-                Text(stringResource(R.string.history_clear_message_host, activeHostName))
+        NekoConfirmDialog(
+            title = stringResource(R.string.history_clear_title),
+            message = stringResource(R.string.history_clear_message_host, activeHostName),
+            confirmLabel = stringResource(R.string.history_clear),
+            onConfirm = {
+                showClearConfirm = false
+                selectionMode = false
+                selectedIds = emptySet()
+                viewModel.clearHistory()
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearConfirm = false
-                        selectionMode = false
-                        selectedIds = emptySet()
-                        viewModel.clearHistory()
-                    },
-                ) {
-                    Text(stringResource(R.string.history_clear))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showClearConfirm = false },
         )
     }
 
     if (showBatchDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showBatchDeleteConfirm = false },
-            title = {
-                Text(
-                    stringResource(
-                        R.string.history_delete_selected_title,
-                        selectedIds.size,
-                    ),
-                )
+        NekoConfirmDialog(
+            title = stringResource(
+                R.string.history_delete_selected_title,
+                selectedIds.size,
+            ),
+            message = stringResource(R.string.history_delete_message),
+            confirmLabel = stringResource(R.string.history_delete),
+            onConfirm = {
+                val ids = selectedIds
+                showBatchDeleteConfirm = false
+                selectionMode = false
+                selectedIds = emptySet()
+                viewModel.deleteHistory(ids)
             },
-            text = { Text(stringResource(R.string.history_delete_message)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val ids = selectedIds
-                        showBatchDeleteConfirm = false
-                        selectionMode = false
-                        selectedIds = emptySet()
-                        viewModel.deleteHistory(ids)
-                    },
-                ) {
-                    Text(stringResource(R.string.history_delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showBatchDeleteConfirm = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            },
+            onDismiss = { showBatchDeleteConfirm = false },
         )
     }
 }
@@ -2348,16 +2334,10 @@ private fun EmptyHistory(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Text(
-                text = stringResource(R.string.history_empty),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = stringResource(R.string.history_empty_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
+            NekoEmptyState(
+                icon = NekoIcons.Timeline,
+                title = stringResource(R.string.history_empty),
+                subtitle = stringResource(R.string.history_empty_desc),
             )
         }
     }
@@ -2414,24 +2394,12 @@ private fun HostBadge(
 
 @Composable
 fun StatusBadge(status: String) {
-    val (label, color) = when (status) {
-        "success" -> stringResource(R.string.history_status_success) to MaterialTheme.colorScheme.primary
-        "failed" -> stringResource(R.string.history_status_failed) to MaterialTheme.colorScheme.error
-        "interrupted" -> stringResource(R.string.history_status_interrupted) to MaterialTheme.colorScheme.tertiary
-        else -> stringResource(R.string.history_status_unknown) to MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = color.copy(alpha = 0.12f),
-        contentColor = color,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
+    val mapped = NekoStatusMapper.task(status)
+    NekoStatusBadge(
+        text = mapped.label(),
+        tone = mapped.tone(),
+        icon = mapped.icon(),
+    )
 }
 
 @Composable

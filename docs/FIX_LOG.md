@@ -1095,3 +1095,28 @@ git diff --check
   - 验证：**139 suites / 814 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过；API28 `connectedDebugAndroidTest` 11/11。
 - **复审**：第 101 节复审 **APPROVED**。
 - **提交**：3C 已提交为 `refactor: 统一提交入口并清理死代码`（`20568d5`）。
+
+### 49. 第三轮 3D-1：连接状态、队列指标与徽章（CR-024/025/028）
+
+- **连接状态（CR-025）**
+  - `ComfyConnectionState` 迁移为 `Offline/Connecting/Online/Reconnecting/Unconfigured`，全量消费方已同步：`ComfyWebSocketManager`、`TaskManager`、`ChatContextBuilder`、Queue/History ViewModel/Screen、HistoryDetail、Server 相关状态。
+  - 新增 `NekoStatusMapper.connection(state, hasError)`：Unconfigured 优先；非 Online 且最近刷新失败显示 Error；Online 忽略旧错误。未向枚举新增 Error 死状态。
+  - 新增 `ConnectionStateMapperTest` 5 项、`NekoStatusMapperTest` 3 项。
+- **队列指标（CR-024）**
+  - `TaskProgress` 新增可选 `nodeStartedAt`；`TaskManager` 在同一节点重复事件时保留起点、切换节点时重置，finishing 时清空。
+  - 新增 `QueueMetricsPolicy`：批次仅在 `batchCount > 1` 且 index 合法时显示；ETA 仅在 `nodeStartedAt != null` 且 value/max 有效时计算；overall 仅在 `totalNodes > 0` 时显示；node progress 仅在 value/max > 0 时显示；状态走 `NekoStatusMapper`。
+  - Queue 页移除 1/1 固定批次占位，改为结构化批次/ETA/状态；新增 `QueueMetricsPolicyTest` 4 项。
+- **徽章、危险操作、触控（CR-028）**
+  - `NekoStatusMapper` 统一连接/任务/来源/Server 卡片的文案、tone、图标；删除 History 的 `StatusBadge` 颜色分支与 Queue 的 `SourceBadge`。
+  - 新增 `NekoConfirmDialog`，Queue 中断/删除、History 删除/清空/批量删除、Server 删除统一使用 error 色确认，取消在左、确认在右。
+  - 新增 `NekoIconButton`（48dp + 必填 contentDescription），替换 Queue 刷新/删除、Chat 附件移除、PromptLexicon 删除、PromptEditor 主提示词、Workflows 更多操作的 28–42dp 图标按钮。
+  - Queue 空状态、History 空状态统一使用 `NekoEmptyState`；Server 已有。
+- **下拉刷新**
+  - Queue/History/Server 内容区接入 `PullToRefreshBox`；Queue 使用 `state.refreshing`，History 使用 `state.refreshing`，Server 使用卡片 testing 状态。
+  - API37 手工项：三页下拉出现刷新指示、只触发一次、失败保留旧内容并显示重试入口。
+- **测试与验证**
+  - 新增 `ConnectionStateMapperTest` 5、`NekoStatusMapperTest` 4、`QueueMetricsPolicyTest` 4、`NekoIconButtonTouchTargetTest` 2（instrumentation），合计 +15。
+  - JVM：**142 suites / 827 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过。
+  - API28 `connectedDebugAndroidTest`：**13/13**。
+  - API37 模拟器用于手工检查；Compose/Espresso UI 测试在 API37 上因 `InputManager.getInstance` 反射移除不可运行，自动化为 API28 基线。
+- **复审**：第 102 节 R12-01～R12-03、第 103 节 R12-04 均已修复；第 104 节复审 **APPROVED**。
