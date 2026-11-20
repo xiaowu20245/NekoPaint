@@ -1228,3 +1228,19 @@ git diff --check
 - **第 113 节复审修复**：`ModelsRepository.load` 在 API 创建失败时返回全 ERROR 快照；UNSUPPORTED/ERROR 且有旧 options 时强制可编辑文本输入；D-063 复审条件恢复，D-064 移到完整 D-063 之后并补蒙版复审条件。新增 API 创建失败用例。
 - **复审**：第 113 节 CONDITIONAL（模型异常/文本兜底/D-064 位置）已修复；第 114 节复审 **APPROVED**。
 - **提交**：3F-2 已提交为 `feat: 补模型提示与蒙版编辑`（`a163bb7`）。
+
+## 54. 第三轮 3G：大文件拆分（CR-053）
+
+- **拆分结果（只移动代码，行为/接口不变）**
+  - `ChatScreen.kt` → 599 行；新增 `ChatMessageList.kt` 765、`ChatComposer.kt` 564、`ChatActionCard.kt` 707、`ChatSessionSheet.kt` 312、`ChatDialogs.kt` 127。主文件保留 `ChatBackHandler`、`ChatScreen` 组合、工具面板和预览。
+  - `WorkflowDetailScreen.kt` → 750 行；新增 `WorkflowDetailHeader.kt` 497、`WorkflowParameters.kt` 466、`WorkflowParameterFields.kt` 399、`WorkflowPresetBar.kt` 737、`WorkflowInstallDialog.kt` 253。`WorkflowParameterFields.kt` 为计划外追加拆分，把参数输入控件从参数分组中分离，保证全部文件 <800 行。
+  - `HistoryScreen.kt` → 761 行；新增 `HistoryFilters.kt` 430、`HistoryList.kt` 762、`HistoryDialogs.kt` 624、`HistorySelectionBar.kt` 58。多选顶栏动作抽为同包 `historySelectionActions`，只是把原 `buildList` 块原样搬移并参数化，动作顺序、启用条件、回调和文案不变。
+  - 所有拆分文件均 <800 行；原 `private` 顶层声明仅因同包跨文件访问改为 `internal`，仅本文件使用的声明保持/恢复 `private`，预览函数保留在主文件。
+  - 归一化文本比对 `HEAD` 原文件与拆分后文件（忽略 package/import、`private`/`internal`、`@Preview`）：Chat 2687/2687 行、Workflow 2702/2702 行一致；History 除 `historySelectionActions` 抽取块外一致。
+  - **第 115 节非阻塞项处理**：把 `ParameterGroupSection` 与 `StickyBatchBottomBar` 的两段 KDoc 移回原函数；27 个仅本文件使用的声明恢复 `private`；删除 `historySelectionActions` 未使用的 `selectableIds` 参数；清理 `WorkflowParameterFields.kt` 未使用的 `Preview` import 和重复 `DropdownMenuItem` import。
+- **验证**
+  - 无新增测试；JVM 全量 **160 suites / 893 tests / 0 failures / 0 errors / 0 skipped**。
+  - lint **0 errors / 10 warnings / 3 hints**；`assembleDebug` 成功（17,480,471 bytes）；`git diff --check` exit 0。
+  - API28 `connectedDebugAndroidTest`：13/13。
+- **复审**：第 115 节首次复审 **APPROVED**；第 116 节非阻塞项处理最终确认 **APPROVED**。
+- **提交**：3G 已提交为 `refactor: 拆分三大页面组件`（`b0c7c27`）。
