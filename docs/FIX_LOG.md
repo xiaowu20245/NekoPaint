@@ -1148,3 +1148,4 @@ git diff --check
 - **复审修复**：第 105 节 R13-01（放弃修改未恢复 API Key 归属）已修复，基线同时保存 `apiKeyOrigin` 并在放弃时复位 `keyEdited`；R13-02（保存中/取消后的待退出状态）已修复，保存中拦截返回，AI/Neko 的未保存弹窗取消/放弃均清除 `exitAfterSave`。新增凭据混合状态回归用例。
 - **复审修复手工验收**：API37 先以 `https://old.example.com/v1` + `sk-old` 保存，再改为 `https://new.example.com/v1` + `sk-new` 后放弃；页面恢复 old URL/sk-old，未出现 OriginChanged 警告。保存中返回由 `saving` 门禁拦截（保存窗口过短，未构造慢存储竞态）。
 - **复审**：第 105 节 R13-01/R13-02 均已修复；第 106 节复审 **APPROVED**。
+- **提交**：3D-2 已提交为 `feat: 统一设置保存语义与参数筛选`（`f9f97e9`）。
