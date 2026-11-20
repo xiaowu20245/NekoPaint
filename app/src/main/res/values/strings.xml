@@ -72,6 +72,10 @@
     <string name="workflow_manual_binding_save">绑定</string>
     <string name="workflow_manual_binding_failed">手动绑定失败：节点/输入不存在、类型不匹配或 ID 重复。</string>
     <string name="workflow_manual_binding_required">节点 ID、输入名和标签不能为空。</string>
+    <string name="workflow_model_source_network">模型来源：ComfyUI</string>
+    <string name="workflow_model_source_cache">模型来源：本地缓存</string>
+    <string name="workflow_model_source_unsupported">当前服务器不支持模型列表，请用文本输入或到 PC ComfyUI Manager 管理。</string>
+    <string name="workflow_model_source_error">模型列表获取失败，可继续使用文本输入。</string>
     <string name="workflow_delete">删除</string>
     <string name="workflow_rename_title">重命名工作流</string>
     <string name="workflow_rename_hint">工作流名称</string>
@@ -113,6 +117,12 @@
     <string name="mask_editor_eraser">橡皮</string>
     <string name="mask_editor_brush_size">画笔大小</string>
     <string name="mask_editor_undo">撤销</string>
+    <string name="mask_editor_redo">重做</string>
+    <string name="mask_editor_invert">反选</string>
+    <string name="mask_editor_invert_on">已反选</string>
+    <string name="mask_editor_discard_title">放弃未提交蒙版？</string>
+    <string name="mask_editor_discard_message">当前笔迹和反选尚未提交，退出后将丢失。</string>
+    <string name="mask_editor_discard_confirm">放弃蒙版</string>
     <string name="mask_editor_clear">清空</string>
     <string name="mask_editor_upload">上传蒙版</string>
     <string name="mask_editor_uploading">上传中…</string>

@@ -18,12 +18,13 @@ internal object MaskBitmapRenderer {
     fun render(
         target: MaskTargetSize,
         strokes: List<MaskStroke>,
+        inverted: Boolean = false,
     ): Bitmap {
         require(target.width > 0 && target.height > 0) { "蒙版尺寸无效" }
         val bitmap = createBitmap(target.width, target.height, Bitmap.Config.RGB_565)
         try {
             val canvas = Canvas(bitmap)
-            canvas.drawColor(Color.BLACK)
+            canvas.drawColor(if (inverted) Color.WHITE else Color.BLACK)
 
             // 蒙版必须是严格黑/白；关闭抗锯齿避免 RGB_565 中间灰量化误差。
             val strokePaint = Paint().apply {
@@ -36,7 +37,7 @@ internal object MaskBitmapRenderer {
             }
 
             strokes.forEach { stroke ->
-                val color = if (stroke.eraser) Color.BLACK else Color.WHITE
+                val color = if (stroke.eraser != inverted) Color.BLACK else Color.WHITE
                 val strokeWidth = (stroke.widthFraction * target.width).coerceAtLeast(1f)
                 strokePaint.color = color
                 strokePaint.strokeWidth = strokeWidth

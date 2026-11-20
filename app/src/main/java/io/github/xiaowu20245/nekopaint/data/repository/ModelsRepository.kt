@@ -14,7 +14,28 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import retrofit2.HttpException
 import java.io.File
+
+/** 模型候选来源；UI 用它区分网络、缓存和不支持。 */
+enum class ModelSource {
+    NETWORK,
+    CACHE,
+    UNSUPPORTED,
+    ERROR,
+}
+
+data class ModelFolderSnapshot(
+    val models: List<String>,
+    val source: ModelSource,
+)
+
+data class ModelFolderResult(
+    val folders: Map<String, ModelFolderSnapshot>,
+) {
+    fun modelsFor(folder: String): List<String> =
+        folders[folder]?.models.orEmpty()
+}
 
 /**
  * 模型目录缓存，按服务器隔离。键是 ComfyUI 目录名（checkpoints/loras/vae...）。
@@ -74,37 +95,65 @@ class ModelCatalogStore private constructor(
 }
 
 /**
- * 读取模型列表。优先网络，失败时退回上次成功缓存；
+ * 读取模型列表。返回每个目录的成功来源/缓存/不支持/错误状态，不再静默回退。
  * 只读，不提供下载/删除。
  */
+/** 单个模型目录的网络结果到 UI 来源的纯映射。 */
+object ModelFolderResultPolicy {
+
+    fun errorResult(
+        folders: Set<String>,
+        cached: Map<String, List<String>>,
+    ): ModelFolderResult = ModelFolderResult(
+        folders.associateWith { folder ->
+            ModelFolderSnapshot(cached[folder].orEmpty(), ModelSource.ERROR)
+        },
+    )
+
+    fun snapshot(
+        cached: List<String>,
+        network: Result<List<String>>,
+    ): ModelFolderSnapshot = network.fold(
+        onSuccess = { models -> ModelFolderSnapshot(models, ModelSource.NETWORK) },
+        onFailure = { throwable ->
+            when {
+                throwable is HttpException && throwable.code() == 404 ->
+                    ModelFolderSnapshot(cached, ModelSource.UNSUPPORTED)
+
+                cached.isNotEmpty() -> ModelFolderSnapshot(cached, ModelSource.CACHE)
+                else -> ModelFolderSnapshot(emptyList(), ModelSource.ERROR)
+            }
+        },
+    )
+}
+
 class ModelsRepository(
     private val apiFactory: ComfyApiFactory,
     private val serverConfigStore: ServerConfigStore,
     private val store: ModelCatalogStore,
 ) {
 
-    suspend fun load(folders: Set<String>): Result<Map<String, List<String>>> =
+    suspend fun load(folders: Set<String>): ModelFolderResult =
         withContext(Dispatchers.IO) {
-            runCatching {
-                val serverId = serverConfigStore.activeServerId.first()
-                    ?: error("未配置服务器")
-                val config = serverConfigStore.config.first()
-                    ?: error("未配置服务器")
-                val cached = store.load(serverId).toMutableMap()
-                val api = apiFactory.create(config)
-                folders.forEach { folder ->
-                    runCatching { ModelListParser.parse(api.models(folder)) }
-                        .onSuccess { models ->
-                            AppLog.d("models/$folder: ${models.size}")
-                            cached[folder] = models
-                        }
-                        .onFailure { throwable ->
-                            AppLog.w("models/$folder failed", throwable)
-                        }
-                }
-                runCatching { store.save(serverId, cached) }
-                    .onFailure { AppLog.w("save model catalog failed", it) }
-                cached
+            if (folders.isEmpty()) return@withContext ModelFolderResult(emptyMap())
+            val serverId = runCatching { serverConfigStore.activeServerId.first() }
+                .getOrNull()
+                ?: return@withContext ModelFolderResultPolicy.errorResult(folders, emptyMap())
+            val config = runCatching { serverConfigStore.config.first() }.getOrNull()
+                ?: return@withContext ModelFolderResultPolicy.errorResult(folders, emptyMap())
+            val cached = runCatching { store.load(serverId) }.getOrDefault(emptyMap())
+            val api = runCatching { apiFactory.create(config) }.getOrNull()
+                ?: return@withContext ModelFolderResultPolicy.errorResult(folders, cached)
+            val networkCatalog = cached.toMutableMap()
+            val result = folders.associateWith { folder ->
+                val cachedModels = cached[folder].orEmpty()
+                val network = runCatching { ModelListParser.parse(api.models(folder)) }
+                    .onSuccess { models -> networkCatalog[folder] = models }
+                    .onFailure { throwable -> AppLog.w("models/$folder failed", throwable) }
+                ModelFolderResultPolicy.snapshot(cachedModels, network)
             }
+            runCatching { store.save(serverId, networkCatalog) }
+                .onFailure { AppLog.w("save model catalog failed", it) }
+            ModelFolderResult(result)
         }
 }

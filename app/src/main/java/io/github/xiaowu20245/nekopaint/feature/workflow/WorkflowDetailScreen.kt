@@ -586,12 +586,13 @@ fun WorkflowDetailScreen(
                 viewModel.clearImageUploadNotice()
                 viewModel.resetMaskExportState()
             },
-            onUpload = { strokes, sourceSize ->
+            onUpload = { strokes, sourceSize, inverted ->
                 viewModel.exportMask(
                     candidateId = candidateId,
                     strokes = strokes,
                     sourceWidth = sourceSize.width,
                     sourceHeight = sourceSize.height,
+                    inverted = inverted,
                 )
             },
         )
@@ -1861,22 +1862,45 @@ private fun ParameterField(
         }
 
         ParameterType.ENUM -> {
-            if (candidate.constraints.options.isEmpty()) {
-                OutlinedTextField(
-                    value = candidate.value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    isError = errorText != null,
-                    supportingText = errorText?.let { { Text(it) } },
-                )
-            } else {
-                EnumField(
-                    value = candidate.value,
-                    options = candidate.constraints.options,
-                    errorText = errorText,
-                    onValueChange = onValueChange,
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val forceTextInput = candidate.constraints.optionsSource == "UNSUPPORTED" ||
+                    candidate.constraints.optionsSource == "ERROR"
+                if (candidate.constraints.options.isEmpty() || forceTextInput) {
+                    OutlinedTextField(
+                        value = candidate.value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        isError = errorText != null,
+                        supportingText = errorText?.let { { Text(it) } },
+                    )
+                } else {
+                    EnumField(
+                        value = candidate.value,
+                        options = candidate.constraints.options,
+                        errorText = errorText,
+                        onValueChange = onValueChange,
+                    )
+                }
+                candidate.constraints.optionsSource?.let { source ->
+                    val unsupported = source == "UNSUPPORTED"
+                    val failed = source == "ERROR"
+                    Text(
+                        text = stringResource(
+                            when (source) {
+                                "NETWORK" -> R.string.workflow_model_source_network
+                                "CACHE" -> R.string.workflow_model_source_cache
+                                "UNSUPPORTED" -> R.string.workflow_model_source_unsupported
+                                else -> R.string.workflow_model_source_error
+                            },
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            unsupported || failed -> NekoTheme.colors.warning
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
 

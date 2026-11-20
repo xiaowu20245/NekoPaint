@@ -298,29 +298,35 @@ class WorkflowDetailViewModel(
 
         viewModelScope.launch {
             delay(INITIAL_SETTLE_DELAY_MS)
-            modelsRepository.load(folderByCandidate.values.toSet())
-                .onSuccess { catalog ->
-                    _uiState.update { state ->
-                        val current = state.template ?: return@update state
-                        val updated = current.copy(
-                            candidates = current.candidates.map { candidate ->
-                                val folder = folderByCandidate[candidate.id]
-                                    ?: return@map candidate
-                                val remote = catalog[folder].orEmpty()
-                                if (remote.isEmpty()) return@map candidate
-                                val options = (
-                                    listOf(candidate.value).filter { it.isNotBlank() } +
-                                        remote +
-                                        candidate.constraints.options
-                                    ).distinct()
-                                candidate.copy(
-                                    constraints = candidate.constraints.copy(options = options),
-                                )
-                            },
+            val result = modelsRepository.load(folderByCandidate.values.toSet())
+            _uiState.update { state ->
+                val current = state.template ?: return@update state
+                val updated = current.copy(
+                    candidates = current.candidates.map { candidate ->
+                        val folder = folderByCandidate[candidate.id]
+                            ?: return@map candidate
+                        val snapshot = result.folders[folder]
+                            ?: return@map candidate
+                        val remote = snapshot.models
+                        val options = if (remote.isEmpty()) {
+                            candidate.constraints.options
+                        } else {
+                            (
+                                listOf(candidate.value).filter { it.isNotBlank() } +
+                                    remote +
+                                    candidate.constraints.options
+                                ).distinct()
+                        }
+                        candidate.copy(
+                            constraints = candidate.constraints.copy(
+                                options = options,
+                                optionsSource = snapshot.source.name,
+                            ),
                         )
-                        state.copy(template = updated)
-                    }
-                }
+                    },
+                )
+                state.copy(template = updated)
+            }
         }
     }
 
@@ -456,9 +462,10 @@ class WorkflowDetailViewModel(
         strokes: List<MaskStroke>,
         sourceWidth: Int,
         sourceHeight: Int,
+        inverted: Boolean = false,
     ) {
         if (_maskExportState.value.busy) return
-        if (strokes.isEmpty() || sourceWidth <= 0 || sourceHeight <= 0) {
+        if ((strokes.isEmpty() && !inverted) || sourceWidth <= 0 || sourceHeight <= 0) {
             _maskExportState.value = MaskExportState(
                 error = NekoMessage(
                     NekoMessageKey.MASK_EXPORT_FAILED,
@@ -474,7 +481,7 @@ class WorkflowDetailViewModel(
                 val target = MaskExportPolicy.targetSize(sourceWidth, sourceHeight)
                 // 让渲染完成并把 Bitmap 赋给可清理变量后再响应取消，避免返回窗口泄漏。
                 bitmap = withContext(Dispatchers.Default + NonCancellable) {
-                    MaskBitmapRenderer.render(target, strokes)
+                    MaskBitmapRenderer.render(target, strokes, inverted)
                 }
                 _maskExportState.update { it.copy(rendering = false, uploading = true) }
                 repository.uploadMask(bitmap)

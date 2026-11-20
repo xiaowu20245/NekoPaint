@@ -2,9 +2,12 @@ package io.github.xiaowu20245.nekopaint.feature.workflow
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -74,6 +79,7 @@ import coil3.compose.AsyncImage
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.common.NekoMessage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.data.repository.ImageDimensionReader
 import kotlinx.coroutines.delay
@@ -91,7 +97,7 @@ fun MaskEditorDialog(
     uploadError: NekoMessage?,
     dimensionReader: ImageDimensionReader? = null,
     onDismiss: () -> Unit,
-    onUpload: (List<MaskStroke>, IntSize) -> Unit,
+    onUpload: (List<MaskStroke>, IntSize, Boolean) -> Unit,
 ) {
     var selectedImage by remember { mutableStateOf<HistoryImage?>(null) }
     var sourceSize by remember { mutableStateOf<IntSize?>(null) }
@@ -101,9 +107,16 @@ fun MaskEditorDialog(
     var loadAttempt by remember { mutableIntStateOf(0) }
     var brushSize by remember { mutableStateOf(28f) }
     var eraser by remember { mutableStateOf(false) }
+    var inverted by remember { mutableStateOf(false) }
     var currentStroke by remember { mutableStateOf<MaskStroke?>(null) }
+    var showDiscardConfirm by remember { mutableStateOf(false) }
     val strokes = remember { mutableStateListOf<MaskStroke>() }
+    val redoStrokes = remember { mutableStateListOf<MaskStroke>() }
     val candidates = remember(images) { images.filter { !it.url.isNullOrBlank() } }
+    val hasChanges = MaskEditorPolicy.requiresExitConfirmation(strokes, inverted)
+    val requestClose: () -> Unit = {
+        if (hasChanges) showDiscardConfirm = true else onDismiss()
+    }
 
     LaunchedEffect(selectedImage?.url, loadAttempt) {
         sourceSize = null
@@ -112,6 +125,8 @@ fun MaskEditorDialog(
         loadTimedOut = false
         currentStroke = null
         strokes.clear()
+        redoStrokes.clear()
+        inverted = false
         val url = selectedImage?.url
         if (url != null && dimensionReader != null) {
             dimensionReader.read(url.toUri()).getOrNull()?.let { dimensions ->
@@ -127,8 +142,21 @@ fun MaskEditorDialog(
         }
     }
 
+    if (showDiscardConfirm) {
+        NekoConfirmDialog(
+            title = stringResource(R.string.mask_editor_discard_title),
+            message = stringResource(R.string.mask_editor_discard_message),
+            confirmLabel = stringResource(R.string.mask_editor_discard_confirm),
+            onConfirm = {
+                showDiscardConfirm = false
+                onDismiss()
+            },
+            onDismiss = { showDiscardConfirm = false },
+        )
+    }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = requestClose,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -152,7 +180,7 @@ fun MaskEditorDialog(
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f),
                     )
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = requestClose) {
                         Icon(
                             imageVector = Icons.Outlined.Close,
                             contentDescription = stringResource(R.string.mask_editor_close),
@@ -190,6 +218,7 @@ fun MaskEditorDialog(
                         onStrokeChange = { currentStroke = it },
                         onStrokeCommit = { stroke ->
                             strokes.add(stroke)
+                            redoStrokes.clear()
                             currentStroke = null
                         },
                         modifier = Modifier.weight(1f),
@@ -202,19 +231,47 @@ fun MaskEditorDialog(
                         onEraserChange = { eraser = it },
                         canUndo = strokes.isNotEmpty(),
                         onUndo = {
-                            if (strokes.isNotEmpty()) strokes.removeAt(strokes.lastIndex)
+                            val history = MaskEditorPolicy.undo(
+                                strokes.toList(),
+                                redoStrokes.toList(),
+                            )
+                            strokes.clear()
+                            strokes.addAll(history.strokes)
+                            redoStrokes.clear()
+                            redoStrokes.addAll(history.redo)
+                            currentStroke = null
+                        },
+                        canRedo = redoStrokes.isNotEmpty(),
+                        onRedo = {
+                            val history = MaskEditorPolicy.redo(
+                                strokes.toList(),
+                                redoStrokes.toList(),
+                            )
+                            strokes.clear()
+                            strokes.addAll(history.strokes)
+                            redoStrokes.clear()
+                            redoStrokes.addAll(history.redo)
+                            currentStroke = null
+                        },
+                        inverted = inverted,
+                        onToggleInverted = {
+                            inverted = MaskEditorPolicy.toggleInverted(inverted)
                         },
                         onClear = {
+                            val cleared = MaskEditorPolicy.clear()
                             strokes.clear()
+                            strokes.addAll(cleared.strokes)
+                            redoStrokes.clear()
+                            inverted = false
                             currentStroke = null
                         },
                         uploading = uploading,
-                        canUpload = strokes.isNotEmpty() && sourceSize != null,
+                        canUpload = (strokes.isNotEmpty() || inverted) && sourceSize != null,
                         uploadError = uploadError,
                         onPickAnother = { selectedImage = null },
                         onUpload = {
                             val size = sourceSize ?: return@MaskTools
-                            onUpload(strokes.toList(), size)
+                            onUpload(strokes.toList(), size, inverted)
                         },
                     )
                 }
@@ -293,9 +350,12 @@ private fun MaskCanvas(
     onStrokeCommit: (MaskStroke) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var zoom by remember(image.url) { mutableFloatStateOf(1f) }
+    var pan by remember(image.url) { mutableStateOf(Offset.Zero) }
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
+            .clipToBounds()
             .background(Color.Black)
             .padding(8.dp),
     ) {
@@ -323,6 +383,8 @@ private fun MaskCanvas(
         }
         val displayWidthDp = with(density) { displayWidthPx.toDp() }
         val displayHeightDp = with(density) { displayHeightPx.toDp() }
+        val viewportWidthPx = constraints.maxWidth.toFloat()
+        val viewportHeightPx = constraints.maxHeight.toFloat()
         val brushFraction = if (displayWidthDp.value > 0f) {
             brushSize / displayWidthDp.value
         } else {
@@ -332,7 +394,13 @@ private fun MaskCanvas(
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .size(displayWidthDp, displayHeightDp),
+                .size(displayWidthDp, displayHeightDp)
+                .graphicsLayer {
+                    scaleX = zoom
+                    scaleY = zoom
+                    translationX = pan.x
+                    translationY = pan.y
+                },
         ) {
             key(loadAttempt) {
                 AsyncImage(
@@ -365,12 +433,19 @@ private fun MaskCanvas(
                         .pointerInput(brushFraction, eraser) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
-                                val points = mutableListOf(
-                                    Offset(
-                                        (down.position.x / size.width).coerceIn(0f, 1f),
-                                        (down.position.y / size.height).coerceIn(0f, 1f),
-                                    ),
-                                )
+                                fun normalized(position: Offset): Offset {
+                                    val cx = size.width / 2f
+                                    val cy = size.height / 2f
+                                    return Offset(
+                                        (((position.x - cx - pan.x) / zoom + cx) / size.width)
+                                            .coerceIn(0f, 1f),
+                                        (((position.y - cy - pan.y) / zoom + cy) / size.height)
+                                            .coerceIn(0f, 1f),
+                                    )
+                                }
+                                val points = mutableListOf(normalized(down.position))
+                                var drawing = true
+                                var transforming = false
                                 onStrokeChange(
                                     MaskStroke(
                                         points = points.toList(),
@@ -378,27 +453,51 @@ private fun MaskCanvas(
                                         eraser = eraser,
                                     ),
                                 )
-                                drag(down.id) { change ->
-                                    points += Offset(
-                                        (change.position.x / size.width).coerceIn(0f, 1f),
-                                        (change.position.y / size.height).coerceIn(0f, 1f),
-                                    )
-                                    onStrokeChange(
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+                                    if (pressed.size >= 2) {
+                                        if (drawing) {
+                                            drawing = false
+                                            onStrokeChange(null)
+                                        }
+                                        transforming = true
+                                        val zoomChange = event.calculateZoom()
+                                        val panChange = event.calculatePan()
+                                        val newZoom = MaskEditorPolicy.clampZoom(zoom * zoomChange)
+                                        zoom = newZoom
+                                        pan = MaskEditorPolicy.clampPan(
+                                            pan = pan + panChange,
+                                            viewportWidth = viewportWidthPx,
+                                            viewportHeight = viewportHeightPx,
+                                            baseWidth = displayWidthPx,
+                                            baseHeight = displayHeightPx,
+                                            zoom = newZoom,
+                                        )
+                                        event.changes.forEach { it.consume() }
+                                    } else if (pressed.size == 1 && !transforming) {
+                                        points += normalized(pressed.first().position)
+                                        onStrokeChange(
+                                            MaskStroke(
+                                                points = points.toList(),
+                                                widthFraction = brushFraction,
+                                                eraser = eraser,
+                                            ),
+                                        )
+                                        pressed.first().consume()
+                                    } else if (pressed.isEmpty()) {
+                                        break
+                                    }
+                                }
+                                if (drawing) {
+                                    onStrokeCommit(
                                         MaskStroke(
                                             points = points.toList(),
                                             widthFraction = brushFraction,
                                             eraser = eraser,
                                         ),
                                     )
-                                    change.consume()
                                 }
-                                onStrokeCommit(
-                                    MaskStroke(
-                                        points = points.toList(),
-                                        widthFraction = brushFraction,
-                                        eraser = eraser,
-                                    ),
-                                )
                             }
                         },
                 ) {
@@ -487,6 +586,10 @@ private fun MaskTools(
     onEraserChange: (Boolean) -> Unit,
     canUndo: Boolean,
     onUndo: () -> Unit,
+    canRedo: Boolean,
+    onRedo: () -> Unit,
+    inverted: Boolean,
+    onToggleInverted: () -> Unit,
     onClear: () -> Unit,
     uploading: Boolean,
     canUpload: Boolean,
@@ -533,16 +636,40 @@ private fun MaskTools(
             )
         }
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedButton(onClick = onUndo, enabled = canUndo && !uploading) {
                 Text(stringResource(R.string.mask_editor_undo))
             }
-            OutlinedButton(onClick = onClear, enabled = canUndo && !uploading) {
+            OutlinedButton(onClick = onRedo, enabled = canRedo && !uploading) {
+                Text(stringResource(R.string.mask_editor_redo))
+            }
+            OutlinedButton(
+                onClick = onToggleInverted,
+                enabled = !uploading,
+            ) {
+                Text(
+                    stringResource(
+                        if (inverted) {
+                            R.string.mask_editor_invert_on
+                        } else {
+                            R.string.mask_editor_invert
+                        },
+                    ),
+                )
+            }
+            OutlinedButton(onClick = onClear, enabled = (canUndo || inverted) && !uploading) {
                 Text(stringResource(R.string.mask_editor_clear))
             }
-            Spacer(Modifier.weight(1f))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
             Button(onClick = onUpload, enabled = canUpload && !uploading) {
                 if (uploading) {
                     CircularProgressIndicator(

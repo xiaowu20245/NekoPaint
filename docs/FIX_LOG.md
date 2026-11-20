@@ -1206,3 +1206,24 @@ git diff --check
 - **第 111 节复审修复**：`refreshAllCompatibility` 重建 `nodeSummaries`；手动绑定检测到 api.json hash 变化时拒绝并要求先修复；成功绑定后只合并 candidates，保留未保存参数值。新增刷新摘要用例。
 - **复审**：第 111 节 CONDITIONAL（批量刷新节点摘要）已修复；第 112 节复审 **APPROVED**。
 - **提交**：3F-1 已提交为 `feat: 增加节点列表与重复导入策略`（`61b07e8`）。
+
+## 53. 第三轮 3F-2：模型提示与蒙版体验（CR-031/032）
+
+- **模型来源与不支持提示（CR-031）**
+  - `ModelsRepository.load` 返回 `ModelFolderResult`：每个目录带 `NETWORK/CACHE/UNSUPPORTED/ERROR` 来源；404 不再静默回退。
+  - 网络成功使用 ComfyUI 列表；404 保留缓存并提示“当前服务器不支持模型列表，请用文本输入或到 PC ComfyUI Manager 管理”；其他失败有缓存显示本地缓存，无缓存显示错误，同时保留文本输入。
+  - `ParameterConstraints.optionsSource` 记录来源，参数页 ENUM/模型下拉下方显示来源或 404/错误提示。
+  - 新增 `ModelFolderResultTest` 3（状态映射、404、缓存回退、API 创建失败 ERROR）。
+- **蒙版编辑体验（CR-032）**
+  - 新增 `MaskEditorPolicy`：重做栈上限 20、缩放 1x–4x、平移边界、反选、退出确认判定。
+  - `MaskEditorDialog`：撤销/重做、双指缩放/平移（单指绘制/擦除）、反选、清空；退出/关闭时若有未提交笔迹或反选，弹 `NekoConfirmDialog` 确认放弃。
+  - `MaskBitmapRenderer` 增加 `inverted` 导出：反选后黑白交换；仍为 4K 内 RGB_565 黑白 PNG，不引入灰阶/ALPHA_8。
+  - 软硬度按 D-064 延后，保持 D-033 二值蒙版；`DECISIONS.md` 新增 D-064。
+  - 新增 `MaskEditorPolicyTest` 6。
+- **验证**
+  - JVM：**160 suites / 893 tests / 0 failures / 0 errors / 0 skipped**（较 3F-1 增加 2 suites / 9 tests）。
+  - lint：0 errors / 10 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+  - API28 `connectedDebugAndroidTest`：13/13。
+  - 手工限制：本机无工作流/历史模板，蒙版双指缩放、反选、重做和退出确认未做 API37 真机点击；由 `MaskEditorPolicyTest`、编译和现有蒙版 instrumentation 覆盖，建议后续补一次真实 4K 蒙版手工验收。
+- **第 113 节复审修复**：`ModelsRepository.load` 在 API 创建失败时返回全 ERROR 快照；UNSUPPORTED/ERROR 且有旧 options 时强制可编辑文本输入；D-063 复审条件恢复，D-064 移到完整 D-063 之后并补蒙版复审条件。新增 API 创建失败用例。
+- **复审**：第 113 节 CONDITIONAL（模型异常/文本兜底/D-064 位置）已修复；第 114 节复审 **APPROVED**。

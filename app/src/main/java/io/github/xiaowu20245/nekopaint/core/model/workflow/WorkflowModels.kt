@@ -46,6 +46,8 @@ data class ParameterConstraints(
     val max: Double? = null,
     val step: Double? = null,
     val options: List<String> = emptyList(),
+    /** 模型列表来源：NETWORK/CACHE/UNSUPPORTED/ERROR；普通枚举为 null。 */
+    val optionsSource: String? = null,
 )
 
 @Serializable
