@@ -1244,3 +1244,31 @@ git diff --check
   - API28 `connectedDebugAndroidTest`：13/13。
 - **复审**：第 115 节首次复审 **APPROVED**；第 116 节非阻塞项处理最终确认 **APPROVED**。
 - **提交**：3G 已提交为 `refactor: 拆分三大页面组件`（`b0c7c27`）。
+
+## 55. 第三轮 3H：测试补齐与收尾（CR-042）
+
+- **最终集成回归 +4**
+  - 新增 `Round3IntegrationRegressionTest` 4 项，覆盖跨批次组合路径：
+    - `autoSaveDeduplicatesPerServerAndNotAcrossServers`：自动保存去重 key 按服务器隔离，同一 prompt/图片在 server-b 会重新保存。
+    - `copyTemplateManualBindingDoesNotMutateOriginal`：重复导入 COPY 后手动绑定只写副本，原模板候选与 `api.json` 字节不变，删除副本不影响原模板。
+    - `expandedPromptTagsFlowIntoSeedSelectionAndAppliedJson`：`#标签组` 展开后经 `WorkflowSubmitter` 合并种子选择，并写入最终 API JSON。
+    - `mergedHistoryUsesLatestEntryAndPrunesSelectionByVisibility`：本地/服务器历史合并以最新条目为准，temp 可见性决定可选项，筛选后选择集正确裁剪。
+- **全量验证**
+  - JVM：**161 suites / 897 tests / 0 failures / 0 errors / 0 skipped**（较 3G 增加 1 suite / 4 tests）。
+  - lint：0 errors / 10 warnings / 3 hints；`assembleDebug` 成功（17,480,471 bytes）。
+  - `assembleRelease --rerun-tasks` 成功（`app-release-unsigned.apk` 12,353,750 bytes）；unsigned、`minifyEnabled=false`，仅构建烟测，不代表 CR-016 关闭。
+  - `git diff --check` exit 0；API28 `connectedDebugAndroidTest` 13/13。
+- **API37 手工烟测**
+  - 在 `Medium_Phone_API_37.0` 启动 debug APK，进程无崩溃；Server/Workflow/Queue/History/Settings/Chat 入口可打开。
+  - 设置 → AI 服务：修改接口参数后系统返回弹出“有未保存的修改”，选择“放弃修改”回到设置且未保存，符合预期。
+  - Queue/History 空数据下拉刷新无崩溃。
+  - 受限项：本机无真实 ComfyUI、工作流模板和历史图片，未覆盖“失败保留旧内容/重试入口”、历史多选、Chat 动作执行返回门禁、蒙版 redo/zoom/invert/退出确认、4K 预览/保存；真实 ComfyUI 队列/历史、Manager 安装/切服务器、模型列表 404、自动保存验收未执行。
+- **文档局部更新**
+  - `ARCHITECTURE.md`：改为实际单模块分层（feature/core/data、无 domain/Room）、实际目录结构、三大页面拆分、测试策略与 release 构建现状；清理技术选型和持久化章节的 Room/Turbine 过期表述。
+  - `ROADMAP.md`：追加第三轮 3A–3G 与 3H 进度行，记录自动验证与手工缺口。
+  - `REQUIREMENTS.md`：FR-MODEL-01/02 补 404/缓存/文本兜底；FR-CANVAS-01 补 redo/zoom/invert/退出确认与 D-064 软硬度延后。
+  - `DECISIONS.md`：D-064 状态改为“已执行（软硬度延后）”；新增 D-065 记录大页面拆分约束。
+  - 仅局部同步，**CR-043 全量文档同步仍开放**；未修改未跟踪的计划/复审/handoff 文档和 `emulator.png`。
+- **第 117 节 R3H-01 修复**：FR-CANVAS-01 改为“重做栈上限 20；撤销不设固定上限”，反选导出黑白交换改为 `[ ]` API37 手工待补；模型验收引用收窄为“来源映射由测试覆盖，文本兜底由代码审查确认”；同步清理 `ARCHITECTURE.md` 的数据库/目标目录/构建过期表述，并把 D-064 状态改为“已执行（延后）”。
+- **复审**：第 117 节 CONDITIONAL（R3H-01 文档准确性）已修复；第 118 节复审 **APPROVED**。
+- **提交**：3H 测试已提交为 `test: 补齐体验与架构回归`（`58dfe53`）。

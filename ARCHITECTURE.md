@@ -21,7 +21,7 @@
 
 - Android 原生：Kotlin + Jetpack Compose + Material 3。
 - 局域网直连 ComfyUI，无中转服务。
-- 最低 Android 8.0（API 26），目标 API 37（以创建工程时稳定版为准）。
+- 最低 Android 8.0（API 26），目标 API 37。
 - V1 不引入账号体系、云端、数据库服务端。
 
 ---
@@ -57,13 +57,13 @@ flowchart LR
 | JSON | kotlinx.serialization | 建议 | 与 Kotlin 类型安全结合，容错配置方便 |
 | WebSocket | OkHttp WebSocket | 建议 | 与 HTTP 共用连接池与超时配置 |
 | 图片加载 | Coil 3 | 已实施（V0.4a） | Compose 友好，支持磁盘/内存缓存与采样；复用 OkHttpClient |
-| 本地配置 | DataStore (Preferences) | 建议 | 轻量键值，适合服务器配置 |
-| 结构化数据 | Room | 建议 | 模板、绑定、任务、历史元数据 |
-| 依赖注入 | 手动 `AppContainer` | 建议 | 初期简单透明；规模变大再评估 Hilt |
-| 测试 | JUnit + MockWebServer + Turbine + Compose UI Test | 建议 | 解析器与仓库优先覆盖 |
-| 构建 | Gradle Kotlin DSL + Version Catalog | 建议 | `libs.versions.toml` 统一版本 |
+| 本地配置 | DataStore (Preferences) | 已实施 | 服务器、设置、AI 配置与客户端身份 |
+| 结构化数据 | JSON 文件 + `AtomicFileWriter` | 已实施 | 模板、任务、历史；Room 未引入 |
+| 依赖注入 | 手动 `AppContainer` | 已实施 | 单模块，构造注入；规模变大再评估 Hilt |
+| 测试 | JUnit + MockWebServer + Compose UI Test | 已实施 | 解析器/策略/仓库优先，API28 instrumentation 兜底 |
+| 构建 | Gradle Kotlin DSL + Version Catalog | 已实施 | `libs.versions.toml` 统一版本 |
 
-> 版本号不在文档中写死；创建工程时使用当时最新稳定版，并记录到 `gradle/libs.versions.toml`。
+> 版本号不在文档中写死；统一记录在 `gradle/libs.versions.toml`。
 > 替代方案与理由见 `DECISIONS.md`。
 
 ---
@@ -72,38 +72,42 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph UI[feature: UI 层]
-        SC[Compose Screen]
+    subgraph UI[feature: Compose UI]
+        SC[Screen / 拆分组件]
         VM[ViewModel]
     end
-    subgraph DOMAIN[domain: 领域层]
-        UC[UseCase]
-        RI[Repository 接口]
-        DM[领域模型]
+    subgraph CORE[core: 模型、规则与基础能力]
+        MODEL[领域模型]
+        POLICY[解析器 / 纯策略]
+        NET[ComfyApi / WebSocket]
+        UIKIT[主题与通用组件]
+        STORE[DataStore / JSON 文件]
     end
-    subgraph DATA[data: 数据层]
-        RImpl[Repository 实现]
-        API[ComfyApi / WebSocket]
-        DB[(Room)]
-        DS[(DataStore)]
-        FILES[(模板 JSON / 图片缓存)]
+    subgraph DATA[data: 仓库与任务编排]
+        REPO[Repository]
+        OP[OperationCenter / TaskManager]
+        MAPPER[DTO <-> 领域模型]
     end
-    SC --> VM --> UC --> RI
-    RImpl -.实现.-> RI
-    RImpl --> API
-    RImpl --> DB
-    RImpl --> DS
-    RImpl --> FILES
+    SC --> VM
+    VM --> POLICY
+    VM --> REPO
+    REPO --> NET
+    REPO --> STORE
+    REPO --> OP
+    REPO --> MODEL
+    MAPPER --> MODEL
 ```
 
-### 依赖规则
+当前实际实现为单模块、手动依赖注入（`di/AppContainer`），没有单独 `domain` 层：
 
-- `feature` 只能依赖 `domain` 和 `core/ui`。
-- `domain` 不依赖 Android 框架（除协程等纯 Kotlin 库）。
-- `data` 实现 `domain` 的仓库接口，可以依赖 Android、Retrofit、Room。
-- `core/network` 只放传输与 DTO，不放业务规则。
+- `feature` 依赖 `data` 仓库与 `core` 的模型/策略/UI 组件；页面状态由 ViewModel 暴露。
+- `data` 负责模板、任务、历史、节点目录、服务器与提交流程，依赖 `core/network`、DataStore、私有目录 JSON 和 MediaStore。
+- `core/network` 只放传输、DTO、超时与日志脱敏；业务规则放在 `core/workflow` 或 `data/repository`。
+- `core/workflow` 放可 JVM 单测的解析、参数识别、兼容性分析、catalog 与提交/重试策略。
+- 持久化不使用 Room：服务器/设置用 DataStore，模板/任务/历史用 `filesDir` 下的 JSON + `AtomicFileWriter`，图片走 MediaStore/应用缓存。
 - UI 不直接接触 DTO；由 mapper 转为领域模型。
-- ViewModel 不持有 `Context`、`Activity`、`View`。
+- ViewModel 不持有 `Context`、`Activity`、`View`；需要应用上下文的存储由仓库接收 `applicationContext`。
+- 大页面按职责拆为同包文件（Chat/WorkflowDetail/History 均保留入口文件 + 列表/表单/对话框组件），单文件目标 <800 行。
 
 ### 为什么不用多模块
 
@@ -112,70 +116,48 @@ flowchart TB
 
 ---
 
-## 5. 目标目录结构
+## 5. 当前目录结构
 
-> 以下为计划结构，当前尚未创建 Android 工程。
+> 以下为当前实际结构（省略 `res/`、`test/` 与 `androidTest/` 的逐文件展开）。
 
 ```text
 NekoPaint/
-├─ AGENTS.md
-├─ PRODUCT.md
-├─ REQUIREMENTS.md
-├─ ARCHITECTURE.md
-├─ COMFYUI_API.md
-├─ ROADMAP.md
-├─ DECISIONS.md
-├─ .gitignore
-├─ settings.gradle.kts
-├─ build.gradle.kts
-├─ gradle/
-│  ├─ libs.versions.toml
-│  └─ wrapper/
-└─ app/
-   ├─ build.gradle.kts
-   ├─ proguard-rules.pro
-   └─ src/
-      ├─ main/
-      │  ├─ AndroidManifest.xml
-      │  ├─ res/
-      │  │  ├─ values/strings.xml
-      │  │  ├─ values/themes.xml
-      │  │  ├─ xml/network_security_config.xml
-      │  │  └─ xml/file_paths.xml
-      │  └─ java/io/github/xiaowu20245/nekopaint/
-      │     ├─ NekoPaintApplication.kt
-      │     ├─ MainActivity.kt
-      │     ├─ di/
-      │     │  └─ AppContainer.kt
-      │     ├─ core/
-      │     │  ├─ common/          # Result、AppError、DispatcherProvider、常量
-      │     │  ├─ network/         # ComfyApi、DTO、OkHttp、WebSocket、错误映射
-      │     │  ├─ datastore/       # ServerConfigStore
-      │     │  ├─ database/        # AppDatabase、DAO、Entity
-      │     │  ├─ files/           # 模板 JSON、图片缓存、MediaStore
-      │     │  ├─ model/           # 领域模型
-      │     │  └─ ui/              # theme、通用组件、导航
-      │     ├─ data/
-      │     │  ├─ mapper/          # DTO <-> 领域模型
-      │     │  └─ repository/      # 仓库实现
-      │     ├─ domain/
-      │     │  ├─ repository/      # 仓库接口
-      │     │  └─ usecase/         # 组合业务逻辑
-      │     └─ feature/
-      │        ├─ onboarding/      # 首次配置引导
-      │        ├─ server/          # 服务器配置 + 状态面板
-      │        ├─ workflow/        # 模板列表、导入、详情
-      │        ├─ parameters/      # 参数表单
-      │        ├─ generate/        # 生成子页（从工作流进入）
-      │        ├─ queue/           # 队列与进度
-      │        ├─ history/         # 历史子页（从队列进入）
-      │        ├─ gallery/         # 图片预览与保存
-      │        ├─ canvas/          # 单图蒙版重绘（V0.5）
-      │        └─ settings/        # 设置、关于、缓存
-      └─ test/
-         ├─ java/...              # 单元测试
-         └─ resources/fixtures/   # 真实接口 JSON 样本（脱敏）
+├─ app/
+│  └─ src/main/java/io/github/xiaowu20245/nekopaint/
+│     ├─ NekoPaintApplication.kt
+│     ├─ MainActivity.kt
+│     ├─ di/AppContainer.kt          # 手动依赖注入
+│     ├─ core/
+│     │  ├─ common/                  # NekoMessage、通用结果与常量
+│     │  ├─ datastore/               # 服务器、设置、AI 配置
+│     │  ├─ image/                   # 图片头解析、编码与采样
+│     │  ├─ model/                   # 服务器/工作流/任务/AI 领域模型
+│     │  ├─ network/                 # ComfyApi、DTO、OkHttp、WebSocket
+│     │  ├─ privacy/                 # 诊断与隐私脱敏
+│     │  ├─ security/                # Keystore / SecretCipher
+│     │  ├─ ui/                      # 主题、通用组件、图标、导航
+│     │  └─ workflow/                # 解析、参数识别、兼容性、catalog、策略
+│     ├─ data/
+│     │  ├─ mapper/                  # DTO <-> 领域模型
+│     │  ├─ operation/               # 批量提交与 OperationCenter
+│     │  └─ repository/              # 模板/任务/历史/服务器/节点/模型仓库
+│     └─ feature/
+│        ├─ chat/                    # Neko I 会话、工具、动作卡片
+│        ├─ common/                  # 用户文案映射
+│        ├─ generate/                # 提交与批量生成
+│        ├─ history/                 # 历史列表、筛选、详情、选择
+│        ├─ queue/                   # 队列与进度
+│        ├─ server/                  # 服务器配置与状态
+│        ├─ settings/                # 设置、AI 服务、词库
+│        └─ workflow/                # 工作流列表、导入、详情、蒙版
 ```
+
+大页面采用同包拆分，入口文件只保留组合、入口与预览：
+
+- `feature/chat/ChatScreen.kt` + `ChatMessageList.kt`、`ChatComposer.kt`、`ChatActionCard.kt`、`ChatSessionSheet.kt`、`ChatDialogs.kt`。
+- `feature/workflow/WorkflowDetailScreen.kt` + `WorkflowDetailHeader.kt`、`WorkflowParameters.kt`、`WorkflowParameterFields.kt`、`WorkflowPresetBar.kt`、`WorkflowInstallDialog.kt`。
+- `feature/history/HistoryScreen.kt` + `HistoryFilters.kt`、`HistoryList.kt`、`HistoryDialogs.kt`、`HistorySelectionBar.kt`。
+- 单文件目标 <800 行；跨文件同包访问使用 `internal`，仅本文件使用保持 `private`。
 
 ### 包名
 
@@ -461,43 +443,19 @@ filesDir/servers/<serverId>/models/catalog.json      # 模型目录缓存
 历史元数据由 `HistoryStore` 按服务器缓存：启动先展示缓存，`/history` 成功返回后覆盖并写盘；失败时保留缓存并标记过期。
 Room 仍未引入；历史列表优先使用服务器数据，本地文件和 Coil 图片缓存用于重启/短时离线查看。切换服务器时 `TaskManager` 清空内存队列/进度并按新 `serverId` 重新加载缓存。
 
-### 9.3 Room 表（后续）
+### 9.3 结构化存储（未引入 Room）
 
-```text
-server_profile
-  id TEXT PK, name TEXT, scheme TEXT, host TEXT, port INTEGER,
-  created_at INTEGER, updated_at INTEGER
+当前不使用 Room。模板、绑定、任务、历史分别以 JSON 文件存放在 `filesDir`，写入使用 `AtomicFileWriter` 保证原子性；服务器/设置使用 DataStore。
 
-workflow_template
-  id TEXT PK, name TEXT, json_path TEXT, source_format TEXT,
-  node_count INTEGER, created_at INTEGER, updated_at INTEGER
-
-workflow_binding
-  id TEXT PK, template_id TEXT, node_id TEXT, input_name TEXT,
-  label TEXT, type TEXT, group_name TEXT, sort_order INTEGER,
-  default_value_json TEXT, constraints_json TEXT, visible INTEGER
-
-template_draft
-  template_id TEXT PK, values_json TEXT, updated_at INTEGER
-
-task_record
-  prompt_id TEXT PK, template_id TEXT, client_id TEXT,
-  status TEXT, queue_number INTEGER, submitted_at INTEGER,
-  started_at INTEGER, finished_at INTEGER,
-  params_json TEXT, error_json TEXT
-
-task_output
-  id TEXT PK, prompt_id TEXT, node_id TEXT,
-  filename TEXT, subfolder TEXT, type TEXT,
-  local_path TEXT, width INTEGER, height INTEGER
-```
-
-- 模板 JSON 存文件（`filesDir/workflows/<id>.json`），数据库存路径与元数据。
+- 模板：`filesDir/workflows/<templateId>/api.json` + `profile.json`。
+- 任务：`filesDir/servers/<serverId>/tasks/<promptId>.json`。
+- 历史：`filesDir/servers/<serverId>/history/history.json`。
+- 模型目录：`filesDir/servers/<serverId>/models/catalog.json`。
 - 图片缓存由 Coil 管理（`cacheDir/image_cache`）；分享临时文件在 `cacheDir/share`；保存到相册时走 MediaStore。
-- 删除模板时同时删除 JSON、绑定、草稿；历史任务保留但标记模板已删除。
-- 使用事务保证“模板 + 绑定”一起成功或失败。
 
-### 9.3 数据保留
+若后续需要跨表事务或复杂查询，再评估 Room；当前不为未实施 schema 维护文档。
+
+### 9.4 数据保留
 
 - 历史元数据默认保留最近 200 条，超出按时间清理。
 - 图片磁盘缓存上限 500 MB、内存缓存 25%，由 Coil 管理。
@@ -607,7 +565,7 @@ templateJson (只读)
 - 所有网络调用在 `Dispatchers.IO`；UI 只在主线程。
 - 使用 `viewModelScope`；Repository 内部使用 `SupervisorJob` 管理长连接。
 - WebSocket 生命周期与应用前台状态绑定；不因单个页面销毁而断开全局连接，但页面级订阅要取消。
-- 进程被杀后：未完成任务从数据库恢复，重连后以服务器历史校准。
+- 进程被杀后：未完成任务从本地任务 JSON 恢复，重连后以服务器历史校准。
 - 长任务不依赖前台服务（V1 已确认）；锁屏后可能收不到实时进度，回到前台自动补齐。
 
 ---
@@ -616,12 +574,14 @@ templateJson (只读)
 
 | 层级 | 工具 | 覆盖内容 |
 | --- | --- | --- |
-| 单元 | JUnit | 工作流格式识别、参数绑定、类型转换、错误映射、退避计算 |
-| 网络 | MockWebServer | `/prompt` 成功/400、`/history` 解析、超时、空响应 |
+| 单元 | JUnit | 工作流格式识别、参数绑定、类型转换、错误映射、退避计算、纯策略 |
+| 网络 | MockWebServer | `/system_stats`、`/prompt` 成功/400、`/models`、超时、空响应 |
 | WebSocket | MockWebServer WebSocket | 事件解析、断线重连、未知事件忽略 |
-| 数据 | Room in-memory | 模板/绑定/任务事务、状态收敛 |
-| UI | Compose UI Test | 表单校验、空状态、错误状态、导航 |
-| 手工 | 真机 + 真实 ComfyUI | 连接、提交、进度、中断、保存、断网恢复 |
+| 数据 | 临时目录 + JSON/AtomicFileWriter | 模板导入/复制/手动绑定、任务持久化、历史合并、自动保存 |
+| UI | Compose UI Test（API28） | 返回门禁、触控目标、4K 蒙版导出；当前 instrumentation 13 项 |
+| 手工 | API37 + 真实 ComfyUI | 页面导航、未保存返回、下拉刷新、蒙版手势、4K、断网恢复 |
+
+截至第三轮 3H：JVM **161 suites / 897 tests**，API28 instrumentation **13/13**；真实 ComfyUI、历史多选和蒙版手势仍按 3H 手工清单补验。
 
 ### 必须保留的测试样本
 
@@ -643,10 +603,10 @@ templateJson (只读)
 ## 15. 构建与质量
 
 - Gradle Kotlin DSL + Version Catalog。
-- `debug` 与 `release` 两个构建类型；release 开启 R8，保留 kotlinx.serialization 规则。
-- `compileSdk` / `targetSdk` 以创建时最新稳定版为准；`minSdk 26`。
+- `debug` 与 `release` 两个构建类型；当前 release `isMinifyEnabled=false` 且未签名，只用于构建烟测。R8、签名与版本发布仍属 CR-016，未闭环。
+- `compileSdk = 37`、`targetSdk = 37`、`minSdk = 26`。
 - 开启 Compose compiler metrics（可选，仅本地）。
-- Lint：`abortOnError` 保持默认；不随意 suppress。
+- Lint：`abortOnError` 保持默认；第三轮基线为 0 errors / 10 warnings / 3 hints。
 - 依赖版本集中在 `libs.versions.toml`；新增依赖需说明理由。
 - 签名文件不入库；使用本机 `keystore.properties`（加入 `.gitignore`）。
 
@@ -676,7 +636,7 @@ templateJson (只读)
 - D-004 单模块 + 分包
 - D-006 手动依赖注入
 - D-007 Retrofit + OkHttp + kotlinx.serialization
-- D-008 DataStore + Room
+- D-008 DataStore + Room（Room 未引入，当前 JSON 文件）
 - D-009 仅支持 API 格式工作流
 - D-011 client_id 与 WebSocket 一致
 - D-013 明文 HTTP 与网络安全配置

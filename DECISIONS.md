@@ -101,7 +101,8 @@
 | D-037 | 历史参数回填使用一次性内存中转，不直接覆盖已保存模板 | 已接受（V1.0 队列历史重构实施） |
 | D-062 | 服务器地址严格校验；旧非法配置进入 InvalidConfig，暂停自动重连与远程刷新 | 已接受（第 3 批 CR-017 实施） |
 | D-063 | 服务器地址变化生成新 serverId，旧主机归档且不迁移缓存 | 已接受（第 4 批 CR-006 实施） |
-| D-064 | 单图蒙版软硬度延后，保持黑白二值 PNG | 已接受（3F-2 范围确认） |
+| D-064 | 单图蒙版软硬度延后，保持黑白二值 PNG | 已接受（3F-2 已执行，软硬度延后） |
+| D-065 | 大页面按职责拆分为同包文件，单文件目标 <800 行 | 已接受（3G/CR-053 实施） |
 
 ---
 
@@ -2180,7 +2181,7 @@ AI 助手会把提示词、用户选择的图片、任务摘要、错误信息�
 
 ## D-064 单图蒙版软硬度延后，保持黑白二值 PNG
 
-- 状态：**已接受（3F-2 范围确认）**
+- 状态：**已接受（3F-2 已执行，软硬度延后）**
 - 日期：2026-11-20
 - 关联：D-019、D-033、`docs/CODE_REVIEW.md` CR-032
 
@@ -2206,6 +2207,38 @@ CR-032 要求补齐蒙版编辑的重做、缩放/平移、反选、未提交退
 - 真实 inpaint 工作流要求软边/羽化，或 ComfyUI `LoadImageMask` 明确支持灰阶。
 - 4K 导出需要在软画笔下重新评估内存峰值。
 - 需要保存/恢复蒙版草稿或超过 20 步撤销。
+
+---
+
+## D-065 大页面按职责拆分为同包文件
+
+- 状态：**已接受（3G/CR-053 实施）**
+- 日期：2026-11-20
+- 关联：`docs/CODE_REVIEW.md` CR-053、`docs/FIX_PLAN_ROUND3.md` §12
+
+### 背景
+
+`ChatScreen.kt`、`WorkflowDetailScreen.kt`、`HistoryScreen.kt` 均超过 2400 行，单个文件同时承载入口、列表、输入栏、对话框、动作卡片和预览，修改冲突与复审成本高。CR-053 要求在不改变行为/接口的前提下拆分。
+
+### 决策
+
+- 只移动代码，不改变页面行为、公开接口和导航；入口文件保留组合、入口与预览。
+- Chat 拆为 `ChatScreen` + `ChatMessageList`、`ChatComposer`、`ChatActionCard`、`ChatSessionSheet`、`ChatDialogs`。
+- Workflow 拆为 `WorkflowDetailScreen` + `WorkflowDetailHeader`、`WorkflowParameters`、`WorkflowParameterFields`、`WorkflowPresetBar`、`WorkflowInstallDialog`；`WorkflowParameterFields` 为满足 <800 行的追加拆分。
+- History 拆为 `HistoryScreen` + `HistoryFilters`、`HistoryList`、`HistoryDialogs`、`HistorySelectionBar`；多选顶栏动作抽为同包 `historySelectionActions`，参数化但保持动作顺序、启用条件、回调和文案不变。
+- 同包跨文件访问的声明改为 `internal`，仅本文件使用的声明保持/恢复 `private`；`@Preview` 保留在主文件。
+
+### 影响
+
+- 17 个拆分文件全部 <800 行；3G 复审确认 Chat/Workflow 归一化文本一致，History 仅 `historySelectionActions` 抽取块不同。
+- 后续新增 UI 逻辑应放进对应职责文件，避免入口文件重新膨胀。
+- 拆分不改变模块外公开 API，也不引入新依赖。
+
+### 复审条件
+
+- 任一拆分文件再次接近或超过 800 行。
+- 需要跨包复用页面内部组件，导致 `internal` 可见性扩大。
+- History 多选动作需要新增动作或改变启用条件。
 
 ---
 
