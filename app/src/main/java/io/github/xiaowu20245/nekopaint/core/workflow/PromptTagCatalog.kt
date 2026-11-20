@@ -53,6 +53,9 @@ object PromptTagCatalog {
     @Volatile
     private var externalSuggestions: List<PromptTagSuggestion> = emptyList()
 
+    @Volatile
+    private var searchIndex = PromptLexiconIndex(builtInSuggestions)
+
     val suggestions: List<PromptTagSuggestion>
         get() = mergedSuggestions
 
@@ -70,22 +73,11 @@ object PromptTagCatalog {
         mergedSuggestions = builtInSuggestions + external.filter {
             it.tag.lowercase() !in builtInTags
         }
+        searchIndex = PromptLexiconIndex(mergedSuggestions)
     }
 
-    fun search(query: String, limit: Int = 8): List<PromptTagSuggestion> {
-        val keyword = query.trim().lowercase()
-        if (keyword.isEmpty()) return emptyList()
-        return suggestions
-            .filter { suggestion ->
-                suggestion.tag.lowercase().contains(keyword) ||
-                    suggestion.zh.contains(keyword, ignoreCase = true) ||
-                    suggestion.aliases.any { it.contains(keyword, ignoreCase = true) }
-            }
-            .sortedByDescending { suggestion ->
-                suggestion.tag.lowercase().startsWith(keyword)
-            }
-            .take(limit)
-    }
+    fun search(query: String, limit: Int = PromptLexiconIndex.DEFAULT_LIMIT): List<PromptTagSuggestion> =
+        searchIndex.search(query, limit)
 
     fun zhFor(tag: String): String? =
         suggestions.firstOrNull { it.tag.equals(tag.trim(), ignoreCase = true) }?.zh

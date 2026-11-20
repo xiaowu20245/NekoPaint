@@ -43,6 +43,7 @@ import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.format.formatFileSize
+import io.github.xiaowu20245.nekopaint.data.repository.AutoSaveState
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import kotlinx.coroutines.launch
@@ -145,6 +146,28 @@ fun StorageSettingsScreen() {
         state.chatImageCount,
         formatFileSize(state.chatImageBytes),
     )
+    val autoSaveRunning = state.autoSaveState as? AutoSaveState.Running
+    val autoSaveFailed = state.autoSaveState as? AutoSaveState.Failed
+    val autoSaveProgress = autoSaveRunning?.let { running ->
+        stringResource(
+            R.string.settings_auto_save_progress,
+            running.completed,
+            running.total,
+            running.saved,
+            running.failed,
+        )
+    }
+    val autoSaveFailedMessage = autoSaveFailed?.let { failed ->
+        stringResource(
+            R.string.settings_auto_save_failed,
+            failed.saved,
+            failed.failed,
+        )
+    }
+
+    LaunchedEffect(autoSaveFailedMessage) {
+        autoSaveFailedMessage?.let { snackbarHostState.showSnackbar(it) }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -161,6 +184,16 @@ fun StorageSettingsScreen() {
                         checked = state.autoSaveHistoryImages,
                         onCheckedChange = requestAutoSaveToggle,
                     )
+                    if (autoSaveRunning != null) {
+                        SettingsRowDivider()
+                        SettingsActionRow(
+                            icon = NekoIcons.Download,
+                            title = stringResource(R.string.settings_auto_save_progress_title),
+                            summary = autoSaveProgress.orEmpty(),
+                            actionLabel = stringResource(R.string.settings_auto_save_cancel),
+                            onAction = viewModel::cancelAutoSave,
+                        )
+                    }
                 }
             }
 

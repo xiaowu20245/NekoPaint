@@ -15,6 +15,7 @@ class InvalidComfyResponseException : IllegalStateException("Response is not Com
 class ServerRepository(
     private val store: ServerConfigStore,
     private val apiFactory: ComfyApiFactory,
+    private val managerApiFactory: ComfyApiFactory? = null,
 ) {
 
     val servers = store.servers
@@ -25,16 +26,26 @@ class ServerRepository(
     suspend fun loadConfig(): ServerConfig? = store.config.first()
 
     suspend fun saveServer(profile: ServerProfile, activate: Boolean = false): Result<Unit> =
-        store.saveServer(profile, activate)
+        store.saveServer(profile, activate).onSuccess {
+            // 地址或配置可能已变化，丢弃缓存的 Retrofit，下一次按新 endpoint 重建。
+            apiFactory.clear()
+            managerApiFactory?.clear()
+        }
 
     suspend fun replaceServerEndpoint(
         oldProfile: ServerProfile,
         newProfile: ServerProfile,
         activate: Boolean,
-    ): Result<Unit> = store.replaceServerEndpoint(oldProfile, newProfile, activate)
+    ): Result<Unit> =
+        store.replaceServerEndpoint(oldProfile, newProfile, activate).onSuccess {
+            apiFactory.clear()
+            managerApiFactory?.clear()
+        }
 
     suspend fun deleteServer(id: String) {
         store.deleteServer(id)
+        apiFactory.clear()
+        managerApiFactory?.clear()
     }
 
     suspend fun setActive(id: String) {

@@ -11,6 +11,7 @@ import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiDisclosurePolicy
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiHttpConsent
 import io.github.xiaowu20245.nekopaint.core.security.SecretCipher
+import io.github.xiaowu20245.nekopaint.core.security.SecretCipherPolicy
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -34,15 +35,21 @@ class AiAssistantStore(
 
     override val config: Flow<AiAssistantConfig> = dataStore.data.map { preferences ->
         val encryptedKey = preferences[ApiKey] ?: ""
+        val decryptedKey = if (encryptedKey.isBlank()) {
+            ""
+        } else {
+            cipher.decrypt(encryptedKey)
+        }
         AiAssistantConfig(
             providerId = preferences[ProviderId] ?: AiAssistantConfig.PROVIDER_CUSTOM,
             baseUrl = preferences[BaseUrl] ?: "",
-            apiKey = if (encryptedKey.isBlank()) "" else cipher.decrypt(encryptedKey).orEmpty(),
+            apiKey = decryptedKey.orEmpty(),
             apiKeyOrigin = preferences[ApiKeyOrigin],
             textModel = preferences[TextModel] ?: "",
             visionModel = preferences[VisionModel] ?: "",
             persona = preferences[Persona] ?: "",
             preInstruction = preferences[PreInstruction] ?: "",
+            apiKeyInvalid = SecretCipherPolicy.isInvalid(encryptedKey, decryptedKey),
         )
     }
 

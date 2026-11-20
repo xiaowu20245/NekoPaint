@@ -410,34 +410,53 @@ internal class WorkflowTemplateStore(
         }
     }
 
+    /**
+     * 先完成全部解析/分析，再统一写回。写入前紧邻复核 [guard]；身份变化时
+     * 返回 null 且不写任何模板，避免切服务器后把旧 catalog 兼容性落盘。
+     */
     suspend fun refreshAllCompatibility(
         catalog: NodeCatalog,
-    ): List<WorkflowTemplate> = withContext(Dispatchers.IO) {
+        guard: (suspend () -> Boolean)? = null,
+    ): List<WorkflowTemplate>? = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureRoot()
-            rootDir.listFiles()
+            val entries = rootDir.listFiles()
                 .orEmpty()
                 .filter { it.isDirectory }
-                .mapNotNull { dir ->
-                    val template = readProfile(dir) ?: return@mapNotNull null
-                    if (template.repairRequired) return@mapNotNull template
-                    val raw = readApiJsonUnlocked(template.id) ?: return@mapNotNull template
-                    val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
-                        ?: return@mapNotNull template
-                    val detection = ParameterDetector.detect(parsed.graph, catalog)
-                    val compatibility = WorkflowCompatibilityAnalyzer.analyze(
-                        graph = parsed.graph,
-                        catalog = catalog,
-                        missingNodeTypes = detection.missingNodeTypes,
-                    )
-                    val updated = template.copy(
-                        missingNodeTypes = detection.missingNodeTypes,
-                        catalogChecked = detection.catalogChecked,
-                        compatibility = compatibility,
-                    )
-                    if (updated != template) writeProfile(dir, updated)
-                    updated
+                .mapNotNull { dir -> readProfile(dir)?.let { dir to it } }
+            val updates = mutableListOf<Pair<File, WorkflowTemplate>>()
+            val preserved = mutableListOf<WorkflowTemplate>()
+            entries.forEach { (dir, template) ->
+                if (template.repairRequired) {
+                    preserved += template
+                    return@forEach
                 }
+                val raw = readApiJsonUnlocked(template.id)
+                val parsed = raw?.let { WorkflowParser.parse(it) as? WorkflowParseResult.Success }
+                if (raw == null || parsed == null) {
+                    preserved += template
+                    return@forEach
+                }
+                val detection = ParameterDetector.detect(parsed.graph, catalog)
+                val compatibility = WorkflowCompatibilityAnalyzer.analyze(
+                    graph = parsed.graph,
+                    catalog = catalog,
+                    missingNodeTypes = detection.missingNodeTypes,
+                )
+                updates += dir to template.copy(
+                    missingNodeTypes = detection.missingNodeTypes,
+                    catalogChecked = detection.catalogChecked,
+                    compatibility = compatibility,
+                )
+            }
+            if (guard != null && !guard()) return@withLock null
+            updates.forEach { (dir, updated) ->
+                // 每个模板写回前立即复核身份，切换后不再继续写旧 catalog。
+                if (guard != null && !guard()) return@withLock null
+                val current = readProfile(dir) ?: return@forEach
+                if (current != updated) writeProfile(dir, updated)
+            }
+            (updates.map { (_, updated) -> updated } + preserved)
                 .sortedByDescending { it.importedAt }
         }
     }

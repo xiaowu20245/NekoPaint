@@ -14,6 +14,8 @@ data class AiAssistantConfig(
     val visionModel: String = "",
     val persona: String = "",
     val preInstruction: String = "",
+    /** 密文存在但无法解密时为 true；UI 应提示重新输入 Key，绝不回显密文。 */
+    val apiKeyInvalid: Boolean = false,
 ) {
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && textModel.isNotBlank()

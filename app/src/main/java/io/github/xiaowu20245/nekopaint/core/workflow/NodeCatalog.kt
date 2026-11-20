@@ -18,7 +18,7 @@ data class InputSchema(
 )
 
 class NodeCatalog(
-    private val nodes: Map<String, NodeInfoDto>,
+    internal val nodes: Map<String, NodeInfoDto>,
 ) {
 
     fun contains(classType: String): Boolean = classType in nodes

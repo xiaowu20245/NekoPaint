@@ -116,7 +116,13 @@ class AiAssistantSettingsViewModel(
                     draft = AiAssistantSettingsPolicy.serviceDraft(loaded),
                     apiKeyOrigin = loaded.apiKeyOrigin,
                 )
-                withDerived(loaded)
+                withDerived(
+                    if (config.apiKeyInvalid) {
+                        loaded.copy(error = NekoMessage(NekoMessageKey.KEY_INVALID))
+                    } else {
+                        loaded
+                    },
+                )
             }
         }
     }

@@ -1149,3 +1149,37 @@ git diff --check
 - **复审修复手工验收**：API37 先以 `https://old.example.com/v1` + `sk-old` 保存，再改为 `https://new.example.com/v1` + `sk-new` 后放弃；页面恢复 old URL/sk-old，未出现 OriginChanged 警告。保存中返回由 `saving` 门禁拦截（保存窗口过短，未构造慢存储竞态）。
 - **复审**：第 105 节 R13-01/R13-02 均已修复；第 106 节复审 **APPROVED**。
 - **提交**：3D-2 已提交为 `feat: 统一设置保存语义与参数筛选`（`f9f97e9`）。
+
+## 51. 第三轮 3E：网络、性能与自动保存（CR-037/038/039/040/041）
+
+- **Retrofit 与 object_info 缓存（CR-037）**
+  - `ComfyApiFactory` 增加 core/manager 分离的 LRU Retrofit 缓存（上限 8），endpoint 变化自然生成新 key；Server 配置保存/替换/删除时清空缓存。
+  - 新增 `NodeCatalogCache`：按 serverId + endpointKey 隔离，写入 `endpointKey/fetchedAt/version`，TTL 5 分钟；内存/文件读取失败返回 null，不删除 last-good 之外的服务器缓存。
+  - `WorkflowRepository.loadCatalog(force)` 接入缓存；`reanalyzeAndSave` 与 `refreshAllCompatibility` 强制刷新；请求期间服务器或 endpoint 变化时不写旧 catalog。
+  - 新增 `NodeCatalogCacheTest` 6、`NodeCatalogRepositoryCacheTest` 6（MockWebServer 请求计数，覆盖缓存命中、强制刷新、请求中切换、缓存命中切换、模板写入 guard 与不可分析模板保留）；`ComfyApiFactoryTest` 新增 2（复用/LRU 上限、core-manager 隔离）。
+- **任务、词库、离线性能（CR-038）**
+  - `TaskStore` 每 server 维护内存索引，`list` 不再逐个解析 JSON；终态记录按 `finishedAt ?: submittedAt` 最旧裁剪到 500，submitting/unknown/queued/running 始终保留；写入/删除后索引与文件同步，首次 list 会对旧文件补裁剪。
+  - 新增 `PromptLexiconIndex`：按标签/中文/别名首字符分桶，空输入不检索，候选硬上限 50；`PromptTagCatalog` 改用该索引。
+  - 新增 `QueueOfflineBackoffPolicy`：离线 2/5/10/30s，Online 恢复 5s 并重置；Queue 轮询改用该策略。
+  - 新增 `TaskStoreLimitTest` 5、`PromptLexiconIndexTest` 2、`OfflineBackoffTest` 2。
+- **AI 网络与 Key 失效（CR-039）**
+  - AI 独立 `connectTimeout = 20s`（ComfyUI 保持 5s），`NetworkConfig.aiClient` 可单测；读取超时仍 60s。
+  - 加密 Key 解密失败时 `AiAssistantConfig.apiKeyInvalid = true`，AI 设置页加载即显示 `KEY_INVALID` 提示“重新输入并保存”，不显示密文或异常细节。
+  - 新增 `AiTimeoutTest` 1、`SecretCipherTest` 1。
+- **日志脱敏（CR-040）**
+  - Debug 网络日志改为 `RedactingHttpLogger`：只记录 method/path/status/耗时，host/port、query、header、body 全部不落日志；Release 不添加。
+  - 新增 `HttpLogRedactorTest` 2（TEST-NET 地址、失败请求）。
+- **自动保存批量与进度（CR-041）**
+  - `HistoryAutoSaver` 每轮最多 3 张，`StateFlow<AutoSaveState>`（Idle/Running/Saved/Failed/Cancelled + 进度）；支持 `cancel()`（保留已成功去重 key）和仅保存新任务；失败不写 key，下一轮重试；失败汇总在存储页 Snackbar 提示。
+  - 存储页增加运行中进度行与取消按钮；`SettingsViewModel` 暴露并消费自动保存状态。
+  - 新增 `HistoryAutoSaverTest` 4（批量上限/去重、失败汇总与重试、取消）。
+- **验证**
+  - JVM：**155 suites / 869 tests / 0 failures / 0 errors / 0 skipped**（较 3D-2 增加 9 suites / 31 tests）。
+  - lint：0 errors / 10 warnings / 3 hints；`assembleDebug` 成功；`git diff --check` 通过。
+  - API28 `connectedDebugAndroidTest`：13/13。
+  - API28 手工：设置 → 图片与存储正常打开，自动保存开关、缓存/聊天图片/历史归档区域无回归。
+- **复审修复**：第 107 节 R3E-01（词库内部子串漏召回）已修复，索引改为按所有字符分桶并补 `hair`/`发`/`naga`/alias 用例；R3E-02（切服务器旧 catalog 回写）已修复，`loadCatalog` 失效时返回 null，`refreshAllCompatibility` 前后校验 server/endpoint 并给模板写入增加 guard；R3E-03（TaskStore.get 索引未短路）已修复，命中索引只做路径存在性校验，不再解析 JSON。
+- **复审非阻塞改进**：`NodeCatalogCache` 增加内存层（命中不读盘）；`ServerRepository` 同步清理 manager Retrofit 缓存；`HistoryAutoSaver` 增加取消代次，排队轮次不会在取消后继续。
+- **复审**：第 107 节 R3E-01～R3E-03 已修复；第 108 节 CONDITIONAL（R3E-02 模板写入时序/缓存命中复核）已修复：模板改为“全部分析完成后统一 guard 再写回”，guard 失败返回 null 且零写入；缓存命中返回前复核 server/endpoint。
+- **第 109 节复审修复**：批量刷新保留 `repairRequired`/缺少或不可解析 `api.json` 的模板（仍出现在返回列表且不写回）；写入循环内每个模板写回前再次 guard，切换后立即停止。新增不可分析模板保留与写入中途失败用例。
+- **复审**：第 107～109 节问题均已修复；第 110 节复审 **APPROVED**。

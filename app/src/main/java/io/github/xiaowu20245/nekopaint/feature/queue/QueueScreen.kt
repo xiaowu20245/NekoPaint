@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -153,15 +154,19 @@ fun QueueScreen(
         }
     }
 
-    LaunchedEffect(lifecycleOwner, state.connection) {
+    val currentConnection by rememberUpdatedState(state.connection)
+    LaunchedEffect(lifecycleOwner, state.configured) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (state.connection == ComfyConnectionState.Unconfigured) {
+            if (!state.configured) {
                 return@repeatOnLifecycle
             }
             delay(250)
+            var offlineAttempt = 0
             while (isActive) {
                 viewModel.refresh()
-                delay(if (state.connection == ComfyConnectionState.Online) 5_000L else 2_000L)
+                val connection = currentConnection
+                delay(QueueOfflineBackoffPolicy.delayMs(connection, offlineAttempt))
+                offlineAttempt = QueueOfflineBackoffPolicy.nextAttempt(connection, offlineAttempt)
             }
         }
     }

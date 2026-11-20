@@ -15,22 +15,32 @@ class TaskStore private constructor(
     private val rootDir: File,
     private val legacyDir: File,
     private val json: Json,
+    private val maxTerminalRecords: Int,
 ) {
 
     constructor(context: Context, json: Json) : this(
         rootDir = File(context.applicationContext.filesDir, "servers"),
         legacyDir = File(context.applicationContext.filesDir, "tasks"),
         json = json,
+        maxTerminalRecords = DEFAULT_MAX_TERMINAL_RECORDS,
     )
 
-    internal constructor(filesDir: File, json: Json) : this(
+    internal constructor(
+        filesDir: File,
+        json: Json,
+        maxTerminalRecords: Int = DEFAULT_MAX_TERMINAL_RECORDS,
+    ) : this(
         rootDir = File(filesDir, "servers"),
         legacyDir = File(filesDir, "tasks"),
         json = json,
+        maxTerminalRecords = maxTerminalRecords,
     )
 
     private val mutex = Mutex()
     private val migrationLock = Any()
+
+    // 每 server 的内存索引：TaskManager 刷新时不再逐个解析 JSON。
+    private val indexes = mutableMapOf<String, LinkedHashMap<String, TaskRecord>>()
 
     suspend fun save(serverId: String, record: TaskRecord) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -39,10 +49,18 @@ class TaskStore private constructor(
     }
 
     suspend fun get(serverId: String, promptId: String): TaskRecord? = withContext(Dispatchers.IO) {
+        val indexed = mutex.withLock { indexFor(serverId)[promptId] }
+        if (indexed != null && taskFile(serverId, promptId).exists()) {
+            // 只做路径存在性校验，不解析 JSON；非法文件名不能被索引绕过。
+            return@withContext indexed
+        }
+
         val file = taskFile(serverId, promptId)
         if (!file.exists()) return@withContext null
         readRecord(file, serverId)?.takeIf { record ->
             record.serverId.isBlank() || record.serverId == serverId
+        }?.also { record ->
+            mutex.withLock { indexFor(serverId)[promptId] = record }
         }
     }
 
@@ -60,6 +78,8 @@ class TaskStore private constructor(
                     if (file.exists() && !file.delete()) {
                         error("任务记录删除失败")
                     }
+                    indexFor(serverId).remove(promptId)
+                    Unit
                 }
             }
         }
@@ -72,14 +92,47 @@ class TaskStore private constructor(
             target = taskFile(serverId, record.promptId),
             text = json.encodeToString(TaskRecord.serializer(), scoped),
         )
+        indexFor(serverId)[record.promptId] = scoped
+        trimTerminal(serverId)
+    }
+
+    private fun indexFor(serverId: String): LinkedHashMap<String, TaskRecord> =
+        indexes.getOrPut(serverId) {
+            LinkedHashMap(
+                readTasks(
+                    dir = dirFor(serverId),
+                    fallbackServerId = serverId,
+                    expectedServerId = serverId,
+                ).associateBy { it.promptId },
+            )
+        }
+
+    /**
+     * 只裁剪终态记录；submitting/unknown/queued/running 始终保留，避免丢掉可恢复任务。
+     */
+    private fun trimTerminal(
+        serverId: String,
+        index: LinkedHashMap<String, TaskRecord> = indexFor(serverId),
+    ) {
+        val terminal = index.values
+            .filter { TaskStatus.isTerminal(it.status) }
+            .sortedWith(compareBy({ it.finishedAt ?: it.submittedAt }, { it.submittedAt }))
+        val excess = terminal.size - maxTerminalRecords
+        if (excess <= 0) return
+        terminal.take(excess).forEach { record ->
+            index.remove(record.promptId)
+            runCatching { taskFile(serverId, record.promptId).delete() }
+        }
     }
 
     suspend fun list(serverId: String): List<TaskRecord> = withContext(Dispatchers.IO) {
-        readTasks(
-            dir = dirFor(serverId),
-            fallbackServerId = serverId,
-            expectedServerId = serverId,
-        ).sortedByDescending { it.submittedAt }
+        mutex.withLock {
+            dirFor(serverId)
+            val index = indexFor(serverId)
+            // 旧版本可能留下超过上限的文件；首次加载时补做一次裁剪。
+            trimTerminal(serverId, index)
+            index.values.sortedByDescending { it.submittedAt }
+        }
     }
 
     /**
@@ -167,5 +220,9 @@ class TaskStore private constructor(
             "任务路径越界"
         }
         return target
+    }
+
+    private companion object {
+        const val DEFAULT_MAX_TERMINAL_RECORDS = 500
     }
 }

@@ -13,6 +13,7 @@ import io.github.xiaowu20245.nekopaint.core.network.AiPrivacySanitizer
 import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ComfyWebSocketManager
 import io.github.xiaowu20245.nekopaint.core.network.NetworkConfig
+import io.github.xiaowu20245.nekopaint.core.network.RedactingHttpLogger
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageEncoder
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
 import io.github.xiaowu20245.nekopaint.data.repository.HistoryStore
@@ -45,7 +46,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
 
 private const val MANAGER_READ_TIMEOUT_SECONDS = 60L
@@ -98,12 +98,8 @@ class AppContainer(context: Context) {
         .pingInterval(NetworkConfig.WebSocketPingSeconds, TimeUnit.SECONDS)
         .apply {
             if (BuildConfig.DEBUG) {
-                addInterceptor(
-                    HttpLoggingInterceptor().apply {
-                        // BASIC 不记录请求体，避免把提示词写入日志。
-                        level = HttpLoggingInterceptor.Level.BASIC
-                    },
-                )
+                // 只记录 method/path/status/耗时，host、query、body 全部不落日志。
+                addInterceptor(RedactingHttpLogger())
             }
         }
         .build()
@@ -113,12 +109,8 @@ class AppContainer(context: Context) {
         .readTimeout(NetworkConfig.ImageReadTimeoutSeconds, TimeUnit.SECONDS)
         .build()
 
-    // 大模型响应可能超过普通请求的 15 秒读取超时，单独放宽到 60 秒。
-    val aiOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
-        .readTimeout(NetworkConfig.AiReadTimeoutSeconds, TimeUnit.SECONDS)
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build()
+    // 大模型连接建立和响应都可能更慢：连接 20s、读取 60s；ComfyUI 保持 5s 连接超时。
+    val aiOkHttpClient: OkHttpClient = NetworkConfig.aiClient(okHttpClient)
 
     // Manager 首次拉取节点映射时可能需要访问远程源，单独放宽读取超时。
     val managerOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
@@ -137,7 +129,11 @@ class AppContainer(context: Context) {
     val comfyApiFactory = ComfyApiFactory(okHttpClient, json)
     val managerApiFactory = ComfyApiFactory(managerOkHttpClient, json)
 
-    val serverRepository = ServerRepository(serverConfigStore, comfyApiFactory)
+    val serverRepository = ServerRepository(
+        store = serverConfigStore,
+        apiFactory = comfyApiFactory,
+        managerApiFactory = managerApiFactory,
+    )
     val serverAvatarStore = ServerAvatarStore(context.applicationContext)
 
     val imageSaver = ImageSaver(context.applicationContext, imageOkHttpClient)

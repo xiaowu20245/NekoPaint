@@ -14,7 +14,9 @@ import io.github.xiaowu20245.nekopaint.core.datastore.SettingsStore
 import io.github.xiaowu20245.nekopaint.core.datastore.ThemeMode
 import io.github.xiaowu20245.nekopaint.core.model.ai.AiAssistantConfig
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagCatalog
+import io.github.xiaowu20245.nekopaint.data.repository.AutoSaveState
 import io.github.xiaowu20245.nekopaint.data.repository.ChatImageStore
+import io.github.xiaowu20245.nekopaint.data.repository.HistoryAutoSaver
 import io.github.xiaowu20245.nekopaint.data.repository.MediaCacheManager
 import io.github.xiaowu20245.nekopaint.data.repository.PromptLexiconRepository
 import io.github.xiaowu20245.nekopaint.data.repository.TaskManager
@@ -52,6 +54,7 @@ data class SettingsUiState(
     val chatImageBytes: Long = 0L,
     val chatImagesClearing: Boolean = false,
     val chatImagesCleared: Boolean = false,
+    val autoSaveState: AutoSaveState = AutoSaveState.Idle,
 )
 
 class SettingsViewModel(
@@ -63,6 +66,7 @@ class SettingsViewModel(
     private val promptLexiconRepository: PromptLexiconRepository,
     private val aiAssistantStore: AiAssistantStore,
     private val chatImageStore: ChatImageStore,
+    private val historyAutoSaver: HistoryAutoSaver,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -79,6 +83,11 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsStore.autoSaveHistoryImages.collect { autoSave ->
                 _uiState.update { it.copy(autoSaveHistoryImages = autoSave) }
+            }
+        }
+        viewModelScope.launch {
+            historyAutoSaver.state.collect { autoSaveState ->
+                _uiState.update { it.copy(autoSaveState = autoSaveState) }
             }
         }
         viewModelScope.launch {
@@ -307,6 +316,10 @@ class SettingsViewModel(
         _uiState.update { it.copy(error = null) }
     }
 
+    fun cancelAutoSave() {
+        historyAutoSaver.cancel()
+    }
+
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -319,6 +332,7 @@ class SettingsViewModel(
                     promptLexiconRepository = container.promptLexiconRepository,
                     aiAssistantStore = container.aiAssistantStore,
                     chatImageStore = container.chatImageStore,
+                    historyAutoSaver = container.historyAutoSaver,
                 )
             }
         }

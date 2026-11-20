@@ -79,6 +79,7 @@ object NekoMessageMapper {
         NekoMessageKey.SETTINGS_AI_TEST_FAILED -> R.string.error_ai_test_failed
         NekoMessageKey.SETTINGS_AI_SAVE_FAILED -> R.string.error_ai_save_failed
         NekoMessageKey.SETTINGS_AI_BLOCKED -> R.string.error_ai_blocked
+        NekoMessageKey.KEY_INVALID -> R.string.error_key_invalid
         NekoMessageKey.SETTINGS_NEKO_SAVE_FAILED -> R.string.error_neko_settings_save
         NekoMessageKey.NODE_INSTALL_SERVER_REQUIRED -> R.string.error_node_install_server_required
         NekoMessageKey.NODE_INSTALL_TEMPLATE_NOT_FOUND -> R.string.error_node_install_template_not_found

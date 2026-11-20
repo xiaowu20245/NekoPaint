@@ -22,7 +22,9 @@ import io.github.xiaowu20245.nekopaint.core.network.ComfyApiFactory
 import io.github.xiaowu20245.nekopaint.core.network.ContentUriRequestBody
 import io.github.xiaowu20245.nekopaint.core.network.PromptErrorResponseDto
 import io.github.xiaowu20245.nekopaint.core.network.PromptRequestDto
+import io.github.xiaowu20245.nekopaint.core.network.ServerEndpointValidator
 import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalog
+import io.github.xiaowu20245.nekopaint.core.workflow.NodeCatalogCache
 import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
 import io.github.xiaowu20245.nekopaint.core.workflow.PromptTagExpander
 import io.github.xiaowu20245.nekopaint.core.workflow.ServerBindingPolicy
@@ -93,6 +95,7 @@ internal data class WorkflowRepositoryDependencies(
     val clientIdProvider: suspend () -> String,
     val apiFactory: ComfyApiFactory,
     val taskRecordRepository: TaskRecordRepository,
+    val nodeCatalogCache: NodeCatalogCache? = null,
     val retryDelay: suspend (Long) -> Unit = { delay(it) },
 )
 
@@ -123,6 +126,10 @@ class WorkflowRepository private constructor(
             clientIdProvider = { clientIdStore.getOrCreate() },
             apiFactory = apiFactory,
             taskRecordRepository = taskRecordRepository,
+            nodeCatalogCache = NodeCatalogCache(
+                rootDir = File(context.applicationContext.filesDir, "node_catalog"),
+                json = json,
+            ),
         ),
     )
 
@@ -387,7 +394,8 @@ class WorkflowRepository private constructor(
         if (binding != null && !bindingMatches(binding)) return null
         val template = templateStore.getTemplate(templateId) ?: return null
         if (template.repairRequired) return template
-        val catalog = loadCatalog() ?: return null
+        // 节点安装/重启后的“重新检查”必须绕过 5 分钟缓存。
+        val catalog = loadCatalog(force = true) ?: return null
         if (binding != null && !bindingMatches(binding)) return null
         val guard: (suspend () -> Boolean)? = binding?.let { expected ->
             { bindingMatches(expected) }
@@ -410,7 +418,8 @@ class WorkflowRepository private constructor(
     suspend fun refreshAllCompatibility(): List<WorkflowTemplate>? =
         withContext(Dispatchers.IO) {
             refreshMutex.withLock {
-                val serverId = runCatching { deps.activeServerIdProvider() }.getOrNull()
+                val server = currentServer()
+                val serverId = server?.serverId
                 val now = System.currentTimeMillis()
                 if (serverId != null &&
                     serverId == lastCompatibilityServerId &&
@@ -418,8 +427,12 @@ class WorkflowRepository private constructor(
                 ) {
                     return@withLock templateStore.listTemplates()
                 }
-                val catalog = loadCatalog() ?: return@withLock null
-                val refreshed = templateStore.refreshAllCompatibility(catalog)
+                val catalog = loadCatalog(force = true) ?: return@withLock null
+                if (server == null || !isCurrent(server)) return@withLock null
+                val refreshed = templateStore.refreshAllCompatibility(catalog) {
+                    isCurrent(server)
+                } ?: return@withLock null
+                if (!isCurrent(server)) return@withLock null
                 lastCompatibilityServerId = serverId
                 lastCompatibilityRefreshAt = now
                 refreshed
@@ -862,11 +875,46 @@ class WorkflowRepository private constructor(
         )
     }
 
-    private suspend fun loadCatalog(): NodeCatalog? {
-        val config = deps.configProvider() ?: return null
-        return runCatching {
-            NodeCatalog(apiFactory.create(config).objectInfo())
-        }.getOrNull()
+    private data class CurrentServer(
+        val config: ServerConfig,
+        val serverId: String,
+        val endpointKey: String,
+    )
+
+    private suspend fun currentServer(): CurrentServer? {
+        val config = runCatching { deps.configProvider() }.getOrNull() ?: return null
+        val endpoint = runCatching { ServerEndpointValidator.require(config) }.getOrNull()
+            ?: return null
+        val serverId = runCatching { deps.activeServerIdProvider() }.getOrNull()
+            ?: endpoint.endpointKey
+        return CurrentServer(config, serverId, endpoint.endpointKey)
+    }
+
+    private suspend fun isCurrent(server: CurrentServer): Boolean {
+        val current = currentServer() ?: return false
+        return current.serverId == server.serverId &&
+            current.endpointKey == server.endpointKey
+    }
+
+    private suspend fun loadCatalog(force: Boolean = false): NodeCatalog? {
+        val server = currentServer() ?: return null
+        val cache = deps.nodeCatalogCache
+        if (!force) {
+            val cached = cache?.load(server.serverId, server.endpointKey)
+            if (cached != null) {
+                // 读缓存期间也可能切换服务器；返回前复核身份。
+                return if (isCurrent(server)) cached else null
+            }
+        }
+        val catalog = runCatching {
+            NodeCatalog(apiFactory.create(server.config).objectInfo())
+        }.getOrNull() ?: return null
+
+        // 请求期间若切换了服务器，旧 catalog 既不能写缓存，也不能继续用于
+        // 回写模板兼容性；调用方必须把 null 当作“本次结果已失效”。
+        if (!isCurrent(server)) return null
+        cache?.save(server.serverId, server.endpointKey, catalog)
+        return catalog
     }
 
     private fun queryFileMeta(uri: Uri): Pair<String?, Long?> {
@@ -933,17 +981,21 @@ class WorkflowRepository private constructor(
             clientId: String,
             apiFactory: ComfyApiFactory,
             taskRecordRepository: TaskRecordRepository,
+            nodeCatalogCache: NodeCatalogCache? = null,
             retryDelay: suspend (Long) -> Unit = {},
+            configProvider: (suspend () -> ServerConfig?)? = null,
+            activeServerIdProvider: (suspend () -> String?)? = null,
         ): WorkflowRepository = WorkflowRepository(
             WorkflowRepositoryDependencies(
                 appContext = null,
                 json = json,
                 templateStore = WorkflowTemplateStore(rootDir, json),
-                configProvider = { config },
-                activeServerIdProvider = { serverId },
+                configProvider = configProvider ?: { config },
+                activeServerIdProvider = activeServerIdProvider ?: { serverId },
                 clientIdProvider = { clientId },
                 apiFactory = apiFactory,
                 taskRecordRepository = taskRecordRepository,
+                nodeCatalogCache = nodeCatalogCache,
                 retryDelay = retryDelay,
             ),
         )

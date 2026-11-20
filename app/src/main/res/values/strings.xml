@@ -391,6 +391,10 @@
     <string name="settings_show_temp_desc">在历史中显示 Detailer、蒙版等 temp 图片。关闭时只显示最终 output 图片。</string>
     <string name="settings_auto_save_title">自动保存生成图片</string>
     <string name="settings_auto_save_desc">开启后自动把新的 output 图片保存到相册 Pictures/NekoPaint；不保存临时预览。</string>
+    <string name="settings_auto_save_progress_title">自动保存进度</string>
+    <string name="settings_auto_save_progress">正在保存 %1$d/%2$d 张（成功 %3$d，失败 %4$d）</string>
+    <string name="settings_auto_save_failed">自动保存完成：成功 %1$d 张，失败 %2$d 张；失败项会在下次刷新重试。</string>
+    <string name="settings_auto_save_cancel">取消</string>
     <string name="settings_cache_title">图片缓存</string>
     <string name="settings_loading">读取中…</string>
     <string name="settings_cache_desc">缩略图、原图缓存和分享临时文件；不会删除相册图片。</string>
@@ -683,6 +687,7 @@
     <string name="error_ai_test_failed">连接失败：%1$s</string>
     <string name="error_ai_save_failed">保存失败：%1$s</string>
     <string name="error_ai_blocked">无法使用该地址：%1$s</string>
+    <string name="error_key_invalid">API Key 无法解密，请重新输入并保存。</string>
     <string name="error_neko_settings_save">保存设置失败：%1$s</string>
     <string name="error_node_install_server_required">请先配置服务器</string>
     <string name="error_node_install_template_not_found">找不到工作流模板</string>
