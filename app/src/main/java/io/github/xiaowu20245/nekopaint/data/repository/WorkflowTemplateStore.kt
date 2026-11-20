@@ -3,6 +3,7 @@ package io.github.xiaowu20245.nekopaint.data.repository
 import io.github.xiaowu20245.nekopaint.core.common.AtomicFileWriter
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
@@ -11,6 +12,9 @@ import io.github.xiaowu20245.nekopaint.core.workflow.ParameterDetector
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
+import io.github.xiaowu20245.nekopaint.core.workflow.ManualBindingError
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowManualBindingPolicy
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowNodeSummaryPolicy
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +33,13 @@ import java.util.UUID
  * 不依赖 Android Context，测试可注入临时目录。所有读写入口在同一个 [Mutex] 内串行化，
  * 避免同名 profile/api.json 的更新、修复、复制和批量刷新互相覆盖。
  */
+internal sealed interface TemplateImportStoreResult {
+    data class Saved(val template: WorkflowTemplate, val replaced: Boolean) :
+        TemplateImportStoreResult
+
+    data class Duplicate(val existing: WorkflowTemplate) : TemplateImportStoreResult
+}
+
 internal class WorkflowTemplateStore(
     private val rootDir: File,
     private val json: Json,
@@ -55,6 +66,146 @@ internal class WorkflowTemplateStore(
         withContext(Dispatchers.IO) {
             mutex.withLock { saveTemplateUnlocked(template, rawJson) }
         }
+
+    /**
+     * 在 store mutex 内再次检查 sourceHash / 同名模板，避免并发导入产生重复。
+     * OVERWRITE 保留原 ID/名称；COPY 生成新 ID 和名称后缀。
+     */
+    suspend fun importTemplate(
+        template: WorkflowTemplate,
+        rawJson: String,
+        policy: DuplicateImportPolicy?,
+    ): TemplateImportStoreResult = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val all = listTemplatesUnlocked()
+            val existing = all.firstOrNull { it.sourceHash == template.sourceHash }
+                ?: all.firstOrNull { it.name == template.name }
+            if (existing == null) {
+                saveTemplateUnlocked(template, rawJson)
+                return@withLock TemplateImportStoreResult.Saved(template, replaced = false)
+            }
+            when (policy) {
+                null -> TemplateImportStoreResult.Duplicate(existing)
+                DuplicateImportPolicy.OVERWRITE -> {
+                    val merged = template.copy(
+                        id = existing.id,
+                        name = existing.name,
+                        promptTagGroups = existing.promptTagGroups,
+                        primaryPromptCandidateId = existing.primaryPromptCandidateId?.takeIf { id ->
+                            template.candidates.any {
+                                it.id == id &&
+                                    WorkflowCandidateSafety.isPrimaryPromptCandidate(it)
+                            }
+                        },
+                        presets = WorkflowCandidateSafety.sanitizePresets(
+                            existing.presets,
+                            template.candidates,
+                        ),
+                        activePresetId = existing.activePresetId?.takeIf { id ->
+                            WorkflowCandidateSafety.sanitizePresets(
+                                existing.presets,
+                                template.candidates,
+                            ).any { it.id == id }
+                        },
+                    )
+                    saveTemplateUnlocked(merged, rawJson)
+                    TemplateImportStoreResult.Saved(merged, replaced = true)
+                }
+
+                DuplicateImportPolicy.COPY -> {
+                    val existingNames = all.mapTo(HashSet()) { it.name }
+                    val copyName = buildCopyTemplateName(template.name, existingNames)
+                    val copied = template.copy(
+                        id = UUID.randomUUID().toString(),
+                        name = copyName,
+                        promptTagGroups = existing.promptTagGroups,
+                        primaryPromptCandidateId = existing.primaryPromptCandidateId?.takeIf { id ->
+                            template.candidates.any {
+                                it.id == id &&
+                                    WorkflowCandidateSafety.isPrimaryPromptCandidate(it)
+                            }
+                        },
+                        presets = WorkflowCandidateSafety.sanitizePresets(
+                            existing.presets,
+                            template.candidates,
+                        ),
+                    ).let { candidateTemplate ->
+                        candidateTemplate.copy(
+                            activePresetId = existing.activePresetId?.takeIf { id ->
+                                candidateTemplate.presets.any { it.id == id }
+                            },
+                        )
+                    }
+                    saveTemplateUnlocked(copied, rawJson)
+                    TemplateImportStoreResult.Saved(copied, replaced = false)
+                }
+            }
+        }
+    }
+
+    /**
+     * 手动绑定参数：必须以当前模板的 api.json 校验节点/输入存在与类型，
+     * catalog 只补充 schema。校验失败不写 profile，也不修改 api.json。
+     */
+    suspend fun addManualCandidate(
+        templateId: String,
+        nodeId: String,
+        inputName: String,
+        label: String,
+        requestedType: ParameterType,
+        group: ParameterGroup,
+        value: String,
+        catalog: NodeCatalog?,
+    ): Result<WorkflowTemplate> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            runCatching {
+                if (label.isBlank()) error(ManualBindingError.LABEL_BLANK.name)
+                val dir = File(rootDir, templateId)
+                val stored = readStoredProfile(dir) ?: error("模板不存在或 profile 损坏")
+                val raw = readApiJsonUnlocked(templateId) ?: error("api.json 不存在")
+                if (raw.sha256() != stored.sourceHash) {
+                    error("api.json 已变化，请先修复模板")
+                }
+                val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
+                    ?: error("api.json 无法解析")
+                val safeNodeId = nodeId.trim()
+                val safeInputName = inputName.trim()
+                val node = parsed.graph.nodes[safeNodeId]
+                val input = node?.inputs?.get(safeInputName)
+                val schema = node?.let { catalog?.inputSchema(it.classType, safeInputName) }
+                val inferredType = WorkflowManualBindingPolicy.inferType(input, schema)
+                if (requestedType != ParameterType.UNKNOWN &&
+                    inferredType != ParameterType.UNKNOWN &&
+                    requestedType != inferredType
+                ) {
+                    error(ManualBindingError.VALUE_INVALID.name)
+                }
+                val effectiveType = requestedType.takeIf {
+                    it != ParameterType.UNKNOWN
+                } ?: inferredType
+                val candidate = WorkflowManualBindingPolicy.buildCandidate(
+                    nodeId = safeNodeId,
+                    inputName = safeInputName,
+                    label = label,
+                    type = effectiveType,
+                    group = group,
+                    value = value,
+                    classType = node?.classType.orEmpty(),
+                )
+                val error = WorkflowManualBindingPolicy.validate(
+                    nodeExists = node != null,
+                    inputExists = node?.inputs?.containsKey(safeInputName) == true,
+                    existingIds = stored.candidates.mapTo(HashSet()) { it.id },
+                    candidate = candidate,
+                    schema = schema,
+                )
+                if (error != null) error(error.name)
+                val updated = stored.copy(candidates = stored.candidates + candidate)
+                writeProfile(dir, updated)
+                readProfile(dir) ?: updated
+            }
+        }
+    }
 
     suspend fun updateTemplate(template: WorkflowTemplate) = withContext(Dispatchers.IO) {
         mutex.withLock {
@@ -294,6 +445,10 @@ internal class WorkflowTemplateStore(
                     nodeCount = parsed.graph.nodes.size,
                     reachableNodeCount = parsed.graph.reachableNodeIds.size,
                     outputNodeIds = parsed.graph.outputNodeIds.sorted(),
+                    nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                        parsed.graph,
+                        detection.missingNodeTypes,
+                    ),
                     missingNodeTypes = detection.missingNodeTypes,
                     catalogChecked = detection.catalogChecked,
                     candidates = mergedCandidates,
@@ -398,6 +553,10 @@ internal class WorkflowTemplateStore(
                 missingNodeTypes = detection.missingNodeTypes,
             )
             val updated = template.copy(
+                nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                    parsed.graph,
+                    detection.missingNodeTypes,
+                ),
                 missingNodeTypes = detection.missingNodeTypes,
                 catalogChecked = detection.catalogChecked,
                 compatibility = compatibility,
@@ -444,6 +603,10 @@ internal class WorkflowTemplateStore(
                     missingNodeTypes = detection.missingNodeTypes,
                 )
                 updates += dir to template.copy(
+                    nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                        parsed.graph,
+                        detection.missingNodeTypes,
+                    ),
                     missingNodeTypes = detection.missingNodeTypes,
                     catalogChecked = detection.catalogChecked,
                     compatibility = compatibility,
@@ -521,6 +684,10 @@ internal class WorkflowTemplateStore(
                     nodeCount = parsed.graph.nodes.size,
                     reachableNodeCount = parsed.graph.reachableNodeIds.size,
                     outputNodeIds = parsed.graph.outputNodeIds.sorted(),
+                    nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                        parsed.graph,
+                        detection.missingNodeTypes,
+                    ),
                     missingNodeTypes = detection.missingNodeTypes,
                     catalogChecked = detection.catalogChecked,
                     candidates = candidates,
@@ -543,6 +710,21 @@ internal class WorkflowTemplateStore(
         if (template.repairRequired) {
             return template.copy(candidates = safeCandidates, repairRequired = true)
         }
+        val withSummaries = if (template.nodeSummaries.isEmpty()) {
+            val parsed = WorkflowParser.parse(raw) as? WorkflowParseResult.Success
+            if (parsed != null) {
+                template.copy(
+                    nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                        parsed.graph,
+                        template.missingNodeTypes,
+                    ),
+                )
+            } else {
+                template
+            }
+        } else {
+            template
+        }
 
         // 分析器升级后，读取旧模板时按当前版本重算分类与能力标签，避免必须重新导入。
         val compatibility = template.compatibility
@@ -560,13 +742,13 @@ internal class WorkflowTemplateStore(
                     catalogChecked = compatibility.catalogChecked,
                 )
                 // 只返回刷新后的视图，不隐藏写回；显式保存/修复路径负责持久化。
-                return template.copy(
+                return withSummaries.copy(
                     candidates = safeCandidates,
                     compatibility = refreshed,
                 )
             }
         }
-        return template.copy(candidates = safeCandidates)
+        return withSummaries.copy(candidates = safeCandidates)
     }
 
     private fun readStoredProfile(dir: File): WorkflowTemplate? {

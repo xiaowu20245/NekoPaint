@@ -1184,3 +1184,24 @@ git diff --check
 - **第 109 节复审修复**：批量刷新保留 `repairRequired`/缺少或不可解析 `api.json` 的模板（仍出现在返回列表且不写回）；写入循环内每个模板写回前再次 guard，切换后立即停止。新增不可分析模板保留与写入中途失败用例。
 - **复审**：第 107～109 节问题均已修复；第 110 节复审 **APPROVED**。
 - **提交**：3E 已提交为 `perf: 缓存节点目录并优化离线与自动保存`（`069e44e`）。
+
+## 52. 第三轮 3F-1：节点列表、手动绑定、重复导入（CR-030/048）
+
+- **节点摘要（CR-030）**
+  - `WorkflowTemplate` 新增 `nodeSummaries`（id/classType/title/reachable/missing），不保存完整 inputs；新增 `WorkflowNodeSummaryPolicy`，在导入、读取旧模板、修复、重新分析、批量兼容性刷新时生成。
+  - 详情页概览展开区新增只读节点列表，缺失节点用 error 色标记，不可达节点淡化显示。
+- **手动绑定（CR-030）**
+  - 新增 `WorkflowManualBindingPolicy`：ID 生成、类型推断（catalog schema 优先，api.json 实际值降级）、标签/重复 ID/类型/值校验。
+  - `WorkflowTemplateStore.addManualCandidate` 在同一 mutex 内读取**当前** `api.json` 校验 nodeId/inputName 存在性与类型，catalog 只补充 schema；校验通过后只原子写 profile，不修改 api.json；任何失败不写盘。
+  - `WorkflowRepository/WorkflowDetailViewModel` 接线；高级参数页新增“手动绑定参数”入口与弹窗（节点、输入名、标签、类型、分组、值）。
+- **重复导入（CR-048）**
+  - `WorkflowImportResult.Duplicate(existingId/name/incomingHash)` 与 `DuplicateImportPolicy.OVERWRITE/COPY`。
+  - `WorkflowTemplateStore.importTemplate` 在 store mutex 内二次检查 sourceHash（优先）/同名（次之）；覆盖保留原 ID/名称并替换 raw/candidates/compatibility、清理失效 preset；副本使用新 UUID + 名称后缀；取消不写盘。
+  - `WorkflowsViewModel` 保存待处理 URI，弹窗提供覆盖/另存副本/取消；所有 `WorkflowImportResult` 分支已更新。
+- **测试与验证**
+  - 新增 `ManualBindingPolicyTest` 5、`WorkflowTemplateStoreManualBindingTest` 6、`DuplicateImportTest` 4，合计 +15。
+  - JVM：**158 suites / 884 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过。
+  - API28 `connectedDebugAndroidTest`：13/13。
+  - API37/API28 手工：本机无工作流模板，重复导入/手动绑定弹窗以编译、策略与存储测试覆盖；详情页节点列表复用既有概览展开区。
+- **第 111 节复审修复**：`refreshAllCompatibility` 重建 `nodeSummaries`；手动绑定检测到 api.json hash 变化时拒绝并要求先修复；成功绑定后只合并 candidates，保留未保存参数值。新增刷新摘要用例。
+- **复审**：第 111 节 CONDITIONAL（批量刷新节点摘要）已修复；第 112 节复审 **APPROVED**。

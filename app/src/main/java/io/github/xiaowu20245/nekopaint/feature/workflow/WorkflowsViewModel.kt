@@ -17,6 +17,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.data.operation.OperationCenter
 import io.github.xiaowu20245.nekopaint.data.operation.OperationStatus
 import io.github.xiaowu20245.nekopaint.data.operation.SubmissionOperationState
+import io.github.xiaowu20245.nekopaint.data.repository.DuplicateImportPolicy
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowImportResult
 import io.github.xiaowu20245.nekopaint.data.repository.WorkflowRepository
 import io.github.xiaowu20245.nekopaint.di.AppContainer
@@ -46,6 +47,8 @@ data class WorkflowsUiState(
     @param:StringRes val errorRes: Int? = null,
     val errorDetail: NekoMessage? = null,
     val importedTemplateId: String? = null,
+    val duplicateImport: WorkflowImportResult.Duplicate? = null,
+    val pendingImportUri: Uri? = null,
 ) {
     val filteredTemplates: List<WorkflowTemplate>
         get() = if (modeFilter == null) {
@@ -268,13 +271,18 @@ class WorkflowsViewModel(
         }
     }
 
-    fun import(uri: Uri) {
+    fun import(uri: Uri, policy: DuplicateImportPolicy? = null) {
         if (_uiState.value.importing) return
         viewModelScope.launch {
             _uiState.update {
-                it.copy(importing = true, errorRes = null, errorDetail = null)
+                it.copy(
+                    importing = true,
+                    errorRes = null,
+                    errorDetail = null,
+                    duplicateImport = null,
+                )
             }
-            when (val result = repository.import(uri)) {
+            when (val result = repository.import(uri, policy)) {
                 is WorkflowImportResult.Success -> {
                     val templates = runCatching { repository.listTemplates() }
                         .getOrDefault(_uiState.value.templates)
@@ -283,6 +291,17 @@ class WorkflowsViewModel(
                             importing = false,
                             templates = templates,
                             importedTemplateId = result.template.id,
+                            pendingImportUri = null,
+                        )
+                    }
+                }
+
+                is WorkflowImportResult.Duplicate -> {
+                    _uiState.update {
+                        it.copy(
+                            importing = false,
+                            duplicateImport = result,
+                            pendingImportUri = uri,
                         )
                     }
                 }
@@ -292,6 +311,7 @@ class WorkflowsViewModel(
                         it.copy(
                             importing = false,
                             errorRes = R.string.workflow_error_ui_format,
+                            pendingImportUri = null,
                         )
                     }
                 }
@@ -301,11 +321,21 @@ class WorkflowsViewModel(
                         it.copy(
                             importing = false,
                             errorDetail = result.message,
+                            pendingImportUri = null,
                         )
                     }
                 }
             }
         }
+    }
+
+    fun resolveDuplicateImport(policy: DuplicateImportPolicy) {
+        val uri = _uiState.value.pendingImportUri ?: return
+        import(uri, policy)
+    }
+
+    fun cancelDuplicateImport() {
+        _uiState.update { it.copy(duplicateImport = null, pendingImportUri = null) }
     }
 
     fun renameTemplate(id: String, name: String) {

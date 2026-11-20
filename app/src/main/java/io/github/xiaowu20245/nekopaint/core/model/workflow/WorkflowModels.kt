@@ -164,6 +164,16 @@ data class PromptTagGroup(
     val tags: List<String> = emptyList(),
 )
 
+/** 详情页只读节点摘要；不保存节点 inputs。 */
+@Serializable
+data class WorkflowNodeSummary(
+    val id: String,
+    val classType: String,
+    val title: String,
+    val reachable: Boolean,
+    val missing: Boolean,
+)
+
 @Serializable
 data class WorkflowTemplate(
     val id: String,
@@ -174,6 +184,7 @@ data class WorkflowTemplate(
     val nodeCount: Int,
     val reachableNodeCount: Int,
     val outputNodeIds: List<String> = emptyList(),
+    val nodeSummaries: List<WorkflowNodeSummary> = emptyList(),
     val missingNodeTypes: List<String> = emptyList(),
     val catalogChecked: Boolean = false,
     val candidates: List<ParameterCandidate> = emptyList(),

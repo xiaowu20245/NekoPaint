@@ -12,6 +12,7 @@ import io.github.xiaowu20245.nekopaint.core.model.ServerConfig
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
 import io.github.xiaowu20245.nekopaint.core.model.workflow.HistoryImage
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
+import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.PromptTagGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ServerBinding
 import io.github.xiaowu20245.nekopaint.core.model.workflow.TaskRecord
@@ -31,6 +32,7 @@ import io.github.xiaowu20245.nekopaint.core.workflow.ServerBindingPolicy
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowJsonApplier
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowNodeSummaryPolicy
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParseResult
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowParser
 import kotlinx.coroutines.Dispatchers
@@ -50,8 +52,19 @@ import java.io.InputStream
 import java.security.MessageDigest
 import java.util.UUID
 
+enum class DuplicateImportPolicy {
+    OVERWRITE,
+    COPY,
+}
+
 sealed interface WorkflowImportResult {
     data class Success(val template: WorkflowTemplate) : WorkflowImportResult
+    data class Duplicate(
+        val existingId: String,
+        val existingName: String,
+        val incomingHash: String,
+    ) : WorkflowImportResult
+
     data object UiFormat : WorkflowImportResult
     data class Error(val message: NekoMessage) : WorkflowImportResult
 }
@@ -194,6 +207,26 @@ class WorkflowRepository private constructor(
     suspend fun renameTemplate(id: String, newName: String): Result<Unit> =
         templateStore.renameTemplate(id, newName)
 
+    /** 手动绑定参数；catalog 仅补充 schema，节点/输入存在性由当前 api.json 校验。 */
+    suspend fun addManualCandidate(
+        templateId: String,
+        nodeId: String,
+        inputName: String,
+        label: String,
+        type: ParameterType,
+        group: ParameterGroup,
+        value: String,
+    ): Result<WorkflowTemplate> = templateStore.addManualCandidate(
+        templateId = templateId,
+        nodeId = nodeId,
+        inputName = inputName,
+        label = label,
+        requestedType = type,
+        group = group,
+        value = value,
+        catalog = loadCatalog(),
+    )
+
     /**
      * 复制模板目录和参数配置，生成新的模板 ID。
      *
@@ -277,7 +310,10 @@ class WorkflowRepository private constructor(
     private fun buildUploadName(displayName: String?): String =
         buildUploadFileName(displayName)
 
-    suspend fun import(uri: Uri): WorkflowImportResult = withContext(Dispatchers.IO) {
+    suspend fun import(
+        uri: Uri,
+        duplicatePolicy: DuplicateImportPolicy? = null,
+    ): WorkflowImportResult = withContext(Dispatchers.IO) {
         try {
             val (displayName, size) = queryFileMeta(uri)
             if (size != null && size > MAX_FILE_BYTES) {
@@ -320,13 +356,30 @@ class WorkflowRepository private constructor(
                         nodeCount = parsed.graph.nodes.size,
                         reachableNodeCount = parsed.graph.reachableNodeIds.size,
                         outputNodeIds = parsed.graph.outputNodeIds.sorted(),
+                        nodeSummaries = WorkflowNodeSummaryPolicy.from(
+                            parsed.graph,
+                            detection.missingNodeTypes,
+                        ),
                         missingNodeTypes = detection.missingNodeTypes,
                         catalogChecked = detection.catalogChecked,
                         candidates = detection.candidates,
                         compatibility = compatibility,
                     )
-                    templateStore.saveTemplate(template, raw)
-                    WorkflowImportResult.Success(template)
+                    when (val import = templateStore.importTemplate(
+                        template = template,
+                        rawJson = raw,
+                        policy = duplicatePolicy,
+                    )) {
+                        is TemplateImportStoreResult.Duplicate -> WorkflowImportResult.Duplicate(
+                            existingId = import.existing.id,
+                            existingName = import.existing.name,
+                            incomingHash = template.sourceHash,
+                        )
+
+                        is TemplateImportStoreResult.Saved -> WorkflowImportResult.Success(
+                            import.template,
+                        )
+                    }
                 }
             }
         } catch (throwable: Throwable) {

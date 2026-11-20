@@ -162,6 +162,7 @@ fun WorkflowDetailScreen(
     var showRenamePresetDialog by remember { mutableStateOf(false) }
     var renamePresetName by remember { mutableStateOf("") }
     var showUnsavedDialog by rememberSaveable { mutableStateOf(false) }
+    var showManualBinding by rememberSaveable { mutableStateOf(false) }
     val currentDirty by rememberUpdatedState(state.dirty)
     val backgroundSubmissionMessage = stringResource(R.string.workflow_submit_background_running)
     val currentBackgroundMessage by rememberUpdatedState(backgroundSubmissionMessage)
@@ -404,6 +405,7 @@ fun WorkflowDetailScreen(
                                 promptEditorCandidateId = candidateId
                             },
                             onSetPrimaryPrompt = viewModel::setPrimaryPrompt,
+                            onOpenManualBinding = { showManualBinding = true },
                         )
                     }
 
@@ -609,6 +611,23 @@ fun WorkflowDetailScreen(
         )
     }
 
+    if (showManualBinding) {
+        ManualBindingDialog(
+            onDismiss = { showManualBinding = false },
+            onConfirm = { nodeId, inputName, label, type, group, value ->
+                viewModel.addManualCandidate(
+                    nodeId = nodeId,
+                    inputName = inputName,
+                    label = label,
+                    type = type,
+                    group = group,
+                    value = value,
+                )
+                showManualBinding = false
+            },
+        )
+    }
+
     if (nodeInstallState.visible) {
         NodeInstallDialog(
             state = nodeInstallState,
@@ -639,6 +658,7 @@ private fun WorkflowPage(
     onPickImage: (String) -> Unit,
     onDrawMask: (String) -> Unit,
     onClearSubmitError: () -> Unit,
+    onOpenManualBinding: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var groupFilter by remember { mutableStateOf<ParameterGroup?>(null) }
@@ -746,6 +766,12 @@ private fun WorkflowPage(
                             },
                         )
                     }
+                    OutlinedButton(
+                        onClick = onOpenManualBinding,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.workflow_manual_binding_open))
+                    }
                 }
             }
         }
@@ -802,6 +828,113 @@ private fun WorkflowPage(
             }
         }
     }
+}
+
+@Composable
+private fun ManualBindingDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (
+        nodeId: String,
+        inputName: String,
+        label: String,
+        type: ParameterType,
+        group: ParameterGroup,
+        value: String,
+    ) -> Unit,
+) {
+    var nodeId by rememberSaveable { mutableStateOf("") }
+    var inputName by rememberSaveable { mutableStateOf("") }
+    var label by rememberSaveable { mutableStateOf("") }
+    var value by rememberSaveable { mutableStateOf("") }
+    var typeName by rememberSaveable { mutableStateOf(ParameterType.UNKNOWN.name) }
+    var groupName by rememberSaveable { mutableStateOf(ParameterGroup.OTHER.name) }
+    val type = ParameterType.entries.firstOrNull { it.name == typeName } ?: ParameterType.UNKNOWN
+    val group = ParameterGroup.entries.firstOrNull { it.name == groupName } ?: ParameterGroup.OTHER
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.workflow_manual_binding_title)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = nodeId,
+                    onValueChange = { nodeId = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.workflow_manual_binding_node)) },
+                )
+                OutlinedTextField(
+                    value = inputName,
+                    onValueChange = { inputName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.workflow_manual_binding_input)) },
+                )
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { label = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.workflow_manual_binding_label)) },
+                )
+                Text(
+                    text = stringResource(R.string.workflow_manual_binding_type),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    ParameterType.entries.forEach { option ->
+                        FilterChip(
+                            selected = typeName == option.name,
+                            onClick = { typeName = option.name },
+                            label = { Text(option.name) },
+                        )
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.workflow_manual_binding_group),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    ParameterGroup.entries.forEach { option ->
+                        FilterChip(
+                            selected = groupName == option.name,
+                            onClick = { groupName = option.name },
+                            label = { Text(groupLabel(option)) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.workflow_manual_binding_value)) },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(nodeId, inputName, label, type, group, value) },
+                enabled = nodeId.isNotBlank() && inputName.isNotBlank() && label.isNotBlank(),
+            ) {
+                Text(stringResource(R.string.workflow_manual_binding_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -1043,6 +1176,56 @@ private fun OverviewDetailPanel(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
+        }
+        if (template.nodeSummaries.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.workflow_node_list_title),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            template.nodeSummaries.forEach { node ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "#${node.id}",
+                        style = NekoMonoSmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = node.title,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (node.missing) {
+                            MaterialTheme.colorScheme.error
+                        } else if (!node.reachable) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (node.missing) {
+                        Text(
+                            text = stringResource(R.string.workflow_node_missing),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else if (!node.reachable) {
+                        Text(
+                            text = stringResource(R.string.workflow_node_unreachable),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
         compatibility?.capabilities?.takeIf { it.isNotEmpty() }?.let { capabilities ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -24,6 +24,7 @@ import io.github.xiaowu20245.nekopaint.core.model.workflow.UploadedImageRef
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowPreset
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowTemplate
 import io.github.xiaowu20245.nekopaint.core.workflow.ModelInputResolver
+import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCandidateSafety
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowCompatibilityAnalyzer
 import io.github.xiaowu20245.nekopaint.core.workflow.WorkflowPresetMatcher
 import io.github.xiaowu20245.nekopaint.data.operation.OperationCenter
@@ -753,6 +754,54 @@ class WorkflowDetailViewModel(
      * 新增或更新提示词标签组。名称不带 `#`，在提示词文本中以 `#名称` 引用。
      * 标签组随工作流模板持久化，因此这里立即写盘，避免只存在于弹窗内存中。
      */
+    fun addManualCandidate(
+        nodeId: String,
+        inputName: String,
+        label: String,
+        type: ParameterType,
+        group: ParameterGroup,
+        value: String,
+    ) {
+        val current = _uiState.value.template ?: return
+        if (nodeId.isBlank() || inputName.isBlank() || label.isBlank()) {
+            _uiState.update { it.copy(errorRes = R.string.workflow_manual_binding_required) }
+            return
+        }
+        viewModelScope.launch {
+            repository.addManualCandidate(
+                templateId = current.id,
+                nodeId = nodeId,
+                inputName = inputName,
+                label = label,
+                type = type,
+                group = group,
+                value = value,
+            ).onSuccess { updated ->
+                _uiState.update { state ->
+                    val currentCandidates = state.template?.candidates.orEmpty()
+                    val mergedCandidates = updated.candidates.map { candidate ->
+                        val existing = currentCandidates.firstOrNull { it.id == candidate.id }
+                        if (existing != null &&
+                            WorkflowCandidateSafety.canReuseValue(existing, candidate)
+                        ) {
+                            candidate.copy(value = existing.value, selected = existing.selected)
+                        } else {
+                            candidate
+                        }
+                    }
+                    state.copy(
+                        template = updated.copy(candidates = mergedCandidates),
+                        errorRes = null,
+                    )
+                }
+            }.onFailure {
+                _uiState.update {
+                    it.copy(errorRes = R.string.workflow_manual_binding_failed)
+                }
+            }
+        }
+    }
+
     fun addPromptTagGroup(name: String, tags: List<String>) {
         val groupName = name.trim().removePrefix("#").trim()
         val cleanTags = tags.map { it.trim() }.filter { it.isNotBlank() }

@@ -77,6 +77,8 @@ import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterCandidate
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
+import io.github.xiaowu20245.nekopaint.data.repository.DuplicateImportPolicy
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterGroup
 import io.github.xiaowu20245.nekopaint.core.model.workflow.ParameterType
 import io.github.xiaowu20245.nekopaint.core.model.workflow.WorkflowCompatibility
@@ -327,6 +329,26 @@ fun WorkflowsScreen(
                 TextButton(onClick = { renameTarget = null }) {
                     Text(stringResource(R.string.action_cancel))
                 }
+            },
+        )
+    }
+
+    state.duplicateImport?.let { duplicate ->
+        NekoConfirmDialog(
+            title = stringResource(R.string.workflow_duplicate_import_title),
+            message = stringResource(
+                R.string.workflow_duplicate_import_message,
+                duplicate.existingName,
+            ),
+            confirmLabel = stringResource(R.string.workflow_duplicate_import_overwrite),
+            onConfirm = {
+                viewModel.resolveDuplicateImport(DuplicateImportPolicy.OVERWRITE)
+            },
+            onDismiss = viewModel::cancelDuplicateImport,
+            destructive = true,
+            secondaryLabel = stringResource(R.string.workflow_duplicate_import_copy),
+            onSecondary = {
+                viewModel.resolveDuplicateImport(DuplicateImportPolicy.COPY)
             },
         )
     }
