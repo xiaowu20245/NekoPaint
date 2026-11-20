@@ -1120,3 +1120,4 @@ git diff --check
   - API28 `connectedDebugAndroidTest`：**13/13**。
   - API37 模拟器用于手工检查；Compose/Espresso UI 测试在 API37 上因 `InputManager.getInstance` 反射移除不可运行，自动化为 API28 基线。
 - **复审**：第 102 节 R12-01～R12-03、第 103 节 R12-04 均已修复；第 104 节复审 **APPROVED**。
+- **提交**：3D-1 已提交为 `fix: 统一连接状态与队列指标`（`9d5f275`）。
