@@ -1205,3 +1205,4 @@ git diff --check
   - API37/API28 手工：本机无工作流模板，重复导入/手动绑定弹窗以编译、策略与存储测试覆盖；详情页节点列表复用既有概览展开区。
 - **第 111 节复审修复**：`refreshAllCompatibility` 重建 `nodeSummaries`；手动绑定检测到 api.json hash 变化时拒绝并要求先修复；成功绑定后只合并 candidates，保留未保存参数值。新增刷新摘要用例。
 - **复审**：第 111 节 CONDITIONAL（批量刷新节点摘要）已修复；第 112 节复审 **APPROVED**。
+- **提交**：3F-1 已提交为 `feat: 增加节点列表与重复导入策略`（`61b07e8`）。
