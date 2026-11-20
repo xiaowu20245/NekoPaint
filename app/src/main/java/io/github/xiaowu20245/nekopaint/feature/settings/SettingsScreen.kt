@@ -1,6 +1,8 @@
 package io.github.xiaowu20245.nekopaint.feature.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,11 +10,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -24,6 +28,7 @@ import io.github.xiaowu20245.nekopaint.R
 import io.github.xiaowu20245.nekopaint.core.datastore.ThemeMode
 import io.github.xiaowu20245.nekopaint.core.ui.format.formatFileSize
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
 
 @Composable
 fun SettingsScreen(
@@ -184,6 +189,68 @@ fun SettingsScreen(
 
         item {
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 800)
+@Composable
+private fun SettingsRootPreview() {
+    NekoPaintTheme {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            SettingsSection(title = "AI 与 Neko") {
+                SettingsNavigationRow(
+                    icon = NekoIcons.Sparkles,
+                    title = "AI 服务",
+                    summary = "DeepSeek · deepseek-chat",
+                    badge = "已配置",
+                    badgeAccent = true,
+                    onClick = {},
+                )
+                SettingsRowDivider()
+                SettingsNavigationRow(
+                    icon = NekoIcons.Toolbox,
+                    title = "Neko I 助手",
+                    summary = "自定义人设 · 默认 Chat",
+                    onClick = {},
+                )
+                SettingsRowDivider()
+                SettingsNavigationRow(
+                    icon = NekoIcons.Bookmark,
+                    title = "提示词词库",
+                    summary = "内置 120 · 外置 8 · 自定义 2",
+                    badge = "130",
+                    onClick = {},
+                )
+            }
+            SettingsSection(title = "外观与交互") {
+                SettingsNavigationRow(
+                    icon = NekoIcons.Tune,
+                    title = "主题",
+                    summary = "跟随系统",
+                    onClick = {},
+                )
+            }
+            SettingsSection(title = "图片与存储") {
+                SettingsNavigationRow(
+                    icon = NekoIcons.Download,
+                    title = "存储",
+                    summary = "自动保存开启 · 12.4 MB · 3 张",
+                    onClick = {},
+                )
+            }
+            SettingsSection(title = "关于与诊断") {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Info,
+                    title = "关于 NekoPaint",
+                    summary = "版本 1.0.0",
+                    onClick = {},
+                )
+            }
         }
     }
 }

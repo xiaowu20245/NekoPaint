@@ -201,7 +201,10 @@ fun NekoPaintNavHost(
             popEnterTransition = { EnterTransition.None },
             popExitTransition = { ExitTransition.None },
         ) {
-            AiAssistantSettingsScreen()
+            AiAssistantSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onBackHandlerChange = onBackHandlerChange,
+            )
         }
         composable(
             route = NekoPaintDestination.NekoSettings.route,
@@ -210,7 +213,10 @@ fun NekoPaintNavHost(
             popEnterTransition = { EnterTransition.None },
             popExitTransition = { ExitTransition.None },
         ) {
-            NekoSettingsScreen()
+            NekoSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onBackHandlerChange = onBackHandlerChange,
+            )
         }
         composable(
             route = NekoPaintDestination.AppearanceSettings.route,

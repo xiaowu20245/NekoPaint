@@ -63,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -87,6 +88,7 @@ import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusTone
 import io.github.xiaowu20245.nekopaint.core.ui.component.icon
 import io.github.xiaowu20245.nekopaint.core.ui.component.label
 import io.github.xiaowu20245.nekopaint.core.ui.component.tone
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 import io.github.xiaowu20245.nekopaint.feature.history.HistoryMetadataExtractor
 import io.github.xiaowu20245.nekopaint.feature.history.durationText
@@ -1087,4 +1089,28 @@ private fun durationText(start: Long?, end: Long?): String? {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return if (minutes > 0) "${minutes}m ${seconds}s" else "${seconds}s"
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 800)
+@Composable
+private fun QueueScreenPreview() {
+    NekoPaintTheme {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            QueueStatusHeader(
+                connection = ComfyConnectionState.Offline,
+                queueRemaining = 0,
+                error = null,
+                refreshing = false,
+                onRefresh = {},
+                onOpenHistory = {},
+            )
+            QueueEmptyState(onOpenHistory = {})
+        }
+    }
 }

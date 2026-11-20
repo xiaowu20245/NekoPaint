@@ -7,7 +7,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -643,9 +642,10 @@ private fun WorkflowPage(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var groupFilter by remember { mutableStateOf<ParameterGroup?>(null) }
+    var quickFilter by remember { mutableStateOf(ParameterQuickFilter.ALL) }
 
     val filteredCandidates = if (advanced) {
-        visibleCandidates.filter { candidate ->
+        val queryMatched = visibleCandidates.filter { candidate ->
             val matchesGroup = groupFilter == null || candidate.group == groupFilter
             val query = searchQuery.trim()
             val matchesQuery = query.isEmpty() ||
@@ -656,6 +656,7 @@ private fun WorkflowPage(
                 candidate.value.contains(query, ignoreCase = true)
             matchesGroup && matchesQuery
         }
+        ParameterFilterPolicy.apply(queryMatched, fieldErrors, quickFilter)
     } else {
         visibleCandidates
     }
@@ -706,6 +707,44 @@ private fun WorkflowPage(
                                 label = { Text(groupLabel(group)) },
                             )
                         }
+                    }
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        QuickFilterChip(
+                            label = stringResource(R.string.workflow_filter_selected),
+                            selected = quickFilter == ParameterQuickFilter.SELECTED,
+                            onClick = {
+                                quickFilter = if (quickFilter == ParameterQuickFilter.SELECTED) {
+                                    ParameterQuickFilter.ALL
+                                } else {
+                                    ParameterQuickFilter.SELECTED
+                                }
+                            },
+                        )
+                        QuickFilterChip(
+                            label = stringResource(R.string.workflow_filter_read_only),
+                            selected = quickFilter == ParameterQuickFilter.READ_ONLY,
+                            onClick = {
+                                quickFilter = if (quickFilter == ParameterQuickFilter.READ_ONLY) {
+                                    ParameterQuickFilter.ALL
+                                } else {
+                                    ParameterQuickFilter.READ_ONLY
+                                }
+                            },
+                        )
+                        QuickFilterChip(
+                            label = stringResource(R.string.workflow_filter_errors),
+                            selected = quickFilter == ParameterQuickFilter.ERROR,
+                            onClick = {
+                                quickFilter = if (quickFilter == ParameterQuickFilter.ERROR) {
+                                    ParameterQuickFilter.ALL
+                                } else {
+                                    ParameterQuickFilter.ERROR
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -763,6 +802,19 @@ private fun WorkflowPage(
             }
         }
     }
+}
+
+@Composable
+private fun QuickFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+    )
 }
 
 @Composable
@@ -1504,72 +1556,41 @@ private fun CompactNumericCell(
     val errorText = fieldErrorText(error)
     val presets = numericPresets(candidate)
 
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        border = if (errorText != null) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.error)
-        } else {
-            null
-        },
-        modifier = Modifier.fillMaxWidth(),
+    ParameterControlShell(
+        label = candidate.label,
+        nodeLabel = "#${candidate.nodeId}",
+        errorText = errorText,
+        compact = true,
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = candidate.label,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    text = "#${candidate.nodeId}",
-                    style = NekoMonoSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                )
-            }
-
-            OutlinedTextField(
-                value = candidate.value,
-                onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                textStyle = NekoMonoSmall.copy(
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                ),
-                isError = errorText != null,
-                supportingText = errorText?.let { { Text(it) } },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = if (candidate.type == ParameterType.INT) {
-                        KeyboardType.Number
-                    } else {
-                        KeyboardType.Decimal
-                    },
-                ),
-                trailingIcon = if (presets.isNotEmpty()) {
-                    {
-                        NumericPresetDropdown(
-                            presets = presets,
-                            onSelect = onValueChange,
-                        )
-                    }
+        OutlinedTextField(
+            value = candidate.value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            textStyle = NekoMonoSmall.copy(
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            ),
+            isError = errorText != null,
+            supportingText = errorText?.let { { Text(it) } },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (candidate.type == ParameterType.INT) {
+                    KeyboardType.Number
                 } else {
-                    null
+                    KeyboardType.Decimal
                 },
-            )
-        }
+            ),
+            trailingIcon = if (presets.isNotEmpty()) {
+                {
+                    NumericPresetDropdown(
+                        presets = presets,
+                        onSelect = onValueChange,
+                    )
+                }
+            } else {
+                null
+            },
+        )
     }
 }
 
@@ -1586,21 +1607,18 @@ private fun CandidateRow(
     onDrawMask: () -> Unit,
 ) {
     val errorText = fieldErrorText(error)
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        border = if (errorText != null) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+    ParameterControlShell(
+        label = candidate.label,
+        nodeLabel = "#${candidate.nodeId} · " +
+            candidate.classType.ifBlank { candidate.inputName },
+        errorText = errorText,
+        readOnlyValue = if (candidate.readOnly) {
+            candidate.defaultValue.ifBlank { "—" }
         } else {
             null
         },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            if (showCheckbox) {
+        leading = if (showCheckbox) {
+            {
                 Checkbox(
                     checked = candidate.selected,
                     onCheckedChange = { onToggle() },
@@ -1608,61 +1626,19 @@ private fun CandidateRow(
                     modifier = Modifier.padding(end = 4.dp),
                 )
             }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                // 精简为单行清爽头部：左参数名 + 右侧等宽节点胶囊
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = candidate.label,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 8.dp),
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    ) {
-                        Text(
-                            text = "#${candidate.nodeId} · ${candidate.classType.ifBlank { candidate.inputName }}",
-                            style = NekoMonoSmall.copy(fontSize = 11.sp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-
-                if (candidate.readOnly) {
-                    Text(
-                        text = candidate.defaultValue.ifBlank { "—" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    ParameterField(
-                        candidate = candidate,
-                        error = error,
-                        onValueChange = onValueChange,
-                        uploading = uploading,
-                        onPickImage = onPickImage,
-                        isMaskSlot = isMaskSlot,
-                        onDrawMask = onDrawMask,
-                    )
-                }
-            }
-        }
+        } else {
+            null
+        },
+    ) {
+        ParameterField(
+            candidate = candidate,
+            error = error,
+            onValueChange = onValueChange,
+            uploading = uploading,
+            onPickImage = onPickImage,
+            isMaskSlot = isMaskSlot,
+            onDrawMask = onDrawMask,
+        )
     }
 }
 

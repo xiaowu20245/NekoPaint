@@ -1121,3 +1121,30 @@ git diff --check
   - API37 模拟器用于手工检查；Compose/Espresso UI 测试在 API37 上因 `InputManager.getInstance` 反射移除不可运行，自动化为 API28 基线。
 - **复审**：第 102 节 R12-01～R12-03、第 103 节 R12-04 均已修复；第 104 节复审 **APPROVED**。
 - **提交**：3D-1 已提交为 `fix: 统一连接状态与队列指标`（`9d5f275`）。
+
+## 50. 第三轮 3D-2：设置、Preview、参数控件与 Token（CR-029/045/052/054）
+
+- **设置统一与未保存保护（CR-029）**
+  - `AiAssistantSettingsScreen` 全部改为 `SettingsSection`（标题在外、单层 tonal Surface、16dp 圆角），删除 `SettingsGroupCard`。
+  - `AiAssistantFormState` 新增 `dirty`，仅由 provider/baseUrl/apiKey/textModel/visionModel 五个服务字段与保存基线比较；persona/preInstruction 不参与。
+  - 保存成功后按 trim 后的值更新基线并清除 dirty；清除配置、放弃修改同步重置。
+  - AI 页返回门禁使用 `NekoConfirmDialog` 三选一：保存并退出 / 放弃修改 / 取消；顶栏返回与系统返回共用。保存失败或取消确认时不会误触发退出。
+  - Neko 页文案明确“人设/预指令需保存、默认模式即时保存”；文本 dirty 只比较 persona/preInstruction，默认模式切换立即持久化且不弹未保存框。
+  - `NekoConfirmDialog` 新增可选 `secondaryLabel/onSecondary`，副操作用 error 语义色标记“放弃修改”。
+- **Preview 与无障碍（CR-045）**
+  - 新增 Server（空态 + 服务器卡片）、Queue（状态头 + 空态）、History（空态）、Settings 根页、Chat（空态 + 用户/助手消息）的 `@Preview`；Workflow 参数沿用既有预览。
+  - 装饰性图片/图标 `contentDescription = null` 补充注释说明；本轮屏幕的 icon-only `IconButton` 均已有描述。
+- **参数控件与筛选（CR-052）**
+  - 新增 `ParameterControlShell`：简单/高级模式共用卡片头、节点标识、值区、只读状态和错误边框。
+  - 新增 `ParameterFilterPolicy` 与 `ParameterQuickFilter`（全部/已选/只读/有错误），高级模式在分组筛选下增加快捷筛选行；不改变参数检测与提交逻辑。
+- **Token 对齐（CR-054）**
+  - `light.primary` 改为 `#4A63E7`；`titleLarge` 改为 20sp/28sp/SemiBold。
+  - `Tokens.kt` 新增 `NekoShape`（9/18/20dp 与对应 `RoundedCornerShape`），同步 `design/tokens.json` 的 `shape` 段；AI 预设胶囊、Neko 文本/保存按钮改用 Token。
+- **测试与验证**
+  - 新增 `AiSettingsDirtyTest` 5、`NekoSettingsSemanticsTest` 2、`ParameterFilterPolicyTest` 2、`TokenMappingTest` 2，合计 +11。
+  - JVM：**146 suites / 838 tests / 0 failures / 0 errors / 0 skipped**；lint **0 errors / 10 warnings / 3 hints**；assembleDebug 成功；`git diff --check` 通过。
+  - API28 `connectedDebugAndroidTest`：**13/13**。
+  - API37 手工：AI 设置统一分组、三选一返回门禁（放弃/取消/保存并退出）、Neko 默认模式即时保存与文本保存后退出均正常。
+- **复审修复**：第 105 节 R13-01（放弃修改未恢复 API Key 归属）已修复，基线同时保存 `apiKeyOrigin` 并在放弃时复位 `keyEdited`；R13-02（保存中/取消后的待退出状态）已修复，保存中拦截返回，AI/Neko 的未保存弹窗取消/放弃均清除 `exitAfterSave`。新增凭据混合状态回归用例。
+- **复审修复手工验收**：API37 先以 `https://old.example.com/v1` + `sk-old` 保存，再改为 `https://new.example.com/v1` + `sk-new` 后放弃；页面恢复 old URL/sk-old，未出现 OriginChanged 警告。保存中返回由 `saving` 门禁拦截（保存窗口过短，未构造慢存储竞态）。
+- **复审**：第 105 节 R13-01/R13-02 均已修复；第 106 节复审 **APPROVED**。

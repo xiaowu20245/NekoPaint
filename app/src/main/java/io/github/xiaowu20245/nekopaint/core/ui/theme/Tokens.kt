@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.core.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 
 /**
@@ -31,6 +32,19 @@ object NekoRadius {
     val lg = 16.dp
     val xl = 24.dp
     val pill = 999.dp
+}
+
+/**
+ * CR-054 补充圆角 Token：9dp 用于紧凑分段/预设胶囊，18dp 用于卡片，
+ * 20dp 用于较大的容器，避免各页面继续散落私有圆角数值。
+ */
+object NekoShape {
+    val smallRadius = 9.dp
+    val mediumRadius = 18.dp
+    val largeRadius = 20.dp
+    val small = RoundedCornerShape(smallRadius)
+    val medium = RoundedCornerShape(mediumRadius)
+    val large = RoundedCornerShape(largeRadius)
 }
 
 object NekoElevation {

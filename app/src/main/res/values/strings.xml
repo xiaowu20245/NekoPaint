@@ -47,6 +47,9 @@
     <string name="workflow_search_hint">搜索参数、节点或模型</string>
     <string name="workflow_filter_all">全部</string>
     <string name="workflow_filter_no_match">没有匹配的参数</string>
+    <string name="workflow_filter_selected">已选</string>
+    <string name="workflow_filter_read_only">只读</string>
+    <string name="workflow_filter_errors">有错误</string>
     <string name="workflow_done">完成</string>
     <string name="workflow_more_actions">更多操作</string>
     <string name="workflow_rename">重命名</string>
@@ -419,6 +422,8 @@
     <string name="settings_neko_persona_default">默认人设</string>
     <string name="settings_neko_description">人设影响回答语气；预指令会附加到系统提示。工具确认、安全规则和事实约束始终优先。</string>
     <string name="settings_neko_pre_instruction_note">预指令不能覆盖安全规则、工具确认和事实约束。</string>
+    <string name="settings_neko_edit_semantics">人设与预指令修改后需点击下方按钮保存；默认模式切换会立即保存。</string>
+    <string name="settings_neko_unsaved_desc">Neko I 人设或预指令已修改但尚未保存。保存后退出，或放弃本次修改？</string>
     <string name="settings_neko_default_mode">默认模式</string>
     <string name="settings_neko_default_mode_desc">新建 Neko I 会话时使用的模式。</string>
     <string name="settings_neko_agent_note">Agent 的写操作仍会先显示确认卡片。</string>
@@ -496,6 +501,9 @@
     <string name="prompt_lexicon_cleared">已清空外部词表</string>
 
     <string name="ai_assistant_desc">接入大模型 API 用于提示词润色、长句翻译与识图</string>
+    <string name="ai_assistant_edit_semantics">修改后点击“保存配置”生效；测试连接不会保存配置。</string>
+    <string name="ai_assistant_unsaved_desc">AI 服务配置已修改但尚未保存。保存后退出，或放弃本次修改？</string>
+    <string name="settings_unsaved_title">有未保存的修改</string>
     <string name="ai_assistant_preset_title">服务商预设（兼容 OpenAI 协议）</string>
     <string name="ai_assistant_provider_deepseek">DeepSeek</string>
     <string name="ai_assistant_provider_silicon">硅基流动 SiliconFlow</string>

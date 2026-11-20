@@ -78,6 +78,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,6 +108,7 @@ import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoIconSize
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMonoSmall
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoMotion
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoRadius
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoSpacing
 import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoTheme
@@ -1451,3 +1453,47 @@ private fun formatArgv(argv: List<String>): String = argv
         }
     }
     .joinToString("\n")
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 800)
+@Composable
+private fun ServerEmptyPreview() {
+    NekoPaintTheme {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            EmptyServers(onAdd = {})
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412)
+@Composable
+private fun ServerCardPreview() {
+    NekoPaintTheme {
+        Box(
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp),
+        ) {
+            ServerListCard(
+                card = ServerCardUi(
+                    profile = ServerProfile(
+                        id = "preview",
+                        name = "客厅主机",
+                        host = "192.168.1.10",
+                    ),
+                    isActive = true,
+                ),
+                expanded = true,
+                onToggle = {},
+                onRefresh = {},
+                onEdit = {},
+                onSetActive = {},
+                onDelete = {},
+                onShowLaunchArgs = {},
+            )
+        }
+    }
+}

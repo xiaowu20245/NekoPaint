@@ -1,5 +1,6 @@
 package io.github.xiaowu20245.nekopaint.feature.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +23,14 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -34,10 +40,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.xiaowu20245.nekopaint.NekoPaintApplication
 import io.github.xiaowu20245.nekopaint.R
+import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoRadius
 import io.github.xiaowu20245.nekopaint.feature.common.asString
 
 @Composable
-fun NekoSettingsScreen() {
+fun NekoSettingsScreen(
+    onBack: () -> Unit = {},
+    onBackHandlerChange: ((() -> Boolean)?) -> Unit = {},
+) {
     val context = LocalContext.current
     val app = context.applicationContext as NekoPaintApplication
     val viewModel: NekoSettingsViewModel = viewModel(
@@ -46,19 +57,75 @@ fun NekoSettingsScreen() {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val savedMessage = stringResource(R.string.settings_neko_saved)
+    var showUnsavedDialog by rememberSaveable { mutableStateOf(false) }
+    var exitAfterSave by remember { mutableStateOf(false) }
+    val currentDirty by rememberUpdatedState(state.dirty)
+    val currentSaving by rememberUpdatedState(state.saving)
+
+    DisposableEffect(Unit) {
+        // 顶栏返回箭头与系统返回共用同一人设未保存门禁。
+        onBackHandlerChange {
+            when {
+                // 保存进行中不允许再打开放弃/取消入口，避免迟到保存写入被放弃的草稿。
+                currentSaving -> true
+                currentDirty -> {
+                    showUnsavedDialog = true
+                    true
+                }
+                else -> false
+            }
+        }
+        onDispose { onBackHandlerChange(null) }
+    }
+    BackHandler(enabled = state.saving || (state.dirty && !showUnsavedDialog)) {
+        if (!state.saving) {
+            showUnsavedDialog = true
+        }
+    }
 
     LaunchedEffect(state.saved) {
         if (state.saved) {
-            snackbarHostState.showSnackbar(savedMessage)
+            if (exitAfterSave) {
+                exitAfterSave = false
+                onBack()
+            } else {
+                snackbarHostState.showSnackbar(savedMessage)
+            }
             viewModel.consumeSaved()
         }
     }
     val errorText = state.error?.asString()
     LaunchedEffect(errorText) {
         if (errorText != null) {
+            exitAfterSave = false
             snackbarHostState.showSnackbar(errorText)
             viewModel.consumeError()
         }
+    }
+
+    if (showUnsavedDialog) {
+        NekoConfirmDialog(
+            title = stringResource(R.string.settings_unsaved_title),
+            message = stringResource(R.string.settings_neko_unsaved_desc),
+            confirmLabel = stringResource(R.string.workflow_unsaved_dialog_save),
+            onConfirm = {
+                showUnsavedDialog = false
+                exitAfterSave = true
+                viewModel.save()
+            },
+            onDismiss = {
+                exitAfterSave = false
+                showUnsavedDialog = false
+            },
+            destructive = false,
+            secondaryLabel = stringResource(R.string.workflow_unsaved_dialog_discard),
+            onSecondary = {
+                exitAfterSave = false
+                showUnsavedDialog = false
+                viewModel.discardChanges()
+                onBack()
+            },
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -73,12 +140,21 @@ fun NekoSettingsScreen() {
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 item {
-                    Text(
-                        text = stringResource(R.string.settings_neko_description),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Column(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    )
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_neko_description),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = stringResource(R.string.settings_neko_edit_semantics),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 item {
                     SettingsSection(title = stringResource(R.string.ai_assistant_persona)) {
@@ -95,7 +171,7 @@ fun NekoSettingsScreen() {
                                 placeholder = {
                                     Text(stringResource(R.string.ai_assistant_persona_hint))
                                 },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(NekoRadius.md),
                             )
                         }
                     }
@@ -115,7 +191,7 @@ fun NekoSettingsScreen() {
                                 placeholder = {
                                     Text(stringResource(R.string.ai_assistant_pre_instruction_hint))
                                 },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(NekoRadius.md),
                             )
                             Text(
                                 text = stringResource(R.string.settings_neko_pre_instruction_note),
@@ -160,7 +236,7 @@ fun NekoSettingsScreen() {
                     Button(
                         onClick = viewModel::save,
                         enabled = !state.saving,
-                        shape = RoundedCornerShape(50),
+                        shape = RoundedCornerShape(NekoRadius.pill),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 12.dp)

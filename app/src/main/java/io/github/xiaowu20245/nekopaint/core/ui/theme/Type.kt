@@ -8,9 +8,9 @@ import androidx.compose.ui.unit.sp
 
 val NekoTypography = Typography(
     titleLarge = TextStyle(
-        fontWeight = FontWeight.Bold,
-        fontSize = 22.sp,
-        lineHeight = 30.sp,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp,
+        lineHeight = 28.sp,
     ),
     titleMedium = TextStyle(
         fontWeight = FontWeight.SemiBold,

@@ -101,6 +101,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -128,6 +129,7 @@ import io.github.xiaowu20245.nekopaint.core.ui.component.NekoStatusMapper
 import io.github.xiaowu20245.nekopaint.core.ui.component.icon
 import io.github.xiaowu20245.nekopaint.core.ui.component.label
 import io.github.xiaowu20245.nekopaint.core.ui.component.tone
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoConfirmDialog
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
 import io.github.xiaowu20245.nekopaint.feature.common.asString
@@ -1967,6 +1969,7 @@ fun HistorySubcomposeImage(
 
     SubcomposeAsyncImage(
         model = url,
+        // 装饰性缩略图：外层卡片/网格已提供语义描述，避免重复朗读。
         contentDescription = null,
         contentScale = ContentScale.Crop,
         modifier = modifier,
@@ -2451,5 +2454,21 @@ private fun formatDateGroup(
         todayYear == targetYear -> SimpleDateFormat("MM-dd", Locale.getDefault())
             .format(Date(timestamp))
         else -> SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 800)
+@Composable
+private fun HistoryEmptyPreview() {
+    NekoPaintTheme {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            EmptyHistory(loading = false)
+        }
     }
 }

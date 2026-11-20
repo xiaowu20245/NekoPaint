@@ -10,6 +10,18 @@ import io.github.xiaowu20245.nekopaint.core.network.AiEndpointPolicy
 import io.github.xiaowu20245.nekopaint.core.network.AiEndpointPolicyResult
 import io.github.xiaowu20245.nekopaint.core.network.AiEndpointValidator
 
+/**
+ * 只包含 AI 服务配置字段。persona/preInstruction 属于 Neko 设置页，
+ * 不参与本页的未保存判定，避免两个页面互相覆盖。
+ */
+data class AiServiceDraft(
+    val providerId: String,
+    val baseUrl: String,
+    val apiKey: String,
+    val textModel: String,
+    val visionModel: String,
+)
+
 data class AiSettingsDerivedState(
     val baseUrlError: NekoMessage?,
     val credentialMessage: String?,
@@ -117,4 +129,15 @@ object AiAssistantSettingsPolicy {
         originalBaseUrlValid: Boolean,
         keyEdited: Boolean,
     ): Boolean = originalBaseUrlValid || keyEdited
+
+    fun serviceDraft(state: AiAssistantFormState): AiServiceDraft = AiServiceDraft(
+        providerId = state.providerId,
+        baseUrl = state.baseUrl,
+        apiKey = state.apiKey,
+        textModel = state.textModel,
+        visionModel = state.visionModel,
+    )
+
+    fun isDirty(current: AiServiceDraft, baseline: AiServiceDraft): Boolean =
+        current != baseline
 }

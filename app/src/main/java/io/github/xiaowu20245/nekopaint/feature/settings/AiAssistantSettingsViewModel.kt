@@ -46,6 +46,7 @@ data class AiAssistantFormState(
     val confirmationMessage: String? = null,
     val saved: Boolean = false,
     val loaded: Boolean = false,
+    val dirty: Boolean = false,
 ) {
     val canSubmit: Boolean
         get() = baseUrl.isNotBlank() &&
@@ -77,6 +78,16 @@ class AiAssistantSettingsViewModel(
     private var originalApiKey = ""
     private var keyEdited = false
     private var disclosureAcknowledgements: Set<String> = emptySet()
+    private var serviceBaseline: ServiceBaseline? = null
+
+    /**
+     * 服务字段 + 凭据归属的完整基线。apiKeyOrigin 不参与 dirty 比较，
+     * 但“放弃修改”必须恢复它，否则旧 Key 会和新地址混合。
+     */
+    private data class ServiceBaseline(
+        val draft: AiServiceDraft,
+        val apiKeyOrigin: String?,
+    )
 
     init {
         viewModelScope.launch {
@@ -90,19 +101,22 @@ class AiAssistantSettingsViewModel(
                 store.currentDisclosureAcknowledgements()
             }.getOrDefault(emptySet())
             _uiState.update { current ->
-                withDerived(
-                    current.copy(
-                        providerId = config.providerId.ifBlank {
-                            AiProviderPreset.DeepSeek.id
-                        },
-                        baseUrl = config.baseUrl,
-                        apiKey = config.apiKey,
-                        apiKeyOrigin = config.apiKeyOrigin,
-                        textModel = config.textModel,
-                        visionModel = config.visionModel,
-                        loaded = true,
-                    ),
+                val loaded = current.copy(
+                    providerId = config.providerId.ifBlank {
+                        AiProviderPreset.DeepSeek.id
+                    },
+                    baseUrl = config.baseUrl,
+                    apiKey = config.apiKey,
+                    apiKeyOrigin = config.apiKeyOrigin,
+                    textModel = config.textModel,
+                    visionModel = config.visionModel,
+                    loaded = true,
                 )
+                serviceBaseline = ServiceBaseline(
+                    draft = AiAssistantSettingsPolicy.serviceDraft(loaded),
+                    apiKeyOrigin = loaded.apiKeyOrigin,
+                )
+                withDerived(loaded)
             }
         }
     }
@@ -200,7 +214,12 @@ class AiAssistantSettingsViewModel(
                         originalApiKey = ""
                         keyEdited = false
                         _uiState.update {
-                            AiAssistantFormState(loaded = true)
+                            val cleared = AiAssistantFormState(loaded = true)
+                            serviceBaseline = ServiceBaseline(
+                                draft = AiAssistantSettingsPolicy.serviceDraft(cleared),
+                                apiKeyOrigin = cleared.apiKeyOrigin,
+                            )
+                            withDerived(cleared)
                         }
                     }
                     .onFailure { error ->
@@ -267,6 +286,25 @@ class AiAssistantSettingsViewModel(
 
     fun consumeSaved() {
         _uiState.update { it.copy(saved = false) }
+    }
+
+    /** 返回门禁选择“放弃修改”时恢复已保存的服务字段与 Key 归属。 */
+    fun discardChanges() {
+        val baseline = serviceBaseline ?: return
+        keyEdited = false
+        updateForm {
+            it.copy(
+                providerId = baseline.draft.providerId,
+                baseUrl = baseline.draft.baseUrl,
+                apiKey = baseline.draft.apiKey,
+                apiKeyOrigin = baseline.apiKeyOrigin,
+                textModel = baseline.draft.textModel,
+                visionModel = baseline.draft.visionModel,
+                testLatencyMs = null,
+                testError = null,
+                error = null,
+            )
+        }
     }
 
     fun consumeError() {
@@ -526,10 +564,25 @@ class AiAssistantSettingsViewModel(
             _uiState.update { it.copy(saving = true, error = null, saved = false) }
             store.updateServiceConfig(state.toConfig())
                 .onSuccess {
-                    originalBaseUrlValid = AiEndpointValidator.parse(state.baseUrl).isSuccess
-                    originalApiKey = state.toConfig().apiKey
+                    val savedConfig = state.toConfig()
+                    originalBaseUrlValid = AiEndpointValidator.parse(savedConfig.baseUrl).isSuccess
+                    originalApiKey = savedConfig.apiKey
                     keyEdited = false
-                    _uiState.update { it.copy(saving = false, saved = true) }
+                    _uiState.update {
+                        val normalized = it.copy(
+                            baseUrl = savedConfig.baseUrl,
+                            apiKey = savedConfig.apiKey,
+                            textModel = savedConfig.textModel,
+                            visionModel = savedConfig.visionModel,
+                            saving = false,
+                            saved = true,
+                        )
+                        serviceBaseline = ServiceBaseline(
+                            draft = AiAssistantSettingsPolicy.serviceDraft(normalized),
+                            apiKeyOrigin = normalized.apiKeyOrigin,
+                        )
+                        withDerived(normalized)
+                    }
                 }
                 .onFailure { throwable ->
                     _uiState.update {
@@ -561,6 +614,12 @@ class AiAssistantSettingsViewModel(
                     endpoint.origin,
                     disclosureAcknowledgements,
                 ),
+            dirty = serviceBaseline?.let { baseline ->
+                AiAssistantSettingsPolicy.isDirty(
+                    AiAssistantSettingsPolicy.serviceDraft(state),
+                    baseline.draft,
+                )
+            } ?: false,
         )
     }
 

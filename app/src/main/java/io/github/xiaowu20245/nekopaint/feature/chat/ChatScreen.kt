@@ -91,6 +91,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -104,6 +105,7 @@ import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarIconAction
 import io.github.xiaowu20245.nekopaint.core.ui.NekoTopBarMenuItem
 import io.github.xiaowu20245.nekopaint.core.ui.component.NekoIconButton
 import io.github.xiaowu20245.nekopaint.core.ui.icon.NekoIcons
+import io.github.xiaowu20245.nekopaint.core.ui.theme.NekoPaintTheme
 import io.github.xiaowu20245.nekopaint.feature.history.ImagePreviewDialog
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -1231,6 +1233,7 @@ private fun ChatEmptyState(
     ) {
         Icon(
             imageVector = NekoIcons.Sparkles,
+            // 装饰性品牌图标；下方标题已说明空会话状态。
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(72.dp),
@@ -1417,6 +1420,7 @@ private fun ChatMessageBubble(
                     if (imageModel != null) {
                         SubcomposeAsyncImage(
                             model = imageModel,
+                            // 装饰性附图：消息正文与操作按钮已提供可读语义。
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -2806,6 +2810,64 @@ private fun ChatComposer(
                     )
                 }
             }
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412, heightDp = 800)
+@Composable
+private fun ChatEmptyPreview() {
+    NekoPaintTheme {
+        ChatEmptyState(
+            taskContext = null,
+            onAskContext = null,
+            onOpenSettings = {},
+            modifier = Modifier.background(MaterialTheme.colorScheme.background),
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412)
+@Composable
+private fun ChatMessagesPreview() {
+    NekoPaintTheme {
+        Column(
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.background)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ChatMessageBubble(
+                message = ChatUiMessage(
+                    id = 1,
+                    role = ChatRole.USER,
+                    text = "帮我把这句提示词润色得更适合 SDXL。",
+                ),
+                onConfirmAction = { _, _ -> },
+                onCancelAction = { _, _ -> },
+                onSelectPromptCandidate = { _, _, _ -> },
+                onToggleInstallRestart = { _, _ -> },
+                onRequestSavePreset = { _, _ -> },
+                actionsEnabled = false,
+                onOpenTags = { _, _ -> },
+                onOpenHistoryImage = { _, _ -> },
+            )
+            ChatMessageBubble(
+                message = ChatUiMessage(
+                    id = 2,
+                    role = ChatRole.ASSISTANT,
+                    text = "可以试试：1girl, silver hair, soft rim lighting, " +
+                        "detailed eyes, cinematic composition.",
+                ),
+                onConfirmAction = { _, _ -> },
+                onCancelAction = { _, _ -> },
+                onSelectPromptCandidate = { _, _, _ -> },
+                onToggleInstallRestart = { _, _ -> },
+                onRequestSavePreset = { _, _ -> },
+                actionsEnabled = false,
+                onOpenTags = { _, _ -> },
+                onOpenHistoryImage = { _, _ -> },
+            )
         }
     }
 }

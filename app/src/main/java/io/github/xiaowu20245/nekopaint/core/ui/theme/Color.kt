@@ -3,7 +3,7 @@ package io.github.xiaowu20245.nekopaint.core.ui.theme
 import androidx.compose.ui.graphics.Color
 
 // Brand — Light
-val NekoPrimaryLight = Color(0xFF4F63AC)
+val NekoPrimaryLight = Color(0xFF4A63E7)
 val NekoOnPrimaryLight = Color(0xFFFFFFFF)
 val NekoPrimaryContainerLight = Color(0xFFDDE1FF)
 val NekoOnPrimaryContainerLight = Color(0xFF001453)
